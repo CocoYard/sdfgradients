@@ -223,4 +223,4 @@ if __name__ == "__main__":
         print("Max distance from surface after adjustment:", np.max(np.abs(new_distances)))
 
     save_to_gltf( points, surface_points, gradients, outbase )
-    save_PSR_surface( points, gradients, outbase )
+    save_PSR_surface( surface_points, gradients, outbase )
