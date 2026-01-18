@@ -1,0 +1,9 @@
+data/*
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+gpytoolbox_env/
+out/*
+.DS_Store
