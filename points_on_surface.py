@@ -57,7 +57,7 @@ def generate_test_sphere( num_points=1000, radius=1.0, dimension=3 ):
     
     return points, distances, gradients
 
-def generate_test_mesh_data( path_to_mesh, num_points=500 ):
+def generate_test_mesh_data( path_to_mesh, outbase, num_points=500 ):
     '''
     Loads a mesh from the given path and computes signed distances and gradients for its vertices.
     Parameters:
@@ -115,6 +115,11 @@ def generate_test_mesh_data( path_to_mesh, num_points=500 ):
     distances[mesh.contains(points)] *= -1.0  # Invert distances for points inside the
     gradients[mesh.contains(points)] *= -1.0  # Invert gradients for points inside the mesh
 
+    # save to file for reuse
+    np.savez("out/" + outbase + "_sdf_" + str(num_points) + ".npz",
+             points=points,
+             sdf_values=distances,
+             gradients=gradients)
     return points, distances, gradients
 
 def save_to_gltf( points, surface_points, gradients, outbase, aux=False ):
@@ -215,12 +220,12 @@ if __name__ == "__main__":
 
     if args.mesh:
         # Load mesh data from provided path
-        points, distances, gradients = generate_test_mesh_data( args.mesh, num_points=args.num_points )
         outbase = Path(args.mesh).stem
+        points, distances, gradients = generate_test_mesh_data( args.mesh, outbase, num_points=args.num_points )
     elif args.sphere:
         # Generate test data
-        points, distances, gradients = generate_test_sphere( args.num_points, radius=1.0, dimension = args.sphere )
         outbase = f"sphere-{args.sphere}D"
+        points, distances, gradients = generate_test_sphere( args.num_points, radius=1.0, dimension = args.sphere )
         # Ensure points are 3D for visualization
         # If dimension is 2, add a zero z-coordinate
         if points.shape[1] == 2:
