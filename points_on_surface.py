@@ -120,6 +120,7 @@ def generate_test_mesh_data( path_to_mesh, outbase, num_points=500 ):
              points=points,
              sdf_values=distances,
              gradients=gradients)
+    print("Saved SDF data:", "out/" + outbase + "_sdf_" + str(num_points) + ".npz")
     return points, distances, gradients
 
 def save_to_gltf( points, surface_points, gradients, outbase, aux=False ):
@@ -237,7 +238,7 @@ if __name__ == "__main__":
     based on their signed distances.
     """
     import gpytoolbox as gpy
-    if 1:  # Use reach_for_the_spheres
+    if 0:  # Use reach_for_the_spheres
         # some sdf data in numpy arrays SDF_POSITIONS, SDF_VALUES
         # construct initial mesh
         V0, F0 = gpy.icosphere(2)
