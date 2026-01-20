@@ -2,12 +2,16 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "gpytoolbox",
+#     "libigl",
 #     "numpy",
 #     "plot2gltf",
 #     "trimesh[easy]",
+#     "tqdm",
 # ]
 # ///
+import igl
 import numpy as np
+import gpytoolbox as gpy
 def yongs_algorithm( points, distances, gradients ):
     '''
     Given a collection of points, where each point has a signed distance value and a gradient.
@@ -97,8 +101,11 @@ def generate_test_mesh_data( path_to_mesh, outbase, num_points=500 ):
     if points.shape[0] > num_points:
         points = points[np.random.choice(points.shape[0], num_points, replace=False)]
     # Find the closest points on the mesh surface
-    query = trimesh.proximity.ProximityQuery(mesh)
-    closest, distances, _ = query.on_surface( points )
+    V = np.asarray(mesh.vertices, dtype=np.float64)
+    F = np.asarray(mesh.faces, dtype=np.int32)
+    sq_dists, face_ids, closest = igl.point_mesh_squared_distance(points, V, F)
+    distances = np.sqrt(sq_dists)
+
     gradients = points - closest
     # Normalize gradients
     norm_temp = np.linalg.norm(gradients, axis=1, keepdims=True)
@@ -107,20 +114,23 @@ def generate_test_mesh_data( path_to_mesh, outbase, num_points=500 ):
     gradients /= norm_temp
 
     # Filter out points that are too close to the surface (within 0.1 units), also remove respective gradients
-    mask = np.abs(distances) > 0.1
+    mask = np.abs(distances) > 1e-8
     points = points[mask]
     distances = distances[mask]
     gradients = gradients[mask]
 
-    distances[mesh.contains(points)] *= -1.0  # Invert distances for points inside the
-    gradients[mesh.contains(points)] *= -1.0  # Invert gradients for points inside the mesh
+    # Use winding number to determine inside/outside
+    W = igl.winding_number(V, F, points)
+    mask = W > 0.5  # Points with winding number > 0.5 are inside
+    distances[mask] *= -1.0  # Invert distances for points inside the mesh
+    gradients[mask] *= -1.0  # Invert gradients for points inside the mesh
 
     # save to file for reuse
     np.savez("out/" + outbase + "_sdf_" + str(num_points) + ".npz",
              points=points,
              sdf_values=distances,
              gradients=gradients)
-    print("Saved SDF data:", "out/" + outbase + "_sdf_" + str(num_points) + ".npz")
+    print("✅ Saved SDF data:", "out/" + outbase + "_sdf_" + str(num_points) + ".npz")
     return points, distances, gradients
 
 def save_to_gltf( points, surface_points, gradients, outbase, aux=False ):
@@ -177,7 +187,7 @@ def save_to_gltf( points, surface_points, gradients, outbase, aux=False ):
     #          surface_points=surface_points, 
     #          gradients=gradients,
     #          original_points=points)
-    print("Saved surface points:", outpath)
+    print("✅ Saved surface points:", outpath)
 
 def save_PSR_surface( points, normals, outbase, screening_weight = 10.0 ):
     '''
@@ -190,21 +200,15 @@ def save_PSR_surface( points, normals, outbase, screening_weight = 10.0 ):
     outbase: str
         The base name for output files.
     '''
-    try:
-        import gpytoolbox
-    except ImportError:
-        raise ImportError("gpytoolbox is required for PSR_surface function.")
-        return
-    
-    V,F = gpytoolbox.point_cloud_to_mesh( points, normals,
+    V,F = gpy.point_cloud_to_mesh( points, normals,
         method='PSR',
         psr_screening_weight=screening_weight,
         psr_outer_boundary_type="Neumann",
         verbose=True
         )
     outpath = "out/" + outbase + "_PSR_surface_" + str(args.num_points) + ".obj"
-    gpytoolbox.write_mesh( outpath, V, F )
-    print( "Saved PSR surface:", outpath )
+    gpy.write_mesh( outpath, V, F )
+    print( "✅ Saved PSR surface:", outpath )
 
 if __name__ == "__main__":
     from pathlib import Path
@@ -233,48 +237,10 @@ if __name__ == "__main__":
             points = np.hstack((points, np.zeros((points.shape[0], 1))))
             gradients = np.hstack((gradients, np.zeros((gradients.shape[0], 1))))
     
-    """
-    Apply reach-for-the-sphere algorithm to adjust points onto the surface
-    based on their signed distances.
-    """
-    import gpytoolbox as gpy
-    if 0:  # Use reach_for_the_spheres
-        # some sdf data in numpy arrays SDF_POSITIONS, SDF_VALUES
-        # construct initial mesh
-        V0, F0 = gpy.icosphere(2)
-        # call our algorithm
-        # gpy.reach_for_the_spheres expects an SDF callable; build a fast nearest-neighbor
-        # interpolant from the sampled `points`->`distances` so we can pass a function.
-        from scipy.spatial import cKDTree as KDTree
-        _tree = KDTree(points)
-        def sdf_callable(q):
-            # ensure shape (n,3)
-            q = np.asarray(q)
-            _, idx = _tree.query(q)
-            return distances[idx]
-        print("sum:", np.sum(sdf_callable(points) - distances))  # verify sdf_callable works
-
-        Vr,Fr = gpy.reach_for_the_spheres(points, sdf_callable, V0, F0,
-            min_h=0.01,
-            remesh_iterations=3,
-            verbose=False,
-            tol=1e-4)
-        outpath = "out/" + outbase + "_RFTS_surface_" + str(args.num_points) + ".obj"
-    else:  # Use reach_for_the_arcs
-        Vr, Fr = gpy.reach_for_the_arcs( points, distances)
-        outpath = "out/" + outbase + "_RFTA_surface_" + str(args.num_points) + ".obj"
-
-    # save the reconstructed mesh
-    gpy.write_mesh( outpath, Vr, Fr )
-    print("Saved RFTS/A surface mesh:", outpath)
 
     # Apply Yong's algorithm to find points on the surface
     surface_points = yongs_algorithm(points, distances, gradients)
-    # filter out points that are too close to the surface (within 0.1 units), also remove respective gradients
-    mask = np.abs(distances) > 0.1
-    surface_points = surface_points[mask]
-    gradients = gradients[mask]
-    
+
     # Verify that the new points are on the sphere surface
     if args.sphere:
         new_distances = np.linalg.norm(surface_points, axis=1) - 1.0
@@ -282,3 +248,43 @@ if __name__ == "__main__":
 
     save_to_gltf( points, surface_points, gradients, outbase )
     save_PSR_surface( surface_points, gradients, outbase )
+
+    """
+    Apply reach-for-the-sphere algorithm to adjust points onto the surface
+    based on their signed distances.
+    """
+    
+    # Use reach_for_the_spheres
+    # some sdf data in numpy arrays SDF_POSITIONS, SDF_VALUES
+    # construct initial mesh
+    V0, F0 = gpy.icosphere(2)
+    # call our algorithm
+    # gpy.reach_for_the_spheres expects an SDF callable; build a fast nearest-neighbor
+    # interpolant from the sampled `points`->`distances` so we can pass a function.
+    from scipy.spatial import cKDTree as KDTree
+    _tree = KDTree(points)
+    def sdf_callable(q):
+        # ensure shape (n,3)
+        q = np.asarray(q)
+        _, idx = _tree.query(q)
+        return distances[idx]
+    print("sum:", np.sum(sdf_callable(points) - distances))  # verify sdf_callable works
+
+    Vr,Fr = gpy.reach_for_the_spheres(points, sdf_callable, V0, F0,
+        min_h=0.01,
+        remesh_iterations=3,
+        verbose=False,
+        tol=1e-4)
+    outpath = "out/" + outbase + "_RFTS_surface_" + str(args.num_points) + ".obj"
+
+    # save the reconstructed mesh
+    gpy.write_mesh( outpath, Vr, Fr )
+    print("✅ Saved RFTS surface mesh:", outpath)
+
+    # Use reach_for_the_arcs
+    Vr, Fr = gpy.reach_for_the_arcs( points, distances)
+    outpath = "out/" + outbase + "_RFTA_surface_" + str(args.num_points) + ".obj"
+
+    # save the reconstructed mesh
+    gpy.write_mesh( outpath, Vr, Fr )
+    print("✅ Saved RFTA surface mesh:", outpath)
