@@ -1056,9 +1056,9 @@ def test_gradient_estimation(n, neighbor_estimation, gradient_estimation, interp
         interpolator = Interpolator(kernel='cubic')
         interpolator.fit(sdf_points, sdf_values)
 
+    visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
+    radii = np.abs(sdf_values)
     if neighbor_estimation == 'visible_connectivity':
-        visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
-        radii = np.abs(sdf_values)
         neighbors = va.find_arcs_neighbors(sdf_points, radii, visible_arcs, 1e-3)
     elif neighbor_estimation == 'spatial':
         from sklearn.neighbors import NearestNeighbors
@@ -1119,7 +1119,9 @@ def test_gradient_estimation(n, neighbor_estimation, gradient_estimation, interp
 
     # connect original points to projected points
     plot_correspondence(good_sdf_points, good_points_on_surface, plt)
-    plt.axis('equal')
+    ax.set_aspect('equal')
+    ax.set_xlim(-0.1, 1.1)
+    ax.set_ylim(-0.1, 1.1)
     plt.title('Gradient Estimation and Surface Point Projection' + ' (' + str(n) + '^2 points ' + neighbor_estimation + ' + ' + gradient_estimation + ')')
     plt.legend(loc='upper right')
     plt.show()
@@ -1252,43 +1254,85 @@ def test_visible_neighbors(n=4, show_all=False):
     ax.set_title('Click on any point to show its neighbors')
     plt.show()
 
-
-def test_selected_neighbors(n=4):
+def test_subdividing(n=4):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
-    visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
-    radii = np.abs(sdf_values)
-    neighbors = va.find_arcs_neighbors(sdf_points, radii, visible_arcs, 1e-2)
-    gradients = estimate_gradient(sdf_points, sdf_values, neighbors=neighbors)
-    print("Estimated gradients shape:", gradients.shape)
-    print(np.sum(gradients**2))
-    points_on_surface = yongs_algorithm(sdf_points, sdf_values, gradients)
+    sdf_points_backup = sdf_points.copy()
+    sdf_values_backup = sdf_values.copy()
+    # Interpolate to a denser grid for better visualization
+    inter_points = np.array([[x, y] for x in np.linspace(0, 1, 50) for y in np.linspace(0, 1, 50)])
+    # Add more points to the part where the original sdf are smaller than 0.1 to better visualize the interior
+    interior_points = sdf_points_backup[np.abs(sdf_values_backup) < 0.01]
+    # Add more points around interior_points
+    for p in interior_points:
+        for dx in np.linspace(-0.02, 0.02, 5):
+            for dy in np.linspace(-0.02, 0.02, 5):
+                new_point = p + np.array([dx, dy])
+                if 0 <= new_point[0] <= 1 and 0 <= new_point[1] <= 1:
+                    inter_points = np.vstack([inter_points, new_point])
+    inter_points = np.vstack([inter_points, sdf_points_backup])  # Ensure original points are included
+    inter_points = np.unique(inter_points, axis=0)
+    sdf_points = inter_points
+    print(f"Original points: {len(sdf_points_backup)}, Interpolated points: {len(inter_points)}")
+    sdf_values = va.interpolate_sdf(sdf_points_backup, sdf_values_backup, inter_points, method='bilinear')
 
-    wrong_count = rate_gradient_estimation(sdf_points, points_on_surface, sdf_values)
-    mask = wrong_count <= 1
-    mask = np.ones_like(wrong_count, dtype=bool)  # for testing, keep all points
-    good_sdf_points = sdf_points[mask]
-    bad_points_on_surface = points_on_surface[~mask]
-    good_points_on_surface = points_on_surface[mask]
-    good_gradients = gradients[mask]
-    V, E = gpy.point_cloud_to_mesh( good_points_on_surface, good_gradients,
-    method='PSR',
-    psr_screening_weight=10.0,
-    psr_outer_boundary_type="Neumann",
-    )
-    poisson_contour = obj_to_points(V, E)
-    # visualize results in 2D
-    fig, ax = plt.subplots(figsize=(8, 7))
-    fig.patch.set_facecolor('lightblue')
-    ax.set_facecolor('lightblue')
-    # overlay the original shape
-    plt.scatter(good_sdf_points[:, 0], good_sdf_points[:, 1], c='r', s=3, label='Original Grid Points')
-    plt.scatter(good_points_on_surface[:, 0], good_points_on_surface[:, 1], c='yellow', s=10, label='Projected Surface Points')
+    import time
+    start_time = time.time()
+    fig, ax = va.visualize_circles(sdf_points, sdf_values, points)
+    end_time = time.time()
+    print(f"visualization on {len(sdf_points)} points took {end_time - start_time:.4f} seconds")
+
+    # Plot the original points
+    ax.scatter(sdf_points_backup[:, 0], sdf_points_backup[:, 1], c='black', s=8, label='Original Points', zorder=11)
+    
+    def add_point(pt):
+        """Add a single point: interpolate SDF, draw circle, update arrays."""
+        nonlocal sdf_points, sdf_values
+        
+        new_sdf = va.interpolate_sdf(sdf_points_backup, sdf_values_backup,
+                                      pt.reshape(1, -1), method='bilinear')[0]
+        sdf_points = np.vstack([sdf_points, pt])
+        sdf_values = np.append(sdf_values, new_sdf)
+        
+        from matplotlib.patches import Circle
+        color = 'green' if new_sdf < 0 else 'orange'
+        radius = np.abs(new_sdf)
+        circle = Circle(pt, radius, facecolor=color, alpha=0.5, zorder=10)
+        ax.add_patch(circle)
+        ax.scatter([pt[0]], [pt[1]], c='cyan', s=5, zorder=13, edgecolors='blue', linewidths=1.5)
+        return new_sdf
+    
+    def on_click(event):
+        if event.inaxes != ax:
+            return
+        
+        click_pt = np.array([event.xdata, event.ydata])
+        
+        if event.button == 1:  # Left click: add single point
+            new_sdf = add_point(click_pt)
+            ax.set_title(f'({click_pt[0]:.3f}, {click_pt[1]:.3f}) SDF={new_sdf:.4f} | Total: {len(sdf_points)}')
+            print(f"Added ({click_pt[0]:.3f}, {click_pt[1]:.3f}), SDF={new_sdf:.4f}")
+        
+        elif event.button == 3:  # Right click: add 10 points nearby
+            # Dynamic spread based on current view range
+            xlim = ax.get_xlim()
+            ylim = ax.get_ylim()
+            spread = min(xlim[1] - xlim[0], ylim[1] - ylim[0]) * 0.02
+            
+            for _ in range(10):
+                offset = np.random.uniform(-spread, spread, size=2)
+                new_pt = click_pt + offset
+                add_point(new_pt)
+            
+            ax.set_title(f'Added 10 points near ({click_pt[0]:.3f}, {click_pt[1]:.3f}) | Total: {len(sdf_points)}')
+            print(f"Added 10 points near ({click_pt[0]:.3f}, {click_pt[1]:.3f}), spread={spread:.4f}")
+        
+        fig.canvas.draw_idle()
+    
+    # Connect the click event
+    fig.canvas.mpl_connect('button_press_event', on_click)
     plt.plot(points[:, 0], points[:, 1], 'b-', linewidth=2, label='Original Shape')
-    plt.plot(poisson_contour[0][:, 0], poisson_contour[0][:, 1], 'm', linewidth=2, label='PSR Contour')
-    plt.axis('equal')
-    plot_correspondence(good_sdf_points, good_points_on_surface, plt)
-    plt.title('Selected Neighbors Gradient Estimation and Surface Point Projection' + ' (' + str(n) + '^2 points)')
-    plt.legend(loc='upper right')
+    
+    ax.set_title('Click anywhere to add an interpolated SDF circle')
     plt.show()
 
 def test_single_gradient(n=4, interpolator=None):
@@ -1399,7 +1443,8 @@ def test_single_gradient(n=4, interpolator=None):
     plt.show()
 
 if __name__ == "__main__":
-    # test_visible_neighbors(30, show_all=True)  # 显示所有邻居连接，不同颜色区分
-    # test_visible_neighbors(30)  # 交互模式
-    test_gradient_estimation(30, neighbor_estimation='visible_connectivity', gradient_estimation='irls')
+    # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
+    # test_visible_neighbors(30)  # interactive neighbor inspection
+    test_gradient_estimation(30, neighbor_estimation='spatial', gradient_estimation='ransac')
     # test_single_gradient(30)
+    # test_subdividing(30)
