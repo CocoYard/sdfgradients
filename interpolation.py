@@ -6,6 +6,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import visible_arcs as va
 import iterative_projection as ip
+from enum import Enum
+
+class NeighborEstimation(Enum):
+    VISIBLE_CONNECTIVITY = 'visible_connectivity'
+    SPATIAL = 'spatial'
+
+class GradientEstimation(Enum):
+    IRLS = 'irls'
+    RANSAC = 'ransac'
+    FINITE = 'finite'
+    LSTSQ = 'lstsq'
 
 def generate_test_mesh_data( path_to_mesh, outbase, num_points=500 ):
     '''
@@ -494,6 +505,24 @@ def yongs_algorithm2( points, distances, vertices ):
             gradients[i] *= -1.0
     return new_points, gradients
 
+def neighbors_on_gradient(points, sdf_values, tol=1e-3):
+    """ In SDF, any 2 points on the gradient line segment should have the SDF value change equal to their distance.
+    So we can use this property to find neighbors along the gradient direction.
+    """
+    neighbors = {}
+    for i in range(points.shape[0]):
+        neighbors[i] = []
+        for j in range(points.shape[0]):
+            if i == j:
+                continue
+            dist = np.linalg.norm(points[i] - points[j])
+            sdf_diff = np.abs(sdf_values[i] - sdf_values[j])
+            if np.abs(dist - sdf_diff) < tol:
+                neighbors[i].append(j)
+    # clean empty neighbors
+    neighbors = {k: v for k, v in neighbors.items() if len(v) > 0}
+    return neighbors
+
 def estimate_gradient_lstsq(points, sdf_values, neighbors=None):
     """ estimation of gradients from SDF values at given points. LSTSQ is the same as 
     to Prewitt finite difference (equal weights) if neighbors are the 8-connected grid 
@@ -507,7 +536,15 @@ def estimate_gradient_lstsq(points, sdf_values, neighbors=None):
         sdf_diffs = neighbor_sdf - sdf_values[i]
         A = diffs
         b = sdf_diffs
-        grad, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+        # Check if A is rank-deficient (collinear neighbors)
+        if A.shape[0] >= 2 and np.linalg.matrix_rank(A, tol=1e-8) < 2:
+            # Fall back to 1D gradient along the available direction
+            direction = diffs[0] / np.linalg.norm(diffs[0])
+            projections = diffs @ direction
+            slope = np.linalg.lstsq(projections.reshape(-1, 1), sdf_diffs, rcond=None)[0][0]
+            grad = slope * direction
+        else:
+            grad, residuals, _, _ = np.linalg.lstsq(A, b, rcond=None)
         gradients[i] = grad
     # Normalize gradients
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
@@ -776,6 +813,14 @@ def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None):
     dim = points.shape[1] # 2 for 2D, 3 for 3D
     
     # Initialize output containers
+    if n_neighbors == 1:
+        # Only one neighbor, we can only form a line, not a plane. 
+        # The best we can do is to take the direction to that neighbor.
+        grad = A_local[0] / np.linalg.norm(A_local[0])
+        weights = np.ones(n_neighbors)
+        if sdf_values[indices[0]] < point_sdf:
+            grad *= -1.0  # Flip direction if neighbor is inside
+        return grad, weights, indices
     # If not enough neighbors to form a pair, return zero gradient
     if n_neighbors < dim:
         return np.zeros(dim), np.zeros(n_neighbors), indices
@@ -791,19 +836,27 @@ def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None):
         A_sub = A_local[list(subset_idx)]
         b_sub = b_local[list(subset_idx)]
         
-        # Check for collinearity (determinant close to zero)
         if dim == 2:
+            # Check for collinearity (determinant close to zero)
             det = A_sub[0,0]*A_sub[1,1] - A_sub[0,1]*A_sub[1,0]
-            if abs(det) < 1e-6: 
-                continue
-        
-        try:
-            # Exact solve for the gradient using this pair
-            # Since A_sub is square (2x2), we use solve instead of lstsq
-            cand_grad = np.linalg.solve(A_sub, b_sub)
-        except np.linalg.LinAlgError:
-            continue
-            
+            if abs(det) < 1e-6:
+                # Collinear: fall back to 1D gradient along the available direction
+                dir_norm = np.linalg.norm(A_sub[0])
+                if dir_norm < 1e-10:
+                    dir_norm = np.linalg.norm(A_sub[1])
+                    if dir_norm < 1e-10:
+                        continue  # Both vectors are zero (overlapping points)
+                    direction = A_sub[1] / dir_norm
+                else:
+                    direction = A_sub[0] / dir_norm
+                projections = A_sub @ direction
+                slope = np.dot(projections, b_sub) / np.dot(projections, projections)
+                cand_grad = slope * direction
+            else:
+                try:
+                    cand_grad = np.linalg.solve(A_sub, b_sub)
+                except np.linalg.LinAlgError:
+                    continue
         # Check Gradient Validity (SDF property: norm should be approx 1)
         # We allow a loose tolerance to accept imperfect but reasonable gradients
         norm = np.linalg.norm(cand_grad)
@@ -1044,12 +1097,12 @@ def obj_to_points(V, E):
         poisson_contour.append( V[poisson_contour_indices] )
     return poisson_contour
 
-def plot_correspondence(sdf_points, points_on_surface, plt):
+def plot_correspondence(sdf_points, points_on_surface, plt, color='k'):
     for i in range(sdf_points.shape[0]):
         plt.plot([sdf_points[i, 0], points_on_surface[i, 0]], 
-                 [sdf_points[i, 1], points_on_surface[i, 1]], 'k--', linewidth=0.5)
+                 [sdf_points[i, 1], points_on_surface[i, 1]], color+'--', linewidth=0.5)
 
-def test_gradient_estimation(n, neighbor_estimation, gradient_estimation, interpolator=None):
+def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     if interpolator is None:
         # Create and fit the interpolator
@@ -1058,21 +1111,32 @@ def test_gradient_estimation(n, neighbor_estimation, gradient_estimation, interp
 
     visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
     radii = np.abs(sdf_values)
-    if neighbor_estimation == 'visible_connectivity':
+    if neighbor_estimation == NeighborEstimation.VISIBLE_CONNECTIVITY:
         neighbors = va.find_arcs_neighbors(sdf_points, radii, visible_arcs, 1e-3)
-    elif neighbor_estimation == 'spatial':
+    elif neighbor_estimation == NeighborEstimation.SPATIAL:
         from sklearn.neighbors import NearestNeighbors
         nbrs = NearestNeighbors(n_neighbors=9, algorithm='auto').fit(sdf_points)
         distances, neighbors = nbrs.kneighbors(sdf_points)
-
-    if gradient_estimation.lower() == 'irls':
+        neighbors = {i: list(neighbors[i]) for i in range(sdf_points.shape[0])}
+    if on_gradient_neighbors:
+        neighbors2 = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-5)
+        for k, v in neighbors2.items():
+            neighbors[k] = v
+        ids = set() # To plot the points in neighbors2 with different color, we need to collect their indices
+        for k, v in neighbors2.items():
+            ids.add(k)
+            for idx in v:
+                ids.add(idx)
+        ids = list(ids)
+        print(len(neighbors2))
+    if gradient_estimation == GradientEstimation.IRLS:
         gradients = estimate_gradient_irls(sdf_points, sdf_values, neighbors)
-    elif gradient_estimation.lower() == 'ransac':
+    elif gradient_estimation == GradientEstimation.RANSAC:
         gradients = estimate_gradient_RANSAC(sdf_points, sdf_values, neighbors)
-    elif gradient_estimation.lower() == 'finite':
-        neighbor_estimation = 'spatial'
+    elif gradient_estimation == GradientEstimation.FINITE:
+        neighbor_estimation = NeighborEstimation.SPATIAL
         gradients = estimate_gradient_finite_diff(sdf_points, sdf_values)
-    elif gradient_estimation.lower() == 'lstsq':
+    elif gradient_estimation == GradientEstimation.LSTSQ:
         gradients = estimate_gradient_lstsq(sdf_points, sdf_values, neighbors)
 
     print("Estimated gradients shape:", gradients.shape)
@@ -1108,21 +1172,26 @@ def test_gradient_estimation(n, neighbor_estimation, gradient_estimation, interp
     # draw the contours at multiple levels (no transpose for contour!)
     contour_levels = np.linspace(-.5, .5, 21)
     ax.contour(grid_x, grid_y, grid_values, levels=contour_levels, colors='yellow', linewidths=0.5, alpha=0.5)
-
     # visualize results in 2D
     # overlay the original shape
     plt.scatter(sdf_points[:, 0], sdf_points[:, 1], c='r', s=3, label='Original Grid Points')
     plt.scatter(good_points_on_surface[:, 0], good_points_on_surface[:, 1], c='yellow', s=10, label='Projected Surface Points')
+    if on_gradient_neighbors:
+        # show all points in neighbors2 with white color
+        plt.scatter(sdf_points[ids, 0], sdf_points[ids, 1], c='white', s=10, label='on-gradient Points')
+
     plt.plot(points[:, 0], points[:, 1], 'b-', linewidth=2, label='Original Shape')
     plt.plot(contour_points[:, 0], contour_points[:, 1], 'k', linewidth=2, label='MC Contour')
     plt.plot(poisson_contour[:, 0], poisson_contour[:, 1], 'm', linewidth=2, label='PSR Contour')
 
-    # connect original points to projected points
     plot_correspondence(good_sdf_points, good_points_on_surface, plt)
+    # connect original points to projected points
+    if on_gradient_neighbors:
+        plot_correspondence(sdf_points[ids], points_on_surface[ids], plt, color='w')
     ax.set_aspect('equal')
-    ax.set_xlim(-0.1, 1.1)
-    ax.set_ylim(-0.1, 1.1)
-    plt.title('Gradient Estimation and Surface Point Projection' + ' (' + str(n) + '^2 points ' + neighbor_estimation + ' + ' + gradient_estimation + ')')
+    ax.set_xlim(-0.01, 1.1)
+    ax.set_ylim(-0.01, 1.2)
+    plt.title('Gradient Estimation and Surface Point Projection' + ' (' + str(n) + '^2 points ' + neighbor_estimation.value + ' + ' + gradient_estimation.value + ')')
     plt.legend(loc='upper right')
     plt.show()
 
@@ -1445,6 +1514,6 @@ def test_single_gradient(n=4, interpolator=None):
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
-    test_gradient_estimation(30, neighbor_estimation='spatial', gradient_estimation='ransac')
+    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.RANSAC)
     # test_single_gradient(30)
     # test_subdividing(30)
