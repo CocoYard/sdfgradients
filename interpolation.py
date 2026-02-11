@@ -561,7 +561,7 @@ def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None):
         indices = np.array(neighbors, dtype=int)
         if indices.ndim > 1:
             indices = indices.flatten()
-        
+    indices = indices[indices != ind]  # Exclude the center point itself if present
     # Local coordinate system relative to the center point
     # We enforce the plane to pass through (0, 0) in this local space
     A_local = points[indices] - point
@@ -1137,6 +1137,85 @@ def plot_correspondence(sdf_points, points_on_surface, plt, color='k'):
         plt.plot([sdf_points[i, 0], points_on_surface[i, 0]], 
                  [sdf_points[i, 1], points_on_surface[i, 1]], color+'--', linewidth=0.5)
 
+def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors=None):
+    """
+    Add interactive click handler to inspect per-point RANSAC gradient estimation.
+    Click any point to show its neighbors, weights, gradient, and projected surface point.
+    
+    Parameters:
+    -----------
+    fig : matplotlib Figure
+    ax : matplotlib Axes
+    sdf_points : (N, 2) array
+    sdf_values : (N,) array
+    neighbors : dict or list, optional — neighbor indices per point
+    """
+    highlighted = {'point': None, 'surface': None, 'neighbors': None, 'texts': [], 'line': None, 'lines': []}
+    
+    def on_click(event):
+        if event.inaxes != ax:
+            return
+        # Clear previous highlights
+        if highlighted['point'] is not None:
+            highlighted['point'].remove()
+        if highlighted['surface'] is not None:
+            highlighted['surface'].remove()
+        if highlighted['neighbors'] is not None:
+            highlighted['neighbors'].remove()
+        if highlighted['line'] is not None:
+            highlighted['line'].remove()
+        for item in highlighted['texts']:
+            item.remove()
+        for item in highlighted['lines']:
+            item.remove()
+        highlighted['texts'] = []
+        highlighted['lines'] = []
+        
+        click_pt = np.array([event.xdata, event.ydata])
+        distances_to_click = np.linalg.norm(sdf_points - click_pt, axis=1)
+        idx = np.argmin(distances_to_click)
+        
+        # Compute single-point RANSAC to get weights and indices
+        gradient_i, weights_i, indices_i, loss_i = estimate_gradient_exhaustive(
+            sdf_points, sdf_values, idx,
+            neighbors=neighbors[idx] if neighbors is not None else None)
+        point_on_surface = sdf_points[idx] - sdf_values[idx] * gradient_i
+        
+        # Highlight selected point
+        highlighted['point'] = ax.scatter([sdf_points[idx, 0]], [sdf_points[idx, 1]],
+                                          c='cyan', s=150, zorder=15, marker='*',
+                                          edgecolors='white', linewidths=2)
+        # Show projected surface point
+        highlighted['surface'] = ax.scatter([point_on_surface[0]], [point_on_surface[1]],
+                                            c='yellow', s=100, zorder=14, marker='o',
+                                            edgecolors='white', linewidths=2)
+        # Correspondence line
+        highlighted['line'], = ax.plot([sdf_points[idx, 0], point_on_surface[0]],
+                                       [sdf_points[idx, 1], point_on_surface[1]],
+                                       'w--', linewidth=2, zorder=13)
+        
+        # Show neighbors colored by weight
+        neighbor_pts = sdf_points[indices_i]
+        cmap = plt.cm.RdYlGn
+        colors = cmap(weights_i)
+        highlighted['neighbors'] = ax.scatter(neighbor_pts[:, 0], neighbor_pts[:, 1],
+                                              c=colors, s=50, zorder=14, edgecolors='white', linewidths=1)
+        # Label each neighbor with its weight
+        for k in range(len(indices_i)):
+            txt = ax.annotate(f'{weights_i[k]:.2f}', (neighbor_pts[k, 0], neighbor_pts[k, 1]),
+                              fontsize=7, color='white', ha='center', va='bottom', zorder=16,
+                              bbox=dict(boxstyle='round,pad=0.15', facecolor='black', alpha=0.6))
+            highlighted['texts'].append(txt)
+            ln, = ax.plot([sdf_points[idx, 0], neighbor_pts[k, 0]],
+                          [sdf_points[idx, 1], neighbor_pts[k, 1]],
+                          color=colors[k], linewidth=1.5, alpha=0.6, zorder=12)
+            highlighted['lines'].append(ln)
+        
+        ax.set_title(f'Point {idx}: SDF={sdf_values[idx]:.4f}  grad={gradient_i}  loss={loss_i:.4f}')
+        fig.canvas.draw_idle()
+    
+    fig.canvas.mpl_connect('button_press_event', on_click)
+
 def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     if interpolator is None:
@@ -1238,6 +1317,10 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     ax.set_ylim(-0.01, 1.01)
     plt.title('Gradient Estimation and Surface Point Projection' + ' (' + str(n) + '^2 points ' + neighbor_estimation.value + ' + ' + gradient_estimation.value + ')')
     # plt.legend(loc='upper right')
+    # Interactive click: show neighbors and weights for RANSAC
+    if gradient_estimation == GradientEstimation.RANSAC:
+        setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors)
+    
     plt.show()
 
 def test_visible_neighbors(n=4, show_all=False):
