@@ -569,7 +569,7 @@ def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None):
     
     n_neighbors = len(indices)
     dim = points.shape[1] # 2 for 2D, 3 for 3D
-    
+
     # Initialize output containers
     if n_neighbors == 1:
         # Only one neighbor, we can only form a line, not a plane. 
@@ -790,7 +790,7 @@ def estimate_gradient_irls(points, sdf_values, neighbor_list=None, iters=5, sigm
     weights[mask] = 1.0
     
     best_grads = np.zeros((n, 2))
-
+    errors = np.zeros(n)
     for _ in range(iters):
         # Apply weights
         w_sqrt = np.sqrt(weights)[:, :, None]
@@ -821,13 +821,14 @@ def estimate_gradient_irls(points, sdf_values, neighbor_list=None, iters=5, sigm
             
             best_grads = grads
             
+            errors = np.mean(residuals, axis=1)
         except np.linalg.LinAlgError:
             continue
 
     # Final Unit Normalization
     mags = np.linalg.norm(best_grads, axis=1, keepdims=True)
     mags = np.where(mags < 1e-8, 1.0, mags)
-    return best_grads / mags
+    return best_grads / mags, errors
 
 # def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters=50, sigma=0.05):
 #     """ estimation of gradients from SDF values at a given point using IRLS. Only for a single point at index ind."""
@@ -1231,7 +1232,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         from sklearn.neighbors import NearestNeighbors
         nbrs = NearestNeighbors(n_neighbors=9, algorithm='auto').fit(sdf_points)
         distances, neighbors = nbrs.kneighbors(sdf_points)
-        neighbors = {i: list(neighbors[i]) for i in range(sdf_points.shape[0])}
+        neighbors = [list(neighbors[i]) for i in range(sdf_points.shape[0])]
     if on_gradient_neighbors:
         neighbors2 = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-5)
         for k, v in neighbors2.items():
@@ -1244,7 +1245,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         ids = list(ids)
         print(len(neighbors2))
     if gradient_estimation == GradientEstimation.IRLS:
-        gradients = estimate_gradient_irls(sdf_points, sdf_values, neighbors)
+        gradients, grad_errors = estimate_gradient_irls(sdf_points, sdf_values, neighbors)
     elif gradient_estimation == GradientEstimation.RANSAC:
         gradients, grad_errors = estimate_gradient_RANSAC(sdf_points, sdf_values, neighbors)
     elif gradient_estimation == GradientEstimation.FINITE:
@@ -1642,6 +1643,6 @@ def test_single_gradient(n=4, interpolator=None):
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
-    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.RANSAC)
+    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.LSTSQ)
     # test_single_gradient(30)
     # test_subdividing(30)
