@@ -523,12 +523,140 @@ def neighbors_on_gradient(points, sdf_values, tol=1e-3):
     neighbors = {k: v for k, v in neighbors.items() if len(v) > 0}
     return neighbors
 
+def estimate_gradient_RANSAC(points, sdf_values, neighbors=None):
+    """ estimation of gradients from SDF values at given points.
+    Inputs:
+        points: (N, 2) coordinates of sample points
+        sdf_values: (N,) corresponding SDF values
+        k: number of neighbors to find for each point for RANSAC (default is 3×3 neighborhood)
+    Returns:
+        gradients: (N, 2) robust gradients for each point
+        errors: (N,) corresponding errors for each gradient, defined as the mean of squared distance error of all selected neighbors.
+    """
+    gradients = np.zeros_like(points)
+    errors = np.zeros(points.shape[0])
+    for i in range(points.shape[0]):
+        gradients[i], _, _, errors[i] = estimate_gradient_exhaustive(points, sdf_values, i, neighbors=neighbors[i] if neighbors is not None else None)
+    return gradients, errors
+
+import itertools
+
+def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None):
+    """
+    Brute-force all pairs of neighbors to find the gradient that minimizes 
+    the Median Squared Residual (LMS). 
+    
+    The returned weights are binary: 1.0 for the two points that formed the 
+    best gradient, and 0.0 for everyone else.
+    """
+    # 1. Setup Data
+    point = points[ind]
+    point_sdf = sdf_values[ind]
+
+    if neighbors is None:
+        nbrs = NearestNeighbors(n_neighbors=16, algorithm='auto').fit(points)
+        _, indices = nbrs.kneighbors(point.reshape(1, -1))
+        indices = indices[0]
+    else:
+        indices = np.array(neighbors, dtype=int)
+        if indices.ndim > 1:
+            indices = indices.flatten()
+        
+    # Local coordinate system relative to the center point
+    # We enforce the plane to pass through (0, 0) in this local space
+    A_local = points[indices] - point
+    b_local = sdf_values[indices] - point_sdf
+    
+    n_neighbors = len(indices)
+    dim = points.shape[1] # 2 for 2D, 3 for 3D
+    
+    # Initialize output containers
+    if n_neighbors == 1:
+        # Only one neighbor, we can only form a line, not a plane. 
+        # The best we can do is to take the direction to that neighbor.
+        grad = A_local[0] / np.linalg.norm(A_local[0])
+        weights = np.ones(n_neighbors)
+        if sdf_values[indices[0]] < point_sdf:
+            grad *= -1.0  # Flip direction if neighbor is inside
+        error = np.abs((A_local[0] @ grad - b_local[0]))
+        return grad, weights, indices, error
+    # If not enough neighbors to form a pair, return zero gradient
+    if n_neighbors < dim:
+        return np.zeros(dim), np.zeros(n_neighbors), indices, 0.0
+    best_loss = float('inf')
+    best_gradient = np.zeros(dim)
+    best_subset_idx = [] # To store the indices of the "winning" pair
+    
+    # 2. Iterate through all combinations of 'dim' neighbors (Pairs in 2D)
+    # subset_idx contains the local indices (0 to n_neighbors-1) of the chosen pair
+    for subset_idx in itertools.combinations(range(n_neighbors), dim):
+        # Extract the subset of points
+        A_sub = A_local[list(subset_idx)]
+        b_sub = b_local[list(subset_idx)]
+        
+        if dim == 2:
+            # Check for collinearity (determinant close to zero)
+            det = A_sub[0,0]*A_sub[1,1] - A_sub[0,1]*A_sub[1,0]
+            if abs(det) < 1e-6:
+                # Collinear: fall back to 1D gradient along the available direction
+                dir_norm = np.linalg.norm(A_sub[0])
+                if dir_norm < 1e-10:
+                    dir_norm = np.linalg.norm(A_sub[1])
+                    if dir_norm < 1e-10:
+                        continue  # Both vectors are zero (overlapping points)
+                    direction = A_sub[1] / dir_norm
+                else:
+                    direction = A_sub[0] / dir_norm
+                projections = A_sub @ direction
+                slope = np.dot(projections, b_sub) / np.dot(projections, projections)
+                cand_grad = slope * direction
+            else:
+                try:
+                    cand_grad = np.linalg.solve(A_sub, b_sub)
+                except np.linalg.LinAlgError:
+                    continue
+        # Check Gradient Validity (SDF property: norm should be approx 1)
+        # We allow a loose tolerance to accept imperfect but reasonable gradients
+        norm = np.linalg.norm(cand_grad)
+        if not (0.5 < norm < 1.5):
+            continue
+                    
+        # 3. Validation: Evaluate this candidate gradient against ALL neighbors
+        preds = A_local @ cand_grad
+        residuals = np.abs(preds - b_local)
+        
+        # LMS Metric: Use Median of Residuals to be robust against 50% outliers
+        loss = np.median(residuals)
+
+        # Alternative Metric: Mean of Squared Residuals (L2) for better sensitivity to all neighbors
+        # loss = np.mean(residuals**2)
+
+        if loss < best_loss:
+            best_loss = loss
+            best_gradient = cand_grad
+            best_subset_idx = subset_idx
+            
+    # 4. Construct Final Weights
+    # As requested, we assign weight 1.0 ONLY to the selected pair of points
+    weights = np.zeros(n_neighbors)
+    if len(best_subset_idx) > 0:
+        weights[list(best_subset_idx)] = 1.0
+    weights[indices == ind]=1  # Debug: Check if center point got weight 1.0 (it shouldn't)
+    # Normalize Gradient vector
+    final_norm = np.linalg.norm(best_gradient)
+    if final_norm > 1e-8:
+        best_gradient /= final_norm
+    else:
+        best_gradient = np.zeros(dim)
+    return best_gradient, weights, indices, best_loss
+
 def estimate_gradient_lstsq(points, sdf_values, neighbors=None):
     """ estimation of gradients from SDF values at given points. LSTSQ is the same as 
     to Prewitt finite difference (equal weights) if neighbors are the 8-connected grid 
     neighbors."""
     indices = neighbors
     gradients = np.zeros_like(points)
+    errors = np.zeros(points.shape[0])
     for i in range(points.shape[0]):
         neighbor_points = points[indices[i]]
         neighbor_sdf = sdf_values[indices[i]]
@@ -544,33 +672,38 @@ def estimate_gradient_lstsq(points, sdf_values, neighbors=None):
             slope = np.linalg.lstsq(projections.reshape(-1, 1), sdf_diffs, rcond=None)[0][0]
             grad = slope * direction
         else:
-            grad, residuals, _, _ = np.linalg.lstsq(A, b, rcond=None)
+            grad, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
         gradients[i] = grad
+        residuals = A @ grad - b
+        errors[i] = np.sum(residuals**2) / max(len(b), 1)  # Average error per neighbor
     # Normalize gradients
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-8)
-    return gradients
+    return gradients, errors
 
 def estimate_gradient_finite_diff(points, sdf_values):
     """ estimation of gradients from SDF values at given points. This finite difference 
     uses central difference with Sobel operator (smaller weights on diagonals). The neighbors 
-    are the 8-connected grid neighbors.
+    are the 8-connected grid neighbors. For border points, use forward/backward difference.
     """
+    n = int(points.shape[0]**0.5)
     from scipy.ndimage import sobel
     # 1. Reshape to grid
-    sdf_grid = sdf_values.reshape(int(points.shape[0]**0.5), int(points.shape[0]**0.5))
-    sdf_padded = np.pad(sdf_grid, pad_width=1, mode='edge')
+    sdf_grid = sdf_values.reshape(n, n)
     
     # 2. Apply Sobel on each axis
     # sdf_grid shape: (n_x, n_y), where axis=0 is x, axis=1 is y
     # sobel(axis=0) differentiates along x, sobel(axis=1) differentiates along y
     # Assume uniform grid spacing
     dx = points[1, 1] - points[0, 1]
-    grad_x_grid = sobel(sdf_padded, axis=0, mode='nearest') / (8 * dx)
-    grad_y_grid = sobel(sdf_padded, axis=1, mode='nearest') / (8 * dx)
-    # Remove padding
-    grad_x_grid = grad_x_grid[1:-1, 1:-1]
-    grad_y_grid = grad_y_grid[1:-1, 1:-1]
+    grad_x_grid = sobel(sdf_grid, axis=0, mode='nearest') / (8 * dx)
+    grad_y_grid = sobel(sdf_grid, axis=1, mode='nearest') / (8 * dx)
+
+    # Treat the boarder points with forward/backward difference
+    grad_x_grid[0, :] = (sdf_grid[1, :] - sdf_grid[0, :]) / dx
+    grad_x_grid[-1, :] = (sdf_grid[-1, :] - sdf_grid[-2, :]) / dx
+    grad_y_grid[:, 0] = (sdf_grid[:, 1] - sdf_grid[:, 0]) / dx
+    grad_y_grid[:, -1] = (sdf_grid[:, -1] - sdf_grid[:, -2]) / dx
     
     # 3. Flatten back to (N, 2)
     grad_x = grad_x_grid.flatten()
@@ -578,10 +711,35 @@ def estimate_gradient_finite_diff(points, sdf_values):
     
     # Combine
     gradients = np.stack([grad_x, grad_y], axis=1) # (N, 2)
+
+    # Compute error metric for gradient estimation. For SDF, the error for each neighbor
+    # is the squared absolute difference between the SDF value and the dot product of the gradient with the neighbor vector.
+    # Return the sum of the errors for all neighbors for each point.
+    N = points.shape[0]
+    errors = np.zeros(N)
+    grad_grid = gradients.reshape(n, n, 2)
+    for ix in range(n):
+        for iy in range(n):
+            total_err = 0.0
+            count = 0
+            for di in range(-1, 2):
+                for dj in range(-1, 2):
+                    if di == 0 and dj == 0:
+                        continue
+                    ni, nj = ix + di, iy + dj
+                    if 0 <= ni < n and 0 <= nj < n:
+                        idx_center = ix * n + iy
+                        idx_neighbor = ni * n + nj
+                        diff = points[idx_neighbor] - points[idx_center]
+                        sdf_diff = sdf_values[idx_neighbor] - sdf_values[idx_center]
+                        predicted = gradients[idx_center] @ diff
+                        total_err += (sdf_diff - predicted)**2
+                        count += 1
+            errors[ix * n + iy] = total_err / max(count, 1)
     # Normalize gradients
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-8)
-    return gradients
+    return gradients, errors
 
 def estimate_gradient_irls(points, sdf_values, neighbor_list=None, iters=5, sigma=0.05):
     """
@@ -779,115 +937,6 @@ def estimate_gradient_l1_direct(points, sdf_values, ind, neighbors=None, sigma=0
     gradient = gradient / max(norm, 1e-8)
     
     return gradient, weights, indices
-import numpy as np
-import itertools
-from sklearn.neighbors import NearestNeighbors
-
-def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None):
-    """
-    Brute-force all pairs of neighbors to find the gradient that minimizes 
-    the Median Squared Residual (LMS). 
-    
-    The returned weights are binary: 1.0 for the two points that formed the 
-    best gradient, and 0.0 for everyone else.
-    """
-    # 1. Setup Data
-    point = points[ind]
-    point_sdf = sdf_values[ind]
-
-    if neighbors is None:
-        nbrs = NearestNeighbors(n_neighbors=16, algorithm='auto').fit(points)
-        _, indices = nbrs.kneighbors(point.reshape(1, -1))
-        indices = indices[0]
-    else:
-        indices = np.array(neighbors, dtype=int)
-        if indices.ndim > 1:
-            indices = indices.flatten()
-        
-    # Local coordinate system relative to the center point
-    # We enforce the plane to pass through (0, 0) in this local space
-    A_local = points[indices] - point
-    b_local = sdf_values[indices] - point_sdf
-    
-    n_neighbors = len(indices)
-    dim = points.shape[1] # 2 for 2D, 3 for 3D
-    
-    # Initialize output containers
-    if n_neighbors == 1:
-        # Only one neighbor, we can only form a line, not a plane. 
-        # The best we can do is to take the direction to that neighbor.
-        grad = A_local[0] / np.linalg.norm(A_local[0])
-        weights = np.ones(n_neighbors)
-        if sdf_values[indices[0]] < point_sdf:
-            grad *= -1.0  # Flip direction if neighbor is inside
-        return grad, weights, indices
-    # If not enough neighbors to form a pair, return zero gradient
-    if n_neighbors < dim:
-        return np.zeros(dim), np.zeros(n_neighbors), indices
-
-    best_loss = float('inf')
-    best_gradient = np.zeros(dim)
-    best_subset_idx = [] # To store the indices of the "winning" pair
-    
-    # 2. Iterate through all combinations of 'dim' neighbors (Pairs in 2D)
-    # subset_idx contains the local indices (0 to n_neighbors-1) of the chosen pair
-    for subset_idx in itertools.combinations(range(n_neighbors), dim):
-        # Extract the subset of points
-        A_sub = A_local[list(subset_idx)]
-        b_sub = b_local[list(subset_idx)]
-        
-        if dim == 2:
-            # Check for collinearity (determinant close to zero)
-            det = A_sub[0,0]*A_sub[1,1] - A_sub[0,1]*A_sub[1,0]
-            if abs(det) < 1e-6:
-                # Collinear: fall back to 1D gradient along the available direction
-                dir_norm = np.linalg.norm(A_sub[0])
-                if dir_norm < 1e-10:
-                    dir_norm = np.linalg.norm(A_sub[1])
-                    if dir_norm < 1e-10:
-                        continue  # Both vectors are zero (overlapping points)
-                    direction = A_sub[1] / dir_norm
-                else:
-                    direction = A_sub[0] / dir_norm
-                projections = A_sub @ direction
-                slope = np.dot(projections, b_sub) / np.dot(projections, projections)
-                cand_grad = slope * direction
-            else:
-                try:
-                    cand_grad = np.linalg.solve(A_sub, b_sub)
-                except np.linalg.LinAlgError:
-                    continue
-        # Check Gradient Validity (SDF property: norm should be approx 1)
-        # We allow a loose tolerance to accept imperfect but reasonable gradients
-        norm = np.linalg.norm(cand_grad)
-        if not (0.5 < norm < 1.5):
-            continue
-            
-        # 3. Validation: Evaluate this candidate gradient against ALL neighbors
-        preds = A_local @ cand_grad
-        residuals = np.abs(preds - b_local)
-        
-        # LMS Metric: Use Median of Residuals to be robust against 50% outliers
-        loss = np.median(residuals)
-        
-        if loss < best_loss:
-            best_loss = loss
-            best_gradient = cand_grad
-            best_subset_idx = subset_idx
-            
-    # 4. Construct Final Weights
-    # As requested, we assign weight 1.0 ONLY to the selected pair of points
-    weights = np.zeros(n_neighbors)
-    if len(best_subset_idx) > 0:
-        weights[list(best_subset_idx)] = 1.0
-    weights[indices == ind]=1  # Debug: Check if center point got weight 1.0 (it shouldn't)
-    # Normalize Gradient vector
-    final_norm = np.linalg.norm(best_gradient)
-    if final_norm > 1e-8:
-        best_gradient /= final_norm
-    else:
-        best_gradient = np.zeros(dim)
-    return best_gradient, weights, indices
 
 def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters=10, sigma=0.05):
     """
@@ -972,20 +1021,6 @@ def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters
         gradient = np.zeros_like(gradient) 
 
     return gradient, weights, indices
-
-def estimate_gradient_RANSAC(points, sdf_values, neighbors=None):
-    """ estimation of gradients from SDF values at given points.
-    Inputs:
-        points: (N, 2) coordinates of sample points
-        sdf_values: (N,) corresponding SDF values
-        k: number of neighbors to find for each point for RANSAC (default is 3×3 neighborhood)
-    Returns:
-        gradients: (N, 2) robust gradients for each point
-    """
-    gradients = np.zeros_like(points)
-    for i in range(points.shape[0]):
-        gradients[i], _, _ = estimate_gradient_exhaustive(points, sdf_values, i, neighbors=neighbors[i] if neighbors is not None else None)
-    return gradients
 
 def _single_point_ransac_2d(pts, sdfs, threshold, max_iters=100):
     n = pts.shape[0]
@@ -1132,12 +1167,12 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     if gradient_estimation == GradientEstimation.IRLS:
         gradients = estimate_gradient_irls(sdf_points, sdf_values, neighbors)
     elif gradient_estimation == GradientEstimation.RANSAC:
-        gradients = estimate_gradient_RANSAC(sdf_points, sdf_values, neighbors)
+        gradients, grad_errors = estimate_gradient_RANSAC(sdf_points, sdf_values, neighbors)
     elif gradient_estimation == GradientEstimation.FINITE:
         neighbor_estimation = NeighborEstimation.SPATIAL
-        gradients = estimate_gradient_finite_diff(sdf_points, sdf_values)
+        gradients, grad_errors = estimate_gradient_finite_diff(sdf_points, sdf_values)
     elif gradient_estimation == GradientEstimation.LSTSQ:
-        gradients = estimate_gradient_lstsq(sdf_points, sdf_values, neighbors)
+        gradients, grad_errors = estimate_gradient_lstsq(sdf_points, sdf_values, neighbors)
 
     print("Estimated gradients shape:", gradients.shape)
     points_on_surface = yongs_algorithm(sdf_points, sdf_values, gradients)
@@ -1179,6 +1214,16 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     if on_gradient_neighbors:
         # show all points in neighbors2 with white color
         plt.scatter(sdf_points[ids, 0], sdf_points[ids, 1], c='white', s=10, label='on-gradient Points')
+    # Add error labels on each point if available
+    if 'grad_errors' in dir():
+        grad_errors *= 1e4  # Scale error for better visualization
+        cmap = plt.cm.coolwarm
+        e_min, e_max = grad_errors.min(), grad_errors.max()
+        norm = plt.Normalize(vmin=e_min, vmax=e_max)
+        for i in range(len(sdf_points)):
+            color = cmap(norm(grad_errors[i]))
+            ax.annotate(f'{grad_errors[i]:.2f}', (sdf_points[i, 0], sdf_points[i, 1]),
+                        fontsize=8, color=color, ha='center', va='bottom')
 
     plt.plot(points[:, 0], points[:, 1], 'b-', linewidth=2, label='Original Shape')
     plt.plot(contour_points[:, 0], contour_points[:, 1], 'k', linewidth=2, label='MC Contour')
@@ -1189,10 +1234,10 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     if on_gradient_neighbors:
         plot_correspondence(sdf_points[ids], points_on_surface[ids], plt, color='w')
     ax.set_aspect('equal')
-    ax.set_xlim(-0.01, 1.1)
-    ax.set_ylim(-0.01, 1.2)
+    ax.set_xlim(-0.01, 1.01)
+    ax.set_ylim(-0.01, 1.01)
     plt.title('Gradient Estimation and Surface Point Projection' + ' (' + str(n) + '^2 points ' + neighbor_estimation.value + ' + ' + gradient_estimation.value + ')')
-    plt.legend(loc='upper right')
+    # plt.legend(loc='upper right')
     plt.show()
 
 def test_visible_neighbors(n=4, show_all=False):
