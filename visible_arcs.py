@@ -1,10 +1,41 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-def compute_visible_arcs(sdf_points, sdf_values):
+def get_short_arcs(visible_arcs, tol=1e-8):
+    """
+    For each circle's visible arcs, if it contains only a degenerate arc (length < tol), record it.
+    
+    Parameters:
+    -----------
+    visible_arcs : list of lists
+        For each circle i, visible_arcs[i] contains [(start_angle1, end_angle1), (start_angle2, end_angle2), ...]
+    tol : float
+        Tolerance to consider arcs as degenerate
+    
+    Returns:
+    --------
+    degenerate_arcs : dict
+        Dictionary mapping circle index to its degenerate arc's median angle (if any)
+    """
+    degenerate_arcs = {}
+    
+    for i, arcs in enumerate(visible_arcs):
+        if not arcs:
+            continue
+        
+        if len(arcs) == 1:
+            start_angle, end_angle = arcs[0]
+            length = end_angle - start_angle
+            if length < tol:
+                degenerate_arcs[i] = (start_angle + end_angle) / 2.0 # there is no wrap-around case for degenerate arcs, so this is safe
+    
+    return degenerate_arcs
+
+def compute_visible_arcs(sdf_points, sdf_values, tol=1e-8):
     """
     For each circle (center=sdf_point, radius=|sdf_value|), compute the visible arcs
-    that are not occluded by other circles.
+    that are not occluded by other circles. 
+    Notes: every circle will have at least one visible arc, even if it's very small, due to the tolerance.
     
     Parameters:
     -----------
@@ -64,14 +95,14 @@ def compute_visible_arcs(sdf_points, sdf_values):
                 if radius_j >= radius_i:
                     visible_intervals = []
                 continue
-            
-            if dist_ij + radius_i <= radius_j:
-                # Circle i completely inside circle j
-                visible_intervals = []
+            if radius_j - tol <= dist_ij + radius_i <= radius_j + tol:
+                # Circle i is just touching circle j from inside
+                angle_to_j = np.arctan2(vec_ij[1], vec_ij[0])
+                visible_intervals = [(angle_to_j, angle_to_j)]
                 continue
             
-            if dist_ij + radius_j <= radius_i:
-                continue  # Circle j inside circle i, no occlusion
+            if dist_ij + radius_j < radius_i + tol:
+                continue  # Circle j inside circle i, no occlusion. It should not happen to SDF
             
             # Compute occlusion interval
             angle_to_j = np.arctan2(vec_ij[1], vec_ij[0])
@@ -169,7 +200,7 @@ def normalize_angle(angle):
     return angle
 
 
-def subtract_intervals(intervals, occluded):
+def subtract_intervals(intervals, occluded, tol=1e-8):
     """
     Subtract occluded interval from list of visible intervals.
     Handles wrap-around at 0/2π.
@@ -192,12 +223,12 @@ def subtract_intervals(intervals, occluded):
                 new_intervals.append((start_vis, end_vis))
             elif start_vis < end_occ and end_vis <= start_occ:
                 # Starts in occluded, ends in visible
-                if end_vis > end_occ:
-                    new_intervals.append((end_occ, end_vis))
+                if end_vis + tol > end_occ:
+                    new_intervals.append((min(end_occ, end_vis), end_vis))
             elif start_vis >= end_occ and end_vis > start_occ:
                 # Starts in visible, ends in occluded
-                if start_vis < start_occ:
-                    new_intervals.append((start_vis, start_occ))
+                if start_vis - tol < start_occ:
+                    new_intervals.append((start_vis, max(start_vis, start_occ)))
             else:
                 # Completely occluded or split
                 if start_vis < end_occ and end_vis > start_occ:
@@ -209,16 +240,28 @@ def subtract_intervals(intervals, occluded):
             if end_vis <= start_occ or start_vis >= end_occ:
                 # No overlap
                 new_intervals.append((start_vis, end_vis))
-            elif start_vis < start_occ and end_vis > end_occ:
+            elif start_vis - tol < start_occ and end_vis + tol > end_occ:
                 # Visible interval contains occluded - split into two
-                new_intervals.append((start_vis, start_occ))
-                new_intervals.append((end_occ, end_vis))
-            elif start_vis < start_occ and end_vis > start_occ:
+                if start_vis < start_occ:
+                    new_intervals.append((start_vis, start_occ))
+                else:
+                    new_intervals.append((start_vis, start_vis))  # Degenerate interval
+                if end_vis > end_occ:
+                    new_intervals.append((end_occ, end_vis))
+                else:
+                    new_intervals.append((end_vis, end_vis))  # Degenerate interval
+            elif start_vis - tol < start_occ < end_vis:
                 # Partial overlap on right
-                new_intervals.append((start_vis, start_occ))
-            elif start_vis < end_occ and end_vis > end_occ:
+                if start_vis < start_occ:
+                    new_intervals.append((start_vis, start_occ))
+                else:
+                    new_intervals.append((start_vis, start_vis))  # Degenerate interval
+            elif start_vis < end_occ < end_vis + tol:
                 # Partial overlap on left
-                new_intervals.append((end_occ, end_vis))
+                if end_vis > end_occ:
+                    new_intervals.append((end_occ, end_vis))
+                else:
+                    new_intervals.append((end_vis, end_vis))  # Degenerate interval
             # else: completely occluded, don't add
     
     return new_intervals

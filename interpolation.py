@@ -1080,16 +1080,16 @@ def rate_gradient_estimation(sdf_points, points_on_surface, sdf_values, tol=1e-3
     wrong_count = np.sum(inside, axis=1)
     # wrong_count = np.zeros(sdf_points.shape[0], dtype=int)
 
-    # Compute the Laplacian of sdf_values at sdf_points
-    from sklearn.neighbors import NearestNeighbors
-    nbrs = NearestNeighbors(n_neighbors=8, algorithm='auto').fit(sdf_points)
-    distances, indices = nbrs.kneighbors(sdf_points)
-    laplacian = np.zeros(sdf_points.shape[0])
-    for i in range(sdf_points.shape[0]):
-        neighbor_sdf = sdf_values[indices[i]]
-        laplacian[i] = np.sum(neighbor_sdf) - 8 * sdf_values[i]
-    # Penalize points with negative Laplacian (indicating incorrect gradient direction)
-    wrong_count += (laplacian < 0).astype(int)*2
+    # # Compute the Laplacian of sdf_values at sdf_points
+    # from sklearn.neighbors import NearestNeighbors
+    # nbrs = NearestNeighbors(n_neighbors=8, algorithm='auto').fit(sdf_points)
+    # distances, indices = nbrs.kneighbors(sdf_points)
+    # laplacian = np.zeros(sdf_points.shape[0])
+    # for i in range(sdf_points.shape[0]):
+    #     neighbor_sdf = sdf_values[indices[i]]
+    #     laplacian[i] = np.sum(neighbor_sdf) - 8 * sdf_values[i]
+    # # Penalize points with negative Laplacian (indicating incorrect gradient direction)
+    # wrong_count += (laplacian < 0).astype(int)*2
     
     return wrong_count
 
@@ -1197,7 +1197,7 @@ def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors=No
         
         # Show neighbors colored by weight
         neighbor_pts = sdf_points[indices_i]
-        cmap = plt.cm.RdYlGn
+        cmap = plt.cm.RdYlGn_r
         colors = cmap(weights_i)
         highlighted['neighbors'] = ax.scatter(neighbor_pts[:, 0], neighbor_pts[:, 1],
                                               c=colors, s=50, zorder=14, edgecolors='white', linewidths=1)
@@ -1226,6 +1226,8 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
 
     visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
     radii = np.abs(sdf_values)
+    degenerate_arcs = va.get_short_arcs(visible_arcs)
+
     if neighbor_estimation == NeighborEstimation.VISIBLE_CONNECTIVITY:
         neighbors = va.find_arcs_neighbors(sdf_points, radii, visible_arcs, 1e-3)
     elif neighbor_estimation == NeighborEstimation.SPATIAL:
@@ -1234,16 +1236,16 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         distances, neighbors = nbrs.kneighbors(sdf_points)
         neighbors = [list(neighbors[i]) for i in range(sdf_points.shape[0])]
     if on_gradient_neighbors:
-        neighbors2 = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-5)
-        for k, v in neighbors2.items():
+        colinear_neighbors = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-5)
+        for k, v in colinear_neighbors.items():
             neighbors[k] = v
-        ids = set() # To plot the points in neighbors2 with different color, we need to collect their indices
-        for k, v in neighbors2.items():
+        ids = set() # To plot the points in colinear_neighbors with different color, we need to collect their indices
+        for k, v in colinear_neighbors.items():
             ids.add(k)
             for idx in v:
                 ids.add(idx)
         ids = list(ids)
-        print(len(neighbors2))
+        print(len(colinear_neighbors))
     if gradient_estimation == GradientEstimation.IRLS:
         gradients, grad_errors = estimate_gradient_irls(sdf_points, sdf_values, neighbors)
     elif gradient_estimation == GradientEstimation.RANSAC:
@@ -1254,12 +1256,19 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     elif gradient_estimation == GradientEstimation.LSTSQ:
         gradients, grad_errors = estimate_gradient_lstsq(sdf_points, sdf_values, neighbors)
 
+    for i, angle in degenerate_arcs.items():
+        # For points with degenerate arcs, set gradient directly toward the angle
+        gradients[i] = np.array([-np.cos(angle), -np.sin(angle)])
+        print(f"Point {i} has degenerate arc with angle {angle:.2f} radians. Setting gradient to {gradients[i]}.")
+        if 'grad_errors' in dir():
+            grad_errors[i] = 0.0  # Set error to 0 for these points since we are overriding the gradient
+
     print("Estimated gradients shape:", gradients.shape)
     points_on_surface = yongs_algorithm(sdf_points, sdf_values, gradients)
     # points_on_surface, gradients = yongs_algorithm2(sdf_points, sdf_values, points)
     wrong_count = rate_gradient_estimation(sdf_points, points_on_surface, sdf_values, tol=1e-3)
     mask = wrong_count <= 0
-    mask = wrong_count >= 0
+    # mask = wrong_count >= 0
     good_sdf_points = sdf_points[mask]
     points_on_surface_wrong = points_on_surface[~mask]
     good_points_on_surface = points_on_surface[mask]
@@ -1292,14 +1301,17 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     plt.scatter(sdf_points[:, 0], sdf_points[:, 1], c='r', s=3, label='Original Grid Points')
     plt.scatter(good_points_on_surface[:, 0], good_points_on_surface[:, 1], c='yellow', s=10, label='Projected Surface Points')
     if on_gradient_neighbors:
-        # show all points in neighbors2 with white color
+        # show all points in colinear_neighbors with white color
         plt.scatter(sdf_points[ids, 0], sdf_points[ids, 1], c='white', s=10, label='on-gradient Points')
     # Add error labels on each point if available
     if 'grad_errors' in dir():
         grad_errors *= 1e4  # Scale error for better visualization
         cmap = plt.cm.coolwarm
-        e_min, e_max = grad_errors.min(), grad_errors.max()
-        norm = plt.Normalize(vmin=e_min, vmax=e_max)
+        # Use quantile-based normalization to handle skewed distributions
+        sorted_errors = np.sort(grad_errors)
+        vmin = sorted_errors[int(len(sorted_errors) * 0.05)]  # 5th percentile
+        vmax = sorted_errors[int(len(sorted_errors) * 0.95)]  # 95th percentile
+        norm = plt.Normalize(vmin=vmin, vmax=vmax)
         for i in range(len(sdf_points)):
             color = cmap(norm(grad_errors[i]))
             ax.annotate(f'{grad_errors[i]:.2f}', (sdf_points[i, 0], sdf_points[i, 1]),
@@ -1311,8 +1323,8 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
 
     plot_correspondence(good_sdf_points, good_points_on_surface, plt)
     # connect original points to projected points
-    if on_gradient_neighbors:
-        plot_correspondence(sdf_points[ids], points_on_surface[ids], plt, color='w')
+    # if on_gradient_neighbors:
+    #     plot_correspondence(sdf_points[ids], points_on_surface[ids], plt, color='w')
     ax.set_aspect('equal')
     ax.set_xlim(-0.01, 1.01)
     ax.set_ylim(-0.01, 1.01)
@@ -1327,6 +1339,24 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
 def test_visible_neighbors(n=4, show_all=False):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
+
+    # Find degenerate arcs: only one arc with angular length < 1e-8
+    degenerate_indices = []
+    for i, arcs in enumerate(visible_arcs):
+        if len(arcs) == 1:
+            s, e = arcs[0]
+            arc_len = (e - s)
+            if arc_len <= 1e-8:
+                degenerate_indices.append(i)
+    if degenerate_indices:
+        print(f"\n⚠️  {len(degenerate_indices)} degenerate arc points (1 arc, length < 1e-8):")
+        for i in degenerate_indices:
+            s, e = visible_arcs[i][0]
+            print(f"  Point {i}: pos=({sdf_points[i,0]:.4f}, {sdf_points[i,1]:.4f}), "
+                  f"sdf={sdf_values[i]:.4f}, arc=({s:.6f}, {e:.6f})")
+    else:
+        print("\n✅ No degenerate arc points found.")
+
     fig, ax = va.visualize_visible_arcs(sdf_points, sdf_values, visible_arcs, points)
     radii = np.abs(sdf_values)
     neighbors = va.find_arcs_neighbors(sdf_points, radii, visible_arcs, tol=1e-3)
@@ -1364,6 +1394,7 @@ def test_visible_neighbors(n=4, show_all=False):
         total_connections = sum(len(n) for n in neighbors)
         points_with_neighbors = sum(1 for n in neighbors if len(n) > 0)
         print(f"Points with neighbors: {points_with_neighbors}/{len(sdf_points)}")
+        print(f"Points with arcs: {sum(1 for arcs in visible_arcs if len(arcs) > 0)}/{len(sdf_points)}")
         print(f"Total neighbor connections: {total_connections}")
         print(f"Average neighbors per point: {total_connections / len(sdf_points):.2f}")
         
@@ -1375,39 +1406,9 @@ def test_visible_neighbors(n=4, show_all=False):
     highlighted = {'lines': [], 'scatter': [], 'neighbor_scatter': []}
     selected_points = set()  # Track selected point indices
     
-    def on_click(event):
-        # Only respond to clicks inside the axes
-        if event.inaxes != ax:
-            return
-        
-        # Right click to clear all
-        if event.button == 3:  # Right mouse button
-            for line in highlighted['lines']:
-                line.remove()
-            highlighted['lines'] = []
-            for scatter in highlighted['scatter']:
-                scatter.remove()
-            highlighted['scatter'] = []
-            for scatter in highlighted['neighbor_scatter']:
-                scatter.remove()
-            highlighted['neighbor_scatter'] = []
-            selected_points.clear()
-            ax.set_title('All cleared! Left-click to select points, right-click to clear')
-            ax.legend().remove() if ax.get_legend() else None
-            fig.canvas.draw_idle()
-            return
-        
-        # Get click coordinates
-        click_x, click_y = event.xdata, event.ydata
-        click_point = np.array([click_x, click_y])
-        
-        # Find nearest point
-        distances = np.linalg.norm(sdf_points - click_point, axis=1)
-        i = np.argmin(distances)
-        
-        # Skip if already selected
+    def select_point(i):
+        """Programmatically select point i and highlight it."""
         if i in selected_points:
-            print(f"Point {i} already selected")
             return
         
         selected_points.add(i)
@@ -1444,12 +1445,46 @@ def test_visible_neighbors(n=4, show_all=False):
         
         ax.set_title(f'{len(selected_points)} point(s) selected | Left-click: add point | Right-click: clear all')
         ax.legend(loc='upper right', fontsize=8)
+
+    def on_click(event):
+        # Only respond to clicks inside the axes
+        if event.inaxes != ax:
+            return
+        
+        # Right click to clear all
+        if event.button == 3:  # Right mouse button
+            for line in highlighted['lines']:
+                line.remove()
+            highlighted['lines'] = []
+            for scatter in highlighted['scatter']:
+                scatter.remove()
+            highlighted['scatter'] = []
+            for scatter in highlighted['neighbor_scatter']:
+                scatter.remove()
+            highlighted['neighbor_scatter'] = []
+            selected_points.clear()
+            ax.set_title('All cleared! Left-click to select points, right-click to clear')
+            ax.legend().remove() if ax.get_legend() else None
+            fig.canvas.draw_idle()
+            return
+        
+        # Find nearest point
+        click_point = np.array([event.xdata, event.ydata])
+        distances = np.linalg.norm(sdf_points - click_point, axis=1)
+        i = np.argmin(distances)
+        
+        select_point(i)
         fig.canvas.draw_idle()
     
     # Connect the click event
     fig.canvas.mpl_connect('button_press_event', on_click)
     
-    ax.set_title('Click on any point to show its neighbors')
+    # Auto-select degenerate arc points
+    if not show_all:
+        for i in degenerate_indices:
+            select_point(i)
+    
+    ax.set_title(f'{len(degenerate_indices)} degenerate point(s) auto-selected | Click to add more | Right-click to clear')
     plt.show()
 
 def test_subdividing(n=4):
@@ -1643,6 +1678,6 @@ def test_single_gradient(n=4, interpolator=None):
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
-    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.LSTSQ)
+    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.RANSAC)
     # test_single_gradient(30)
     # test_subdividing(30)
