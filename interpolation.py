@@ -1258,7 +1258,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
 
     for i, angle in degenerate_arcs.items():
         # For points with degenerate arcs, set gradient directly toward the angle
-        gradients[i] = np.array([-np.cos(angle), -np.sin(angle)])
+        gradients[i] = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
         print(f"Point {i} has degenerate arc with angle {angle:.2f} radians. Setting gradient to {gradients[i]}.")
         if 'grad_errors' in dir():
             grad_errors[i] = 0.0  # Set error to 0 for these points since we are overriding the gradient
