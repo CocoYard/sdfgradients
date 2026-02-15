@@ -1217,7 +1217,7 @@ def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors=No
     
     fig.canvas.mpl_connect('button_press_event', on_click)
 
-def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True):
+def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     if interpolator is None:
         # Create and fit the interpolator
@@ -1268,15 +1268,12 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     # points_on_surface, gradients = yongs_algorithm2(sdf_points, sdf_values, points)
     wrong_count = rate_gradient_estimation(sdf_points, points_on_surface, sdf_values, tol=1e-3)
     mask = wrong_count <= 0
-    # mask = wrong_count >= 0
+    mask = wrong_count >= 0
     good_sdf_points = sdf_points[mask]
     points_on_surface_wrong = points_on_surface[~mask]
     good_points_on_surface = points_on_surface[mask]
     good_gradients = gradients[mask]
     contour_points = marching_cubes_2D(sdf_points, sdf_values)[0]
-
-    # Vr, Er = gpy.reach_for_the_arcs(sdf_points, sdf_values)
-    # rfta_contour = obj_to_points(Vr, Er)[0]
 
     V, E = gpy.point_cloud_to_mesh( good_points_on_surface, good_gradients,
     method='PSR',
@@ -1320,6 +1317,19 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     plt.plot(points[:, 0], points[:, 1], 'b-', linewidth=2, label='Original Shape')
     plt.plot(contour_points[:, 0], contour_points[:, 1], 'k', linewidth=2, label='MC Contour')
     plt.plot(poisson_contour[:, 0], poisson_contour[:, 1], 'm', linewidth=2, label='PSR Contour')
+
+    if see_arcs:
+        Vr, Er = gpy.reach_for_the_arcs(sdf_points, sdf_values, fine_tune_iters=100, batch_size=1e3)
+        rfta_contour = obj_to_points(Vr, Er)[0]
+        plt.plot(rfta_contour[:, 0], rfta_contour[:, 1], 'r', linewidth=2, label='RFTA Contour')
+        # visualize visible arcs just like in test_visible_neighbors
+        for i in range(len(visible_arcs)):
+            # draw arc as a circle for simplicity
+            center = sdf_points[i]
+            radius = np.abs(sdf_values[i])
+            color = 'magenta' if sdf_values[i] < 0 else 'cyan'
+            circle = plt.Circle(center, radius, color=color, fill=True, alpha=1, linewidth=1)
+            ax.add_patch(circle)
 
     plot_correspondence(good_sdf_points, good_points_on_surface, plt)
     # connect original points to projected points
@@ -1678,6 +1688,6 @@ def test_single_gradient(n=4, interpolator=None):
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
-    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.RANSAC)
+    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.RANSAC, see_arcs=True)
     # test_single_gradient(30)
     # test_subdividing(30)
