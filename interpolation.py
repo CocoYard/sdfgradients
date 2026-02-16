@@ -541,7 +541,7 @@ def estimate_gradient_RANSAC(points, sdf_values, neighbors=None):
 
 import itertools
 
-def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None):
+def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None, verbose=False):
     """
     Brute-force all pairs of neighbors to find the gradient that minimizes 
     the Median Squared Residual (LMS). 
@@ -586,14 +586,17 @@ def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None):
     best_loss = float('inf')
     best_gradient = np.zeros(dim)
     best_subset_idx = [] # To store the indices of the "winning" pair
-    
+    if verbose:
+        print(f"Point {ind}: Evaluating {n_neighbors} neighbors\n")
     # 2. Iterate through all combinations of 'dim' neighbors (Pairs in 2D)
     # subset_idx contains the local indices (0 to n_neighbors-1) of the chosen pair
     for subset_idx in itertools.combinations(range(n_neighbors), dim):
         # Extract the subset of points
         A_sub = A_local[list(subset_idx)]
         b_sub = b_local[list(subset_idx)]
-        
+        if verbose:
+            print(f"  A_sub: \n{A_sub}\n  b_sub: {b_sub}")
+
         if dim == 2:
             # Check for collinearity (determinant close to zero)
             det = A_sub[0,0]*A_sub[1,1] - A_sub[0,1]*A_sub[1,0]
@@ -613,23 +616,30 @@ def estimate_gradient_exhaustive(points, sdf_values, ind, neighbors=None):
             else:
                 try:
                     cand_grad = np.linalg.solve(A_sub, b_sub)
+                    if verbose:
+                        print(f"    Solved gradient: {cand_grad}")
                 except np.linalg.LinAlgError:
                     continue
         # Check Gradient Validity (SDF property: norm should be approx 1)
         # We allow a loose tolerance to accept imperfect but reasonable gradients
         norm = np.linalg.norm(cand_grad)
         if not (0.5 < norm < 1.5):
+            if verbose:
+                print(f"    Rejected gradient due to norm {norm:.4f} (not in [0.5, 1.5])")
             continue
-                    
+        cand_grad /= norm  # Normalize candidate gradient to unit length for fair comparison
         # 3. Validation: Evaluate this candidate gradient against ALL neighbors
-        preds = A_local @ cand_grad
-        residuals = np.abs(preds - b_local)
+        preds = A_sub @ cand_grad
+        residuals = np.abs(preds - b_sub)
         
         # LMS Metric: Use Median of Residuals to be robust against 50% outliers
-        loss = np.median(residuals)
+        loss = np.mean(residuals)  # Mean of residuals
+        # loss = abs(1 - norm)
 
         # Alternative Metric: Mean of Squared Residuals (L2) for better sensitivity to all neighbors
         # loss = np.mean(residuals**2)
+        if verbose:
+            print(f"Loss: {loss:.4f}, Gradient Norm: {norm:.4f}, Residuals: {residuals}")
 
         if loss < best_loss:
             best_loss = loss
@@ -743,7 +753,7 @@ def estimate_gradient_finite_diff(points, sdf_values):
 
 def estimate_gradient_irls(points, sdf_values, neighbor_list=None, iters=5, sigma=0.05):
     """
-    Estimate gradients using a pre-defined list of irregular neighbors.
+    Estimate gradients using IRLS, calling estimate_gradient_irls_single per point.
     
     Args:
         points: (N, 2) coordinates.
@@ -751,193 +761,24 @@ def estimate_gradient_irls(points, sdf_values, neighbor_list=None, iters=5, sigm
         neighbor_list: List of lists (your irregular indices).
         iters: IRLS iterations.
         sigma: Gaussian falloff parameter.
+    Returns:
+        gradients: (N, 2) unit gradients.
+        errors: (N,) mean absolute residual per point.
     """
     n = points.shape[0]
-    if neighbor_list is None:
-        from sklearn.neighbors import NearestNeighbors
-        nbrs = NearestNeighbors(n_neighbors=9, algorithm='auto').fit(points)
-        distances, indices = nbrs.kneighbors(points)
-        neighbor_list = [list(idx) for idx in indices]
-    # 1. Padding: Find the max number of neighbors
-    # Use 0 as a placeholder index for padding
-    lengths = [len(sublist) for sublist in neighbor_list]
-    k_max = max(lengths) if lengths else 0
-    
-    if k_max == 0:
-        return np.zeros((n, 2))
-
-    # Create a padded index matrix (N, k_max)
-    # Default to 0, we will mask these out later
-    padded_idx = np.zeros((n, k_max), dtype=int)
-    mask = np.zeros((n, k_max), dtype=bool)
-    
-    for i, sublist in enumerate(neighbor_list):
-        if len(sublist) > 0:
-            padded_idx[i, :len(sublist)] = sublist
-            mask[i, :len(sublist)] = True
-            
-    # 2. Extract neighbor data using the padded indices
-    # pts_neighbors: (N, k_max, 2)
-    pts_neighbors = points[padded_idx]
-    # sdf_neighbors: (N, k_max)
-    sdf_neighbors = sdf_values[padded_idx]
-    
-    # 3. System Matrix [x, y, 1]
-    A = np.concatenate([pts_neighbors, np.ones((n, k_max, 1))], axis=2)
-    
-    # Initialize weights: 1.0 for real neighbors, 0.0 for padded ones
-    weights = np.zeros((n, k_max))
-    weights[mask] = 1.0
-    
-    best_grads = np.zeros((n, 2))
+    dim = points.shape[1]
+    gradients = np.zeros((n, dim))
     errors = np.zeros(n)
-    for _ in range(iters):
-        # Apply weights
-        w_sqrt = np.sqrt(weights)[:, :, None]
-        WA = A * w_sqrt
-        Wb = (sdf_neighbors * w_sqrt[:, :, 0])[:, :, None]
-        
-        # Normal Equations
-        ATWA = np.einsum('nki,nkj->nij', WA, WA)
-        ATWb = np.einsum('nki,nkj->nij', WA, Wb)
-        
-        # To avoid singular matrices for points with 0 or 1 neighbors, 
-        # add a small identity ridge to ATWA
-        ridge = np.eye(3) * 1e-6
-        ATWA += ridge[None, :, :]
-        
-        try:
-            models = np.linalg.solve(ATWA, ATWb).squeeze(-1)
-            grads = models[:, :2]
-            biases = models[:, 2]
-            
-            # 4. Update Weights
-            preds = np.einsum('nkj,nj->nk', pts_neighbors, grads) + biases[:, None]
-            residuals = np.abs(preds - sdf_neighbors)
-            
-            # Only update weights for 'True' neighbors in the mask
-            new_weights = np.exp(-(residuals**2) / (2 * (sigma**2)))
-            weights = np.where(mask, new_weights, 0.0)
-            
-            best_grads = grads
-            
-            errors = np.mean(residuals, axis=1)
-        except np.linalg.LinAlgError:
-            continue
-
-    # Final Unit Normalization
-    mags = np.linalg.norm(best_grads, axis=1, keepdims=True)
-    mags = np.where(mags < 1e-8, 1.0, mags)
-    return best_grads / mags, errors
-
-# def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters=50, sigma=0.05):
-#     """ estimation of gradients from SDF values at a given point using IRLS. Only for a single point at index ind."""
-#     point = points[ind]
-#     if neighbors is None:
-#         from sklearn.neighbors import NearestNeighbors
-#         nbrs = NearestNeighbors(n_neighbors=9, algorithm='auto').fit(points)
-#         distance, indices = nbrs.kneighbors(point.reshape(1, -1))
-#     else:
-#         indices = neighbors
-#     gradient = np.zeros_like(point)
-#     neighbor_points = points[indices[0]]
-#     neighbor_sdf = sdf_values[indices[0]]
-#     diffs = np.c_[neighbor_points - point, np.ones(neighbor_points.shape[0])]
-#     sdf_diffs = neighbor_sdf - sdf_values[ind]
-#     A = diffs
-#     b = sdf_diffs
-#     print(diffs.shape, sdf_diffs.shape)
-#     gradient = np.linalg.lstsq(A, b, rcond=None)[0]
-#     for _ in range(iters):
-#         preds = diffs @ gradient
-#         residuals = np.abs(preds - sdf_diffs)
-#         # print("residuals:", np.sum(residuals**2))
-#         weights = np.exp(-(residuals**2) / (2 * (sigma**2)))
-#         W = np.diag(weights)
-#         # Weighted least squares
-#         Aw = W @ A
-#         bw = W @ b
-#         gradient, residual, rank, s = np.linalg.lstsq(Aw, bw, rcond=None)
-#         print("residual:", residual)
-#     # gradient = _single_point_ransac_2d(neighbor_points, neighbor_sdf, 0.02)
-#     # Normalize gradients
-#     gradient = gradient[:2]
-#     norm = np.linalg.norm(gradient)
-#     gradient /= max(norm, 1e-8)
-#     return gradient, weights, indices
-import numpy as np
-from scipy.optimize import linprog
-from sklearn.neighbors import NearestNeighbors
-
-def compute_weights_from_residuals(residuals, sigma=0.05):
-    """
-    Helper: Compute Gaussian weights from residuals.
-    Points perfectly fitting the gradient get weight 1.0.
-    """
-    return np.exp(-(residuals**2) / (2 * (sigma**2)))
-def estimate_gradient_l1_direct(points, sdf_values, ind, neighbors=None, sigma=0.05):
-    """
-    Directly solve L1 minimization: min sum(|Ax - b|) using Linear Programming.
-    Returns optimal gradient, inferred weights, and indices.
-    """
-    # 1. Setup Data
-    point = points[ind]
-    point_sdf = sdf_values[ind]
-
-    if neighbors is None:
-        nbrs = NearestNeighbors(n_neighbors=40, algorithm='auto').fit(points)
-        _, indices = nbrs.kneighbors(point.reshape(1, -1))
-        indices = indices[0]
-    else:
-        indices = np.array(neighbors).flatten()
-    
-    # Local system: A * grad = b
-    # Enforces passing through the center point (0,0) in local space
-    A_local = points[indices] - point
-    b_local = sdf_values[indices] - point_sdf
-    
-    n_neighbors, dim = A_local.shape
-    
-    # 2. Setup Linear Programming for L1 Minimization
-    # Objective: min sum(u_i)
-    # Variables z = [g_x, g_y, u_1, ..., u_n] (Size: dim + n_neighbors)
-    # Constraints: -u_i <= A_i*g - b_i <= u_i
-    
-    # Objective function vector c: [0, 0, 1, 1, ..., 1]
-    c = np.concatenate([np.zeros(dim), np.ones(n_neighbors)])
-    
-    # Inequality Matrix A_ub * z <= b_ub
-    eye = np.eye(n_neighbors)
-    # Constraint 1:  A*g - u <= b  -> [ A, -I] * z <= b
-    top_A = np.hstack([A_local, -eye])
-    # Constraint 2: -A*g - u <= -b -> [-A, -I] * z <= -b
-    bot_A = np.hstack([-A_local, -eye])
-    
-    A_ub = np.vstack([top_A, bot_A])
-    b_ub = np.concatenate([b_local, -b_local])
-    
-    # Solve (Unbounded gradient, Positive slack variables u)
-    bounds = [(None, None)] * dim + [(0, None)] * n_neighbors
-    
-    # Using 'highs' method which is fast and robust
-    res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
-    
-    if res.success:
-        gradient = res.x[:dim]
-    else:
-        # Fallback to simple Least Squares if LP fails
-        gradient, _, _, _ = np.linalg.lstsq(A_local, b_local, rcond=None)
-
-    # 3. Post-processing: Calculate Weights based on the optimal gradient
-    preds = A_local @ gradient
-    residuals = np.abs(preds - b_local)
-    weights = compute_weights_from_residuals(residuals, sigma)
-    
-    # Normalize Gradient
-    norm = np.linalg.norm(gradient)
-    gradient = gradient / max(norm, 1e-8)
-    
-    return gradient, weights, indices
+    for i in range(n):
+        nbr = neighbor_list[i] if neighbor_list is not None else None
+        grad_i, weights_i, indices_i = estimate_gradient_irls_single(
+            points, sdf_values, i, neighbors=nbr, iters=iters, sigma=sigma)
+        gradients[i] = grad_i
+        # Compute error as mean absolute residual
+        A = points[indices_i] - points[i]
+        b = sdf_values[indices_i] - sdf_values[i]
+        errors[i] = np.mean(np.abs(A @ grad_i - b))
+    return gradients, errors
 
 def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters=10, sigma=0.05):
     """
@@ -1061,6 +902,80 @@ def _single_point_ransac_2d(pts, sdfs, threshold, max_iters=100):
     print("Best grad bias:", min_gradient_bias)
     return best_grad
 
+import numpy as np
+from scipy.optimize import linprog
+from sklearn.neighbors import NearestNeighbors
+
+def compute_weights_from_residuals(residuals, sigma=0.05):
+    """
+    Helper: Compute Gaussian weights from residuals.
+    Points perfectly fitting the gradient get weight 1.0.
+    """
+    return np.exp(-(residuals**2) / (2 * (sigma**2)))
+def estimate_gradient_l1_direct(points, sdf_values, ind, neighbors=None, sigma=0.05):
+    """
+    Directly solve L1 minimization: min sum(|Ax - b|) using Linear Programming.
+    Returns optimal gradient, inferred weights, and indices.
+    """
+    # 1. Setup Data
+    point = points[ind]
+    point_sdf = sdf_values[ind]
+
+    if neighbors is None:
+        nbrs = NearestNeighbors(n_neighbors=40, algorithm='auto').fit(points)
+        _, indices = nbrs.kneighbors(point.reshape(1, -1))
+        indices = indices[0]
+    else:
+        indices = np.array(neighbors).flatten()
+    
+    # Local system: A * grad = b
+    # Enforces passing through the center point (0,0) in local space
+    A_local = points[indices] - point
+    b_local = sdf_values[indices] - point_sdf
+    
+    n_neighbors, dim = A_local.shape
+    
+    # 2. Setup Linear Programming for L1 Minimization
+    # Objective: min sum(u_i)
+    # Variables z = [g_x, g_y, u_1, ..., u_n] (Size: dim + n_neighbors)
+    # Constraints: -u_i <= A_i*g - b_i <= u_i
+    
+    # Objective function vector c: [0, 0, 1, 1, ..., 1]
+    c = np.concatenate([np.zeros(dim), np.ones(n_neighbors)])
+    
+    # Inequality Matrix A_ub * z <= b_ub
+    eye = np.eye(n_neighbors)
+    # Constraint 1:  A*g - u <= b  -> [ A, -I] * z <= b
+    top_A = np.hstack([A_local, -eye])
+    # Constraint 2: -A*g - u <= -b -> [-A, -I] * z <= -b
+    bot_A = np.hstack([-A_local, -eye])
+    
+    A_ub = np.vstack([top_A, bot_A])
+    b_ub = np.concatenate([b_local, -b_local])
+    
+    # Solve (Unbounded gradient, Positive slack variables u)
+    bounds = [(None, None)] * dim + [(0, None)] * n_neighbors
+    
+    # Using 'highs' method which is fast and robust
+    res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
+    
+    if res.success:
+        gradient = res.x[:dim]
+    else:
+        # Fallback to simple Least Squares if LP fails
+        gradient, _, _, _ = np.linalg.lstsq(A_local, b_local, rcond=None)
+
+    # 3. Post-processing: Calculate Weights based on the optimal gradient
+    preds = A_local @ gradient
+    residuals = np.abs(preds - b_local)
+    weights = compute_weights_from_residuals(residuals, sigma)
+    
+    # Normalize Gradient
+    norm = np.linalg.norm(gradient)
+    gradient = gradient / max(norm, 1e-8)
+    
+    return gradient, weights, indices
+
 def rate_gradient_estimation(sdf_points, points_on_surface, sdf_values, tol=1e-3):
     """ rate the gradient estimation by testing projected points enclosed by other points' circles."""
     # Vectorized version: compute all pairwise distances at once
@@ -1138,10 +1053,11 @@ def plot_correspondence(sdf_points, points_on_surface, plt, color='k'):
         plt.plot([sdf_points[i, 0], points_on_surface[i, 0]], 
                  [sdf_points[i, 1], points_on_surface[i, 1]], color+'--', linewidth=0.5)
 
-def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors=None):
+def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors=None, gradient_estimation=GradientEstimation.RANSAC):
     """
-    Add interactive click handler to inspect per-point RANSAC gradient estimation.
+    Add interactive click handler to inspect per-point gradient estimation.
     Click any point to show its neighbors, weights, gradient, and projected surface point.
+    Supports RANSAC and IRLS methods.
     
     Parameters:
     -----------
@@ -1150,6 +1066,7 @@ def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors=No
     sdf_points : (N, 2) array
     sdf_values : (N,) array
     neighbors : dict or list, optional — neighbor indices per point
+    gradient_estimation : GradientEstimation — which method to use for per-point inspection
     """
     highlighted = {'point': None, 'surface': None, 'neighbors': None, 'texts': [], 'line': None, 'lines': []}
     
@@ -1176,10 +1093,17 @@ def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors=No
         distances_to_click = np.linalg.norm(sdf_points - click_pt, axis=1)
         idx = np.argmin(distances_to_click)
         
-        # Compute single-point RANSAC to get weights and indices
-        gradient_i, weights_i, indices_i, loss_i = estimate_gradient_exhaustive(
-            sdf_points, sdf_values, idx,
-            neighbors=neighbors[idx] if neighbors is not None else None)
+        # Compute single-point gradient to get weights and indices
+        nbr = neighbors[idx] if neighbors is not None else None
+        if gradient_estimation == GradientEstimation.RANSAC:
+            gradient_i, weights_i, indices_i, loss_i = estimate_gradient_exhaustive(
+                sdf_points, sdf_values, idx, neighbors=nbr, verbose=True)
+        elif gradient_estimation == GradientEstimation.IRLS:
+            gradient_i, weights_i, indices_i = estimate_gradient_irls_single(
+                sdf_points, sdf_values, idx, neighbors=nbr)
+            loss_i = np.mean(np.abs((sdf_points[indices_i] - sdf_points[idx]) @ gradient_i - (sdf_values[indices_i] - sdf_values[idx])))
+        else:
+            return
         point_on_surface = sdf_points[idx] - sdf_values[idx] * gradient_i
         
         # Highlight selected point
@@ -1212,7 +1136,7 @@ def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors=No
                           color=colors[k], linewidth=1.5, alpha=0.6, zorder=12)
             highlighted['lines'].append(ln)
         
-        ax.set_title(f'Point {idx}: SDF={sdf_values[idx]:.4f}  grad={gradient_i}  loss={loss_i:.4f}')
+        ax.set_title(f'Point {idx}: SDF={sdf_values[idx]:.4f}  grad={gradient_i}  loss={loss_i*1e4:.4f}')
         fig.canvas.draw_idle()
     
     fig.canvas.mpl_connect('button_press_event', on_click)
@@ -1226,7 +1150,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
 
     visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
     radii = np.abs(sdf_values)
-    degenerate_arcs = va.get_short_arcs(visible_arcs)
+    degenerate_arcs = va.get_short_arcs(visible_arcs, tol=1e-8)
 
     if neighbor_estimation == NeighborEstimation.VISIBLE_CONNECTIVITY:
         neighbors = va.find_arcs_neighbors(sdf_points, radii, visible_arcs, 1e-3)
@@ -1327,7 +1251,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             # draw arc as a circle for simplicity
             center = sdf_points[i]
             radius = np.abs(sdf_values[i])
-            color = 'magenta' if sdf_values[i] < 0 else 'cyan'
+            color = '#FF6B9D' if sdf_values[i] < 0 else "#4ECDC5"
             circle = plt.Circle(center, radius, color=color, fill=True, alpha=1, linewidth=1)
             ax.add_patch(circle)
 
@@ -1340,9 +1264,9 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     ax.set_ylim(-0.01, 1.01)
     plt.title('Gradient Estimation and Surface Point Projection' + ' (' + str(n) + '^2 points ' + neighbor_estimation.value + ' + ' + gradient_estimation.value + ')')
     # plt.legend(loc='upper right')
-    # Interactive click: show neighbors and weights for RANSAC
-    if gradient_estimation == GradientEstimation.RANSAC:
-        setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors)
+    # Interactive click: show neighbors and weights
+    if gradient_estimation in (GradientEstimation.RANSAC, GradientEstimation.IRLS):
+        setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, neighbors, gradient_estimation)
     
     plt.show()
 
@@ -1688,6 +1612,6 @@ def test_single_gradient(n=4, interpolator=None):
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
-    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.RANSAC, see_arcs=True)
+    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.RANSAC, see_arcs=False)
     # test_single_gradient(30)
     # test_subdividing(30)
