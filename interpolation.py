@@ -123,6 +123,7 @@ class Interpolator:
         self.alpha = None
         self.p = None
         self.q = None
+        self.kernel_type = kernel
         if kernel == 'thin_plate':
             self.kernel = lambda r: r**2 * np.log(r + 1e-10)  # Adding a small value to avoid log(0)
         else:
@@ -168,8 +169,8 @@ class Interpolator:
         K[n_samples:, :n_samples] = P.T
         y = np.zeros(n_samples + m_dimensions + 1)
         y[:n_samples] = values
-        # Solve for coefficients
-        coefficients = np.linalg.solve(K, y)
+        # Solve for coefficients (use lstsq to handle near-singular matrices)
+        coefficients, _, _, _ = np.linalg.lstsq(K, y, rcond=None)
         return coefficients[:n_samples], coefficients[n_samples:-1], coefficients[-1]
 
     def predict(self, x_new):
@@ -209,13 +210,31 @@ class Interpolator:
             dist = np.linalg.norm(diff, axis=1, keepdims=True)  # Shape (m_samples, 1)
             # Avoid division by zero
             dist[dist == 0] = 1e-10
-            if self.kernel == 'thin_plate':
+            if self.kernel_type == 'thin_plate':
                 coeff = self.alpha[i] * (2 * np.log(dist) + 1) * diff  # Derivative of thin-plate spline kernel
             else:
                 coeff = self.alpha[i] * 3 * dist * diff  # Derivative of cubic kernel
             gradients += coeff
         gradients += self.p  # Add polynomial term gradient
         return gradients
+    
+    def sample_best_gradient(self, x_new, sdf, num_samples=10):
+        """
+        Sample a series of gradients around the input point x_new and project the x_new to the surface along that gradient.
+        Predict the SDF values and return the gradient that has the smallest absolute predicted value.
+        
+        :param self: Description
+        :param x_new: Description
+        :param sdf: Description
+        :param num_samples: Description
+        """
+        # divide the unit circle into num_samples directions uniformly in 2D
+        angles = np.linspace(0, 2 * np.pi, num_samples, endpoint=False)
+        directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+        samples = x_new - sdf * directions
+        predictions = self.predict(samples)
+        best_idx = np.argmin(np.abs(predictions))
+        return directions[best_idx]
     
 # Example usage:
 def test_circle():
@@ -1609,9 +1628,236 @@ def test_single_gradient(n=4, interpolator=None):
     ax.set_title('Click on any point to analyze its gradient')
     plt.show()
 
+def test_interpolation_gradients(n=4, use_sample_gradient=False):
+    points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
+    # Create and fit the interpolator using ALL points
+    interpolator = Interpolator(kernel='cubic')
+    interpolator.fit(sdf_points, sdf_values)
+    
+    # visualize the interpolated SDF and gradients
+    grid_x, grid_y = np.mgrid[0:1:100j, 0:1:100j]
+    grid_points = np.vstack([grid_x.ravel(), grid_y.ravel()]).T
+    grid_values = interpolator.predict(grid_points).reshape(100, 100)
+
+    fig, ax = plt.subplots(figsize=(8, 7))
+    im = ax.imshow(grid_values.T, extent=(0, 1, 0, 1), origin='lower', cmap='viridis')
+    plt.colorbar(im, ax=ax, label='Interpolated SDF Values')
+    ax.contour(grid_x, grid_y, grid_values, levels=10, colors='yellow', linewidths=0.5, alpha=0.5)
+    ax.scatter(sdf_points[:, 0], sdf_points[:, 1], c='r', s=3, label='Original Grid Points')
+    ax.plot(points[:, 0], points[:, 1], 'b-', linewidth=2, label='Original Shape')
+    ax.set_aspect('equal')
+    ax.set_title('Drag a rectangle to select points for interpolation+gradient')
+
+    # State for rectangle selection and drawn elements
+    # mode: 'select' = drag rectangle, 'click' = click to inspect gradient
+    state = {'press': None, 'rect': None, 'artists': [], 'click_artists': [],
+             'local_interp': None, 'sel_idx': None, 'mode': 'select'}
+
+    def clear_artists():
+        for a in state['artists']:
+            a.remove()
+        state['artists'] = []
+
+    def clear_click_artists():
+        for a in state['click_artists']:
+            a.remove()
+        state['click_artists'] = []
+
+    def on_press(event):
+        if event.inaxes != ax:
+            return
+        # Right click: reset to selection mode
+        if event.button == 3:
+            clear_artists()
+            clear_click_artists()
+            if state['rect'] is not None:
+                state['rect'].remove()
+                state['rect'] = None
+            state['local_interp'] = None
+            state['sel_idx'] = None
+            state['mode'] = 'select'
+            ax.set_title('Drag a rectangle to select points for interpolation+gradient')
+            fig.canvas.draw_idle()
+            return
+        if event.button != 1:
+            return
+        # In click mode: handle point click
+        if state['mode'] == 'click':
+            handle_click(event)
+            return
+        # In select mode: start rectangle drag
+        state['press'] = (event.xdata, event.ydata)
+        if state['rect'] is not None:
+            state['rect'].remove()
+            state['rect'] = None
+
+    def handle_click(event):
+        """Click a point to compute sample_best_gradient and show projection."""
+        click_pt = np.array([event.xdata, event.ydata])
+        distances_to_click = np.linalg.norm(sdf_points - click_pt, axis=1)
+        idx = np.argmin(distances_to_click)
+
+        local_interp = state['local_interp']
+        pt = sdf_points[idx]
+        sdf_val = sdf_values[idx]
+
+        # Call sample_best_gradient
+        best_grad = local_interp.sample_best_gradient(pt, sdf_val, num_samples=36)
+        surface_pt = pt - sdf_val * best_grad
+
+        # Also get the predict_gradient result for comparison
+        pred_grad = local_interp.predict_gradient(pt.reshape(1, -1))[0]
+        pred_grad /= np.linalg.norm(pred_grad) + 1e-8
+        pred_surface = pt - sdf_val * pred_grad
+
+        # Clear previous click highlights
+        clear_click_artists()
+
+        # Highlight the clicked point
+        s = ax.scatter([pt[0]], [pt[1]], c='cyan', s=150, zorder=20, marker='*',
+                       edgecolors='white', linewidths=2)
+        state['click_artists'].append(s)
+
+        # Draw sample_best_gradient result (yellow)
+        s2 = ax.scatter([surface_pt[0]], [surface_pt[1]], c='yellow', s=80, zorder=19,
+                        marker='o', edgecolors='white', linewidths=2, label='sample_best')
+        state['click_artists'].append(s2)
+        ln, = ax.plot([pt[0], surface_pt[0]], [pt[1], surface_pt[1]],
+                      'y-', linewidth=2, zorder=18)
+        state['click_artists'].append(ln)
+
+        # Draw predict_gradient result (magenta) for comparison
+        s3 = ax.scatter([pred_surface[0]], [pred_surface[1]], c='magenta', s=60, zorder=19,
+                        marker='D', edgecolors='white', linewidths=1.5, label='predict_grad')
+        state['click_artists'].append(s3)
+        ln2, = ax.plot([pt[0], pred_surface[0]], [pt[1], pred_surface[1]],
+                       'm--', linewidth=1.5, zorder=18)
+        state['click_artists'].append(ln2)
+
+        # Draw the sampled directions as thin lines
+        angles = np.linspace(0, 2 * np.pi, 36, endpoint=False)
+        directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+        samples = pt - sdf_val * directions
+        preds = local_interp.predict(samples)
+        # Color by |predicted SDF| — smaller = better
+        cmap = plt.cm.RdYlGn_r
+        abs_preds = np.abs(preds)
+        norm = plt.Normalize(vmin=abs_preds.min(), vmax=abs_preds.max())
+        for k in range(len(angles)):
+            color = cmap(norm(abs_preds[k]))
+            dot = ax.scatter([samples[k, 0]], [samples[k, 1]], c=[color], s=15, zorder=17,
+                             edgecolors='gray', linewidths=0.5)
+            state['click_artists'].append(dot)
+
+        pred_at_surface = local_interp.predict(surface_pt.reshape(1, -1))[0]
+        ax.set_title(f'Point {idx}: SDF={sdf_val:.4f} | best_grad={best_grad} | pred@surface={pred_at_surface:.6f}')
+        ax.legend(loc='upper right', fontsize=8)
+        fig.canvas.draw_idle()
+
+    def on_motion(event):
+        if state['press'] is None or event.inaxes != ax or state['mode'] != 'select':
+            return
+        x0, y0 = state['press']
+        x1, y1 = event.xdata, event.ydata
+        if state['rect'] is not None:
+            state['rect'].remove()
+        from matplotlib.patches import Rectangle
+        w, h = x1 - x0, y1 - y0
+        state['rect'] = ax.add_patch(Rectangle((x0, y0), w, h,
+                                                linewidth=2, edgecolor='white',
+                                                facecolor='white', alpha=0.15, linestyle='--'))
+        fig.canvas.draw_idle()
+
+    def on_release(event):
+        if state['press'] is None or event.inaxes != ax or event.button != 1 or state['mode'] != 'select':
+            state['press'] = None
+            return
+        x0, y0 = state['press']
+        x1, y1 = event.xdata, event.ydata
+        state['press'] = None
+
+        # Compute bounding box
+        xmin, xmax = min(x0, x1), max(x0, x1)
+        ymin, ymax = min(y0, y1), max(y0, y1)
+
+        # If too small, treat as click — skip
+        if (xmax - xmin) < 1e-4 or (ymax - ymin) < 1e-4:
+            return
+
+        # Find points inside the rectangle
+        mask = ((sdf_points[:, 0] >= xmin) & (sdf_points[:, 0] <= xmax) &
+                (sdf_points[:, 1] >= ymin) & (sdf_points[:, 1] <= ymax))
+        sel_idx = np.where(mask)[0]
+        if len(sel_idx) < 2:
+            ax.set_title(f'Only {len(sel_idx)} point(s) selected — need at least 2')
+            fig.canvas.draw_idle()
+            return
+
+        # Clear previous results
+        clear_artists()
+        clear_click_artists()
+
+        # Fit interpolator on selected points only
+        sel_points = sdf_points[sel_idx]
+        sel_values = sdf_values[sel_idx]
+        local_interp = Interpolator(kernel='cubic')
+        local_interp.fit(sel_points, sel_values)
+        state['local_interp'] = local_interp
+        state['sel_idx'] = sel_idx
+
+        # Compute gradients and project to surface
+        if use_sample_gradient:
+            sel_gradients = np.array([
+                local_interp.sample_best_gradient(sel_points[i], sel_values[i], num_samples=36)
+                for i in range(len(sel_points))
+            ])
+        else:
+            sel_gradients = local_interp.predict_gradient(sel_points)
+            sel_gradients /= np.linalg.norm(sel_gradients, axis=1, keepdims=True) + 1e-8
+        sel_surface = sel_points - sel_values[:, np.newaxis] * sel_gradients
+
+        # Draw selected points highlighted
+        s1 = ax.scatter(sel_points[:, 0], sel_points[:, 1], c='lime', s=30, zorder=12,
+                        edgecolors='white', linewidths=1, label='Selected Points')
+        state['artists'].append(s1)
+
+        # Draw projected surface points
+        s2 = ax.scatter(sel_surface[:, 0], sel_surface[:, 1], c='cyan', s=20, zorder=11,
+                        label='Projected Surface')
+        state['artists'].append(s2)
+
+        # Draw correspondence lines
+        for i in range(len(sel_idx)):
+            ln, = ax.plot([sel_points[i, 0], sel_surface[i, 0]],
+                          [sel_points[i, 1], sel_surface[i, 1]],
+                          'w--', linewidth=0.8, zorder=10)
+            state['artists'].append(ln)
+
+        # Draw local interpolation contour over the full domain
+        local_grid_x, local_grid_y = np.mgrid[0:1:200j, 0:1:200j]
+        local_grid_pts = np.vstack([local_grid_x.ravel(), local_grid_y.ravel()]).T
+        local_grid_vals = local_interp.predict(local_grid_pts).reshape(200, 200)
+        cs = ax.contour(local_grid_x, local_grid_y, local_grid_vals, levels=[0.0],
+                        colors='red', linewidths=2, zorder=13)
+        # Track the entire ContourSet (works in all matplotlib versions)
+        state['artists'].append(cs)
+
+        # Switch to click mode
+        state['mode'] = 'click'
+        grad_method = 'sample_best' if use_sample_gradient else 'predict_grad'
+        ax.set_title(f'{len(sel_idx)} points selected ({grad_method}) — click to inspect | right-click to reset')
+        ax.legend(loc='upper right', fontsize=8)
+        fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect('button_press_event', on_press)
+    fig.canvas.mpl_connect('motion_notify_event', on_motion)
+    fig.canvas.mpl_connect('button_release_event', on_release)
+    plt.show()
+
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
-    test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.RANSAC, see_arcs=False)
+    # test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.IRLS, see_arcs=False)
     # test_single_gradient(30)
     # test_subdividing(30)
+    test_interpolation_gradients(30, use_sample_gradient=True)
