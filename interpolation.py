@@ -415,9 +415,14 @@ def generate_2D_mesh(n=4, visualize=False, path_to_image='examples/image.png'):
     """
     # read image and generate 2D mesh data from examples/image.png
     from skimage import io, color, measure
+    from skimage.util import img_as_float
+    import warnings
     image = io.imread(path_to_image)
     # image shape = (H, W, 4)
-    gray_image = color.rgb2gray(image[:, :, :3])  # Convert to grayscale
+    image = img_as_float(image[:, :, :3])  # Convert to float [0,1] RGB
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        gray_image = color.rgb2gray(image)  # Convert to grayscale
     # Extract contours at a constant value of 0.5
     contours = measure.find_contours(gray_image, level=0.5)
     # Use the longest contour
@@ -743,7 +748,7 @@ def estimate_gradients_lstsq(points, sdf_values, neighbors=None):
     gradients /= np.maximum(norms, 1e-8)
     return gradients, errors
 
-def estimate_gradient_finite_diff(points, sdf_values):
+def estimate_gradients_finite_diff(points, sdf_values):
     """ estimation of gradients from SDF values at given points. This finite difference 
     uses central difference with Sobel operator (smaller weights on diagonals). The neighbors 
     are the 8-connected grid neighbors. For border points, use forward/backward difference.
@@ -803,7 +808,24 @@ def estimate_gradient_finite_diff(points, sdf_values):
     gradients /= np.maximum(norms, 1e-8)
     return gradients, errors
 
-def estimate_gradient_irls(points, sdf_values, neighbor_list=None, iters=5, sigma=0.05):
+# def estimate_gradients_Duchon_reflect(points, sdf_values, neighbors=None):
+#     # construct a Duchon interpolator with the given points and sdf_values, then sample the gradient at each point
+#     interpolator = Interpolator(kernel='thin_plate')
+#     interpolator.fit(points, sdf_values)
+#     interpolator.sample_best_gradient(points, sdf_values, num_samples=50)
+#     to_train_points = sdf_points
+#     to_train_sdf = sdf_values
+#     for i, angle in degenerate_arcs.items():
+#         # For points with degenerate arcs, set gradient directly toward the angle
+#         grad = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
+#         # Add a new point on the surface along this gradient direction
+#         new_point = sdf_points[i] - sdf_values[i] * grad
+#         to_train_points = np.vstack([to_train_points, new_point])
+#         to_train_sdf = np.append(to_train_sdf, 0)  # The SDF value at the projected point should be 0
+#     print(f"After adding points for degenerate arcs, total points: {len(to_train_points)}")
+#     interpolator.fit(to_train_points, to_train_sdf)
+
+def estimate_gradients_irls(points, sdf_values, neighbor_list=None, interpolator: Interpolator | None = None, iters=10, sigma=0.1):
     """
     Estimate gradients using IRLS, calling estimate_gradient_irls_single per point.
     
@@ -819,20 +841,24 @@ def estimate_gradient_irls(points, sdf_values, neighbor_list=None, iters=5, sigm
     """
     n = points.shape[0]
     dim = points.shape[1]
-    gradients = np.zeros((n, dim))
     errors = np.zeros(n)
-    for i in range(n):
-        nbr = neighbor_list[i] if neighbor_list is not None else None
-        grad_i, weights_i, indices_i = estimate_gradient_irls_single(
-            points, sdf_values, i, neighbors=nbr, iters=iters, sigma=sigma)
-        gradients[i] = grad_i
-        # Compute error as mean absolute residual
-        A = points[indices_i] - points[i]
-        b = sdf_values[indices_i] - sdf_values[i]
-        errors[i] = np.mean(np.abs(A @ grad_i - b))
+    if interpolator is not None:
+        print("Initializing gradients with interpolator's best guess...")
+        gradients = np.zeros((n, dim))
+        for i in range(n):
+            gradients[i] = interpolator.sample_best_gradient(points[i], sdf_values[i], num_samples=50)
+    else:
+        gradients, _ = estimate_gradients_RANSAC(points, sdf_values, neighbors=neighbor_list)
+    for _ in range(iters):
+        for i in range(n):
+            nbr = neighbor_list[i] if neighbor_list is not None else None
+            grad_i, weights_i, indices_i, error_i = estimate_gradient_irls_single(
+                points, sdf_values, i, neighbors=nbr, last_gradients=gradients, iters=iters, sigma=sigma)
+            gradients[i] = grad_i
+            errors[i] = error_i
     return gradients, errors
 
-def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters=10, sigma=0.05):
+def estimate_gradient_irls_single(points, sdf_values, ind, neighbors, last_gradients, iters=10, sigma=0.1, verbose=False):
     """
     Estimation of gradients from SDF values at a given point using IRLS.
     Only for a single point at index `ind`.
@@ -842,6 +868,7 @@ def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters
         sdf_values: (N,) array of SDF values.
         ind: Index of the point to estimate.
         neighbors: Optional list of neighbor indices. If None, KNN is used.
+        last_gradients: (N, D) array of gradients from the previous iteration, used for weighting.
         iters: Number of IRLS iterations.
         sigma: Gaussian bandwidth for weighting.
         
@@ -849,6 +876,7 @@ def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters
         gradient: (D,) Estimated gradient vector.
         weights: (K,) Final weights of the neighbors.
         indices: (K,) Indices of the neighbors used.
+        error: Mean absolute residual error for the point.
     """
     point = points[ind]
     point_sdf = sdf_values[ind]
@@ -861,7 +889,7 @@ def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters
         indices = indices[0] # Flatten to 1D array
     else:
         # Ensure indices is a numpy array
-        indices = np.array(neighbors)
+        indices = np.array(neighbors, dtype=int)
         # Handle case where neighbors might be passed as a list of lists or similar
         if indices.ndim > 1:
             indices = indices.flatten()
@@ -879,22 +907,16 @@ def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters
     # Note: We do NOT append np.ones here. 
     # By solving A @ gradient = b, we implicitly enforce the plane to pass 
     # exactly through (0,0) in local space, which is (point, point_sdf) in global space.
-
-    # 3. Initial Least Squares (OLS)
-    # Solve Ax = b
-    gradient, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
     
+    # 3. Initialize Weights
     weights = np.ones(len(indices))
+    gradient_similarity = last_gradients[indices] @ last_gradients[ind]
 
     # 4. Iterative Re-weighted Least Squares (IRLS)
     for i in range(iters):
-        # Calculate residuals: |predicted_delta - actual_delta|
-        preds = A @ gradient
-        residuals = np.abs(preds - b)
-        
-        # Gaussian weighting: closer fits get higher weights
+        # Gaussian weighting: closer gradients get higher weights
         # Note: We add a small epsilon to sigma to prevent division by zero if sigma is too small
-        weights = np.exp(-(residuals**2) / (2 * (sigma**2)))
+        weights = np.exp((gradient_similarity - 1) / ((sigma**2)))
         
         # Prepare Weighted System
         # To minimize sum(w_i * r_i^2), we multiply A and b by sqrt(w_i)
@@ -913,46 +935,12 @@ def estimate_gradient_irls_single(points, sdf_values, ind, neighbors=None, iters
     else:
         # Fallback if gradient is zero (rare, usually means flat region or singular)
         gradient = np.zeros_like(gradient) 
-
-    return gradient, weights, indices
-
-def _single_point_ransac_2d(pts, sdfs, threshold, max_iters=100):
-    n = pts.shape[0]
-    best_grad = np.array([0.0, 0.0])
-    max_inliers = -1
-    min_gradient_bias = float('inf')
-    # RANSAC core: random sampling to compute local plane
-    for _ in range(max_iters):
-        # 2D linear fitting requires at least 3 points
-        idx = np.random.choice(n, 3, replace=False)
-        A = np.c_[pts[idx], np.ones(3)]
-        try:
-            # Solve gx*x + gy*y + b = sdf
-            m = np.linalg.lstsq(A, sdfs[idx], rcond=None)[0]
-            g_hypo = m[:2]
-            b_hypo = m[2]
-            
-            # Statistical consistency
-            res = np.abs(pts @ g_hypo + b_hypo - sdfs)
-            inliers = np.sum(res < threshold)
-            
-            # Add physical constraint: SDF gradient magnitude should not be too far from 1
-            mag = np.linalg.norm(g_hypo)
-            if abs(mag - 1) < min_gradient_bias:
-                min_gradient_bias = abs(mag - 1)
-                best_grad = g_hypo / mag # Normalize
-        except:
-            continue
-            
-    # If RANSAC doesn't find good results, fall back to ordinary least squares
-    # if max_inliers < 0:
-    #     A_all = np.c_[pts, np.ones(n)]
-    #     m_all = np.linalg.lstsq(A_all, sdfs, rcond=None)[0]
-    #     g_all = m_all[:2]
-    #     mag_all = np.linalg.norm(g_all)
-    #     best_grad = g_all / mag_all if mag_all > 1e-6 else g_all
-    print("Best grad bias:", min_gradient_bias)
-    return best_grad
+    if verbose:
+        print(f"A: \n{A}\nb: {b}\nWeights: {weights}\nGradient Similarity: {gradient_similarity}\nFinal Gradient: {gradient}")
+    # compute error as weighted mean absolute residual
+    residuals = A @ gradient - b
+    error = np.sum(weights * np.abs(residuals)) / (np.sum(weights) + 1e-8)
+    return gradient, weights, indices, error
 
 import numpy as np
 from scipy.optimize import linprog
@@ -1189,7 +1177,7 @@ def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, gradients, n
     
     fig.canvas.mpl_connect('button_press_event', on_click)
 
-def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False):
+def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False, show_errors=False):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     if interpolator is None:
         # Create and fit the interpolator
@@ -1217,7 +1205,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             for idx in v:
                 ids.add(idx)
         ids = list(ids)
-        print(len(colinear_neighbors))
+        print(f"\nNumber of colinear neighbors: {len(colinear_neighbors)}")
     if gradient_estimation == GradientEstimation.IRLS:
         gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
     elif gradient_estimation == GradientEstimation.RANSAC:
@@ -1275,7 +1263,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         # show all points in colinear_neighbors with white color
         plt.scatter(sdf_points[ids, 0], sdf_points[ids, 1], c='white', s=10, label='on-gradient Points')
     # Add error labels on each point if available
-    if 'grad_errors' in dir():
+    if show_errors and 'grad_errors' in dir():
         grad_errors *= 1e4  # Scale error for better visualization
         cmap = plt.cm.coolwarm
         # Use quantile-based normalization to handle skewed distributions
@@ -1296,14 +1284,14 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     if see_arcs:
         Vr, Er = gpy.reach_for_the_arcs(sdf_points, sdf_values, fine_tune_iters=100, batch_size=1e3)
         rfta_contour = obj_to_points(Vr, Er)[0]
-        plt.plot(rfta_contour[:, 0], rfta_contour[:, 1], 'r', linewidth=2, label='RFTA Contour')
+        plt.plot(rfta_contour[:, 0], rfta_contour[:, 1], 'y', linewidth=2, label='RFTA Contour')
         # visualize visible arcs just like in test_visible_neighbors
         for i in range(len(visible_arcs)):
             # draw arc as a circle for simplicity
             center = sdf_points[i]
             radius = np.abs(sdf_values[i])
             color = '#FF6B9D' if sdf_values[i] < 0 else "#4ECDC5"
-            circle = plt.Circle(center, radius, color=color, fill=True, alpha=1, linewidth=1)
+            circle = plt.Circle(center, radius, color=color, fill=False, alpha=1, linewidth=.3)
             ax.add_patch(circle)
 
     plot_correspondence(good_sdf_points, good_points_on_surface, plt)
@@ -1908,7 +1896,7 @@ def test_interpolation_gradients(n=4, use_sample_gradient=False):
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
-    # test_gradient_estimation(30, neighbor_estimation=NeighborEstimation.SPATIAL, gradient_estimation=GradientEstimation.IRLS, see_arcs=False)
+    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.IRLS, see_arcs=False)
     # test_single_gradient(30)
     # test_subdividing(30)
-    test_interpolation_gradients(30, use_sample_gradient=True)
+    # test_interpolation_gradients(20, use_sample_gradient=True)
