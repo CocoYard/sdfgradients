@@ -1061,30 +1061,19 @@ def rate_gradient_estimation(sdf_points, points_on_surface, sdf_values, tol=1e-3
     return wrong_count
 
 def marching_cubes_2D(sdf_points, sdf_values):
-    """ Extract 0-level contour from 2D SDF values using triangulated contour."""
-    import matplotlib.tri as tri
-    from matplotlib.path import Path
-    triang = tri.Triangulation(sdf_points[:, 0], sdf_points[:, 1])
-    fig_tmp, ax_tmp = plt.subplots()
-    cs = ax_tmp.tricontour(triang, sdf_values, levels=[0.0])
-    plt.close(fig_tmp)
-    # Split each path at MOVETO codes to get separate contour segments
+    """ Extract 0-level contour from 2D SDF values using marching squares on the grid.
+    Assumes sdf_points are on a regular n×n grid in [0,1]×[0,1]."""
+    from skimage import measure
+    n = int(np.sqrt(len(sdf_values)))
+    sdf_grid = sdf_values.reshape(n, n)
+    contours = measure.find_contours(sdf_grid, level=0.0)
+    # Convert pixel indices back to [0,1] coordinates
+    # find_contours returns (row, col) in grid index space
     contour_points = []
-    for path in cs.get_paths():
-        verts = path.vertices
-        codes = path.codes
-        if codes is None:
-            # No codes means a single continuous segment
-            contour_points.append(verts)
-        else:
-            # Split at MOVETO boundaries
-            moveto_indices = np.where(codes == Path.MOVETO)[0]
-            for k in range(len(moveto_indices)):
-                start = moveto_indices[k]
-                end = moveto_indices[k + 1] if k + 1 < len(moveto_indices) else len(verts)
-                segment = verts[start:end]
-                if len(segment) >= 2:
-                    contour_points.append(segment)
+    for contour in contours:
+        # row → x, col → y (matching the np.linspace grid ordering)
+        scaled = contour / (n - 1)
+        contour_points.append(scaled)
     return contour_points
 
 def obj_to_points(V, E):
