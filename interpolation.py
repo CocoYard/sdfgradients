@@ -7,12 +7,15 @@ import matplotlib.pyplot as plt
 import visible_arcs as va
 import iterative_projection as ip
 from enum import Enum
+import time
 
 class NeighborEstimation(Enum):
     VISIBLE_CONNECTIVITY = 'visible_connectivity'
     SPATIAL = 'spatial'
 
 class GradientEstimation(Enum):
+    INTERP_GLOBAL = 'interp_global'
+    INTERP_LOCAL = 'interp_local'
     ORACLE = 'oracle'
     IRLS = 'irls'
     RANSAC = 'ransac'
@@ -102,8 +105,8 @@ class Interpolator:
         ----------
         kernel : str
             The type of radial basis function to use. Supported options are:
-            - 'thin_plate': Uses r^2 * log(r) as the kernel function
-            - Other values: Defaults to cubic kernel (r^3)
+            - 'thin_plate': Uses r^2 * log(r) as the kernel function. Good for 2D
+            - Other values: Defaults to cubic kernel (r^3). Good for 3D
         Attributes
         ----------
         points : None
@@ -125,6 +128,7 @@ class Interpolator:
         self.p = None
         self.q = None
         self.kernel_type = kernel
+        self.trained = False
         if kernel == 'thin_plate':
             self.kernel = lambda r: r**2 * np.log(r + 1e-10)  # Adding a small value to avoid log(0)
         else:
@@ -141,6 +145,7 @@ class Interpolator:
         self.points = points
         self.values = values
         self.alpha, self.p, self.q = self._compute_coefficients(points, values)
+        self.trained = True
 
     def _compute_coefficients(self, points, values):
         """
@@ -156,13 +161,10 @@ class Interpolator:
         n_samples = points.shape[0]
         m_dimensions = points.shape[1]
         K = np.zeros((n_samples + m_dimensions + 1, n_samples + m_dimensions + 1))
-        for i in range(n_samples):
-            for j in range(n_samples):
-                r = np.linalg.norm(points[i] - points[j])
-                if r == 0:
-                    K[i, j] = 0
-                else:
-                    K[i, j] = self.kernel(r)
+        distances = cdist(points, points, metric='euclidean')
+        K_block = self.kernel(distances)
+        np.fill_diagonal(K_block, 0)  # kernel(0) = 0
+        K[:n_samples, :n_samples] = K_block
         # Add polynomial terms for Duchon interpolation
         P = np.ones((n_samples, m_dimensions + 1))
         P[:, :-1] = points
@@ -202,20 +204,17 @@ class Interpolator:
         Returns:
         np.ndarray: An array of shape (m_samples, dimensions) representing the predicted gradients at the new points.
         """
-        n_samples = self.points.shape[0]
-        m_samples = x_new.shape[0]
-        dimensions = self.points.shape[1]
-        gradients = np.zeros((m_samples, dimensions))
-        for i in range(n_samples):
-            diff = x_new - self.points[i]  # Shape (m_samples, dimensions)
-            dist = np.linalg.norm(diff, axis=1, keepdims=True)  # Shape (m_samples, 1)
-            # Avoid division by zero
-            dist[dist == 0] = 1e-10
-            if self.kernel_type == 'thin_plate':
-                coeff = self.alpha[i] * (2 * np.log(dist) + 1) * diff  # Derivative of thin-plate spline kernel
-            else:
-                coeff = self.alpha[i] * 3 * dist * diff  # Derivative of cubic kernel
-            gradients += coeff
+        # Vectorized: compute all diffs and distances at once
+        # diff shape: (m_samples, n_samples, dimensions)
+        diff = x_new[:, np.newaxis, :] - self.points[np.newaxis, :, :]
+        dist = np.linalg.norm(diff, axis=2, keepdims=True)  # (m_samples, n_samples, 1)
+        dist = np.maximum(dist, 1e-10)  # Avoid division by zero
+        if self.kernel_type == 'thin_plate':
+            kernel_deriv = (2 * np.log(dist) + 1) * diff  # (m, n, d)
+        else:
+            kernel_deriv = 3 * dist * diff  # (m, n, d)
+        # Weighted sum over training points: alpha[j] * kernel_deriv[i,j,:] → gradients[i,:]
+        gradients = np.einsum('j,ijd->id', self.alpha, kernel_deriv)
         gradients += self.p  # Add polynomial term gradient
         return gradients
     
@@ -244,7 +243,7 @@ class Interpolator:
             best_idx = np.argmax(predictions)  # For points inside the surface, we want to maximize the predicted SDF
         return directions[best_idx] / np.linalg.norm(directions[best_idx])  # Normalize the best direction
     
-    def sample_best_gradients(self, x_new: np.ndarray, sdf: np.ndarray, num_samples=10):
+    def sample_best_gradients(self, x_new: np.ndarray, sdf: np.ndarray, num_samples=50):
         """
         Batch version of sample_best_gradient for multiple input points. Sample a series of gradients around each input point and project the points to the surface along those gradients.
         Predict the SDF values and return the gradients that have the smallest absolute predicted value for each point.
@@ -261,7 +260,7 @@ class Interpolator:
         angles = np.linspace(0, 2 * np.pi, num_samples, endpoint=False)
         directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)  # Shape (num_samples, 2)
         batch_size = x_new.shape[0]
-        directions = np.vstack([directions, self.predict_gradient(x_new).reshape(-1, 2)])  # Add the predicted gradients as additional directions, shape (num_samples + batch_size, 2)
+        # directions = np.vstack([directions, self.predict_gradient(x_new).reshape(-1, 2)])  # Add the predicted gradients as additional directions, shape (num_samples + batch_size, 2)
         samples = x_new[:, np.newaxis, :] - sdf[:, np.newaxis, np.newaxis] * directions[np.newaxis, :, :]  # Shape (batch_size, num_samples + batch_size, 2)
         predictions = self.predict(samples.reshape(-1, 2)).reshape(batch_size, -1)  # Shape (batch_size, num_samples + batch_size)
         best_indices = np.where(sdf.ravel() > 0, np.argmin(predictions, axis=1), np.argmax(predictions, axis=1))  # Shape (batch_size,)
@@ -509,6 +508,49 @@ def yongs_algorithm( points, distances, gradients ):
     # Compute the new points by moving along the gradient direction
     new_points = points - (distances[:, np.newaxis] * gradients)
     return new_points
+
+def estimate_gradients_interp_global(sdf_points, sdf_values, interpolator : Interpolator, visible_arcs, degenerate_arcs, colinear_neighbors=None, clamp=True):
+    '''
+    Estimate gradients by fitting a global Duchon interpolator to the signed distance data and evaluating its gradient.
+
+    Parameters:
+    -----------
+    sdf_points: (N, d) array of point coordinates
+        The input points in d-dimensional space.
+    sdf_values: (N,) array of signed distance values
+        The signed distance values for each point.
+    interpolator: Interpolator
+        A fitted Interpolator object that can predict values and gradients.
+    visible_arcs: a dictionary: point index -> list of visible arcs
+        A collection of visible arcs that can be used to clamp the gradients.
+    degenerate_arcs: a dictionary: point index -> list of degenerate arcs
+        A collection of degenerate arcs that can be used to clamp the gradients.
+    colinear_neighbors: a dictionary: point index -> list of colinear neighbors, optional
+        A collection of colinear neighbors that can be used for gradient estimation. Default is None.
+    Returns:
+    -----------
+    gradients: (N, d) array of estimated gradient vectors
+        The estimated gradient vectors at each input point.
+    '''
+
+    to_train_points = sdf_points.copy()
+    to_train_sdf = sdf_values.copy()
+    for i, angle in degenerate_arcs.items():
+        # For points with degenerate arcs, set gradient directly toward the angle
+        grad = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
+        # Add a new point on the surface along this gradient direction
+        new_point = sdf_points[i] - sdf_values[i] * grad
+        to_train_points = np.vstack([to_train_points, new_point])
+        to_train_sdf = np.append(to_train_sdf, 0)  # The SDF value at the projected point should be 0
+    print(f"After adding points for degenerate arcs, total points: {len(to_train_points)}")
+    interpolator.fit(to_train_points, to_train_sdf)
+    gradients = interpolator.sample_best_gradients(sdf_points, sdf_values)
+    # Clamp gradients to visible arcs
+    if clamp:
+        clamp_indices = va.clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values)
+        if colinear_neighbors is not None:
+            va.clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values, clamp_indices)
+    return gradients
 
 def estimate_gradients_oracle( points, distances, vertices ):
     '''
@@ -845,6 +887,8 @@ def estimate_gradients_irls(points, sdf_values, neighbor_list=None, interpolator
     if interpolator is not None:
         print("Initializing gradients with interpolator's best guess...")
         gradients = np.zeros((n, dim))
+        if not interpolator.trained:
+            interpolator.fit(points, sdf_values)
         for i in range(n):
             gradients[i] = interpolator.sample_best_gradient(points[i], sdf_values[i], num_samples=50)
     else:
@@ -1181,42 +1225,41 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     if interpolator is None:
         # Create and fit the interpolator
-        interpolator = Interpolator(kernel='cubic')
-        interpolator.fit(sdf_points, sdf_values)
+        interpolator = Interpolator(kernel='thin_plate')
+        # interpolator.fit(sdf_points, sdf_values)
 
     visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
     radii = np.abs(sdf_values)
     degenerate_arcs = va.get_short_arcs(visible_arcs, tol=1e-8)
 
-    if neighbor_estimation == NeighborEstimation.VISIBLE_CONNECTIVITY:
-        neighbors = va.find_arcs_neighbors(sdf_points, radii, visible_arcs, 1e-3)
-    elif neighbor_estimation == NeighborEstimation.SPATIAL:
-        from sklearn.neighbors import NearestNeighbors
-        nbrs = NearestNeighbors(n_neighbors=9, algorithm='auto').fit(sdf_points)
-        distances, neighbors = nbrs.kneighbors(sdf_points)
-        neighbors = [list(neighbors[i]) for i in range(sdf_points.shape[0])]
     if on_gradient_neighbors:
         colinear_neighbors = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-5)
-        for k, v in colinear_neighbors.items():
-            neighbors[k] = v
-        ids = set() # To plot the points in colinear_neighbors with different color, we need to collect their indices
-        for k, v in colinear_neighbors.items():
-            ids.add(k)
-            for idx in v:
-                ids.add(idx)
-        ids = list(ids)
-        print(f"\nNumber of colinear neighbors: {len(colinear_neighbors)}")
-    if gradient_estimation == GradientEstimation.IRLS:
-        gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
-    elif gradient_estimation == GradientEstimation.RANSAC:
-        gradients, grad_errors = estimate_gradients_RANSAC(sdf_points, sdf_values, neighbors)
-    elif gradient_estimation == GradientEstimation.FINITE:
-        neighbor_estimation = NeighborEstimation.SPATIAL
-        gradients, grad_errors = estimate_gradients_finite_diff(sdf_points, sdf_values)
-    elif gradient_estimation == GradientEstimation.LSTSQ:
-        gradients, grad_errors = estimate_gradients_lstsq(sdf_points, sdf_values, neighbors)
-    elif gradient_estimation == GradientEstimation.ORACLE:
-        gradients, new_points = estimate_gradients_oracle(sdf_points, sdf_values, points)
+    if gradient_estimation == GradientEstimation.INTERP_GLOBAL:
+        gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors if on_gradient_neighbors else None)
+    elif gradient_estimation == GradientEstimation.INTERP_LOCAL:
+        pass
+    else:
+        if neighbor_estimation == NeighborEstimation.VISIBLE_CONNECTIVITY:
+            neighbors = va.find_arcs_neighbors(sdf_points, radii, visible_arcs, 1e-3)
+        elif neighbor_estimation == NeighborEstimation.SPATIAL:
+            from sklearn.neighbors import NearestNeighbors
+            nbrs = NearestNeighbors(n_neighbors=9, algorithm='auto').fit(sdf_points)
+            distances, neighbors = nbrs.kneighbors(sdf_points)
+            neighbors = [list(neighbors[i]) for i in range(sdf_points.shape[0])]
+        if on_gradient_neighbors:
+            for k, v in colinear_neighbors.items():
+                neighbors[k] = v
+        if gradient_estimation == GradientEstimation.IRLS:
+            gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
+        elif gradient_estimation == GradientEstimation.RANSAC:
+            gradients, grad_errors = estimate_gradients_RANSAC(sdf_points, sdf_values, neighbors)
+        elif gradient_estimation == GradientEstimation.FINITE:
+            neighbor_estimation = NeighborEstimation.SPATIAL
+            gradients, grad_errors = estimate_gradients_finite_diff(sdf_points, sdf_values)
+        elif gradient_estimation == GradientEstimation.LSTSQ:
+            gradients, grad_errors = estimate_gradients_lstsq(sdf_points, sdf_values, neighbors)
+        elif gradient_estimation == GradientEstimation.ORACLE:
+            gradients, new_points = estimate_gradients_oracle(sdf_points, sdf_values, points)
 
     for i, angle in degenerate_arcs.items():
         # For points with degenerate arcs, set gradient directly toward the angle
@@ -1249,6 +1292,8 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     fig, ax = plt.subplots(figsize=(8, 7))
     grid_x, grid_y = np.mgrid[0:1:100j, 0:1:100j]
     grid_points = np.vstack([grid_x.ravel(), grid_y.ravel()]).T
+    if not interpolator.trained:
+        interpolator.fit(sdf_points, sdf_values)
     grid_values = interpolator.predict(grid_points).reshape(100, 100)
     im = ax.imshow(grid_values.T, extent=(0, 1, 0, 1), origin='lower', cmap='viridis')
     plt.colorbar(im, ax=ax, label='Interpolated SDF Values')
@@ -1260,6 +1305,13 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     plt.scatter(sdf_points[:, 0], sdf_points[:, 1], c='r', s=3, label='Original Grid Points')
     plt.scatter(good_points_on_surface[:, 0], good_points_on_surface[:, 1], c='yellow', s=10, label='Projected Surface Points')
     if on_gradient_neighbors:
+        ids = set() # To plot the points in colinear_neighbors with different color, we need to collect their indices
+        for k, v in colinear_neighbors.items():
+            ids.add(k)
+            for idx in v:
+                ids.add(idx)
+        ids = list(ids)
+        print(f"\nNumber of colinear neighbors: {len(colinear_neighbors)}")
         # show all points in colinear_neighbors with white color
         plt.scatter(sdf_points[ids, 0], sdf_points[ids, 1], c='white', s=10, label='on-gradient Points')
     # Add error labels on each point if available
@@ -1481,7 +1533,6 @@ def test_subdividing(n=4):
     print(f"Original points: {len(sdf_points_backup)}, Interpolated points: {len(inter_points)}")
     sdf_values = va.interpolate_sdf(sdf_points_backup, sdf_values_backup, inter_points, method='bilinear')
 
-    import time
     start_time = time.time()
     fig, ax = va.visualize_circles(sdf_points, sdf_values, points)
     end_time = time.time()
@@ -1896,7 +1947,7 @@ def test_interpolation_gradients(n=4, use_sample_gradient=False):
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
-    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.IRLS, see_arcs=False)
+    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL, see_arcs=True)
     # test_single_gradient(30)
     # test_subdividing(30)
     # test_interpolation_gradients(20, use_sample_gradient=True)

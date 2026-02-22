@@ -1,6 +1,96 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+def angle_in_arc(angle, start, end):
+    """Check if angle is within arc [start, end], handling wrap-around."""
+    angle = normalize_angle(angle)
+    if end < start:  # Wrap-around case
+        return angle >= start or angle <= end
+    else:
+        return start <= angle <= end
+
+def clamp_angle_to_arcs(angle, arcs):
+    clamp_dist = float('inf')
+    clamp_angle = None
+    for start, end in arcs:
+        if angle_in_arc(angle, start, end):
+            clamp_angle = None
+            break   # this gradient is already within a visible arc, no need to clamp
+        start_diff = min((angle - start) % (2 * np.pi), (start - angle) % (2 * np.pi))
+        end_diff = min((angle - end) % (2 * np.pi), (end - angle) % (2 * np.pi))
+        if start_diff < clamp_dist:
+            clamp_dist = start_diff
+            clamp_angle = start
+        if end_diff < clamp_dist:
+            clamp_dist = end_diff
+            clamp_angle = end
+    return clamp_angle
+
+def clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values, skip_degenerate=True):
+    """
+    Clamp the gradients to the visible arcs. For points with degenerate arcs, set the gradient directly toward the angle of the degenerate arc.
+    Parameters:
+    -----------
+    gradients: (N, 2) array of gradient vectors at each point
+    visible_arcs: a dictionary: point index -> list of visible arcs. visbible arcs[i] contains [(start_angle1, end_angle1), (start_angle2, end_angle2), ...]
+        A collection of visible arcs that can be used to clamp the gradients.
+    degenerate_arcs: a dictionary: point index -> list of degenerate arcs
+        A collection of degenerate arcs that can be used to clamp the gradients.
+    sdf_values: (N,) array of signed distance values, used to determine the direction of the gradient for degenerate arcs   
+    Returns:
+    --------
+    clamped_gradients: (N, 2) array of clamped gradient vectors
+    """
+    for i in range(gradients.shape[0]):
+        if skip_degenerate and i in degenerate_arcs:
+            continue    # skip clamping for points with degenerate arcs, since we will set their gradients directly toward the angle later
+        if i in degenerate_arcs:
+            angle = degenerate_arcs[i]
+            grad_direction = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
+            gradients[i] = grad_direction
+            continue    # skip clamping for points with degenerate arcs, since we have set their gradients directly toward the angle
+        
+        arcs = visible_arcs[i]
+        if len(arcs) == 0:
+            continue    # should not happen, but just in case
+        angle = np.arctan2(gradients[i, 1], gradients[i, 0])
+        if sdf_values[i] > 0:
+            angle = (angle + np.pi) % (2 * np.pi)   # flip angle for points outside, since their gradients should point outward
+        clamp_indices = set()
+        clamp_angle = clamp_angle_to_arcs(angle, arcs)
+        if clamp_angle is not None:
+            if sdf_values[i] > 0:
+                clamp_angle = (clamp_angle + np.pi) % (2 * np.pi)   # flip angle for points outside, since their gradients should point outward
+            gradients[i] = np.array([np.cos(clamp_angle), np.sin(clamp_angle)])
+            clamp_indices.add(i)
+    return clamp_indices
+
+def clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values, clamp_indices):
+    """
+    Use the colinear neighbors to estimate the gradient. For points inside clamp_indices, we will use that estimated gradient to clamp into visible arcs.
+    """
+    for i, neighbors in colinear_neighbors.items():
+        if len(neighbors) == 0:
+            continue
+        if i in degenerate_arcs:
+            continue    # skip clamping for points with degenerate arcs, since we will set their gradients directly toward the angle later
+        if i not in clamp_indices:
+            continue    # only clamp points that are outside visible arcs, for other points we keep their original gradients since they are already within visible arcs
+        neighbor_points = sdf_points[neighbors]
+        neighbor_sdf = sdf_values[neighbors]
+        diffs = neighbor_points - sdf_points[i]
+        sdf_diffs = neighbor_sdf - sdf_values[i]
+        if len(diffs) >= 2 and np.linalg.matrix_rank(diffs, tol=1e-8) < 2:
+            # Rank-deficient: project onto the available direction
+            direction = diffs[0] / (np.linalg.norm(diffs[0]) + 1e-10)
+            projections = diffs @ direction
+            slope = np.linalg.lstsq(projections.reshape(-1, 1), sdf_diffs, rcond=None)[0][0]
+            grad = slope * direction
+        else:
+            grad, _, _, _ = np.linalg.lstsq(diffs, sdf_diffs, rcond=None)
+        gradients[i] = grad
+    return gradients
+
 def get_short_arcs(visible_arcs, tol=1e-8):
     """
     For each circle's visible arcs, if it contains only a degenerate arc (length < tol), record it.
@@ -312,14 +402,6 @@ def find_arcs_neighbors(centers, radii, arcs, tol=1e-2):
     """
     n_circles = len(centers)
     neighbors = [[] for _ in range(n_circles)]
-    
-    def angle_in_arc(angle, start, end):
-        """Check if angle is within arc [start, end], handling wrap-around."""
-        angle = normalize_angle(angle)
-        if end < start:  # Wrap-around case
-            return angle >= start or angle <= end
-        else:
-            return start <= angle <= end
     
     for i in range(n_circles):
         arcs_i = arcs[i]
