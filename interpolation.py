@@ -3,6 +3,8 @@ import gpytoolbox as gpy
 import igl
 from scipy.spatial.distance import cdist
 import numpy as np
+# import matplotlib
+# matplotlib.use('Agg')  # Non-interactive backend, no window shown
 import matplotlib.pyplot as plt
 import visible_arcs as va
 import iterative_projection as ip
@@ -1221,6 +1223,72 @@ def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, gradients, n
     
     fig.canvas.mpl_connect('button_press_event', on_click)
 
+def Haussdorff_distances(shape, original_shape):
+    """ Compute the Hausdorff distance between polylines (not point clouds).
+
+    Parameters
+    ----------
+    shape : list of (N_i, 2) arrays, or a single (N, 2) array
+        One or more polylines, e.g. [[seg1], [seg2]] from marching cubes.
+    original_shape : (M, 2) array or list of (M_j, 2) arrays
+        The reference polyline(s).
+
+    Returns
+    -------
+    float  – the (symmetric) Hausdorff distance, computed as
+             max(directed_H(shape→original), directed_H(original→shape))
+             using point-to-segment distances.
+    """
+
+    def _point_to_polylines_min_dist(points, polylines):
+        """Min distance from each query point to the *segments* of polylines."""
+        min_dists = np.full(len(points), np.inf)
+        for poly in polylines:
+            if len(poly) < 2:
+                # Degenerate single-point polyline
+                dists = np.linalg.norm(points - poly[0], axis=1)
+                min_dists = np.minimum(min_dists, dists)
+                continue
+            a = poly[:-1]   # (S, 2) segment start points
+            b = poly[1:]    # (S, 2) segment end points
+            ab = b - a      # (S, 2)
+            ab_sq = np.sum(ab ** 2, axis=1)  # (S,)
+            # Process in chunks to limit memory (M * S * 2 floats)
+            chunk = max(1, 50_000 // max(len(a), 1))
+            for i0 in range(0, len(points), chunk):
+                i1 = min(i0 + chunk, len(points))
+                pts = points[i0:i1]                          # (C, 2)
+                ap = pts[:, None, :] - a[None, :, :]         # (C, S, 2)
+                t = np.sum(ap * ab[None, :, :], axis=2) / np.maximum(ab_sq[None, :], 1e-30)
+                t = np.clip(t, 0.0, 1.0)                     # (C, S)
+                closest = a[None, :, :] + t[:, :, None] * ab[None, :, :]  # (C, S, 2)
+                dists = np.linalg.norm(pts[:, None, :] - closest, axis=2) # (C, S)
+                min_dists[i0:i1] = np.minimum(min_dists[i0:i1],
+                                              np.min(dists, axis=1))
+        return min_dists
+
+    # ---- normalise inputs to list-of-polylines ----
+    if isinstance(shape, np.ndarray):
+        shape_list = [shape]
+    else:
+        shape_list = list(shape)
+
+    if isinstance(original_shape, np.ndarray):
+        orig_list = [original_shape]
+    else:
+        orig_list = list(original_shape)
+
+    # Gather all vertices from each side
+    shape_verts = np.concatenate(shape_list, axis=0)
+    orig_verts  = np.concatenate(orig_list, axis=0)
+
+    # directed Hausdorff: shape → original  (each shape vertex → nearest original segment)
+    d_s2o = _point_to_polylines_min_dist(shape_verts, orig_list)
+    # directed Hausdorff: original → shape  (each original vertex → nearest shape segment)
+    d_o2s = _point_to_polylines_min_dist(orig_verts, shape_list)
+
+    return float(max(np.max(d_s2o), np.max(d_o2s)))
+
 def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False, show_errors=False):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     if interpolator is None:
@@ -1280,12 +1348,15 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     good_points_on_surface = points_on_surface[mask]
     good_gradients = gradients[mask]
     contour_segments = marching_cubes_2D(sdf_points, sdf_values)
+    print(f"Haussdorff distance for MC: {Haussdorff_distances(contour_segments, points):.4f}")
+
     V, E = gpy.point_cloud_to_mesh( good_points_on_surface, good_gradients,
     method='PSR',
     psr_screening_weight=10.0,
     psr_outer_boundary_type="Neumann",
     )
     poisson_contour = obj_to_points(V, E)[0]
+    print(f"Haussdorff distance for PSR: {Haussdorff_distances(poisson_contour, points):.4f}")
 
     # visualize results in 2D as heatmap
     # set the size of the figure to be just enough to hold the heatmap
@@ -1334,7 +1405,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     plt.plot(poisson_contour[:, 0], poisson_contour[:, 1], 'm', linewidth=2, label='PSR Contour')
 
     if see_arcs:
-        Vr, Er = gpy.reach_for_the_arcs(sdf_points, sdf_values, fine_tune_iters=100, batch_size=1e3)
+        Vr, Er = gpy.reach_for_the_arcs(sdf_points, sdf_values, fine_tune_iters=100, batch_size=1000)
         rfta_contour = obj_to_points(Vr, Er)[0]
         plt.plot(rfta_contour[:, 0], rfta_contour[:, 1], 'y', linewidth=2, label='RFTA Contour')
         # visualize visible arcs just like in test_visible_neighbors
@@ -1345,6 +1416,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             color = '#FF6B9D' if sdf_values[i] < 0 else "#4ECDC5"
             circle = plt.Circle(center, radius, color=color, fill=False, alpha=1, linewidth=.3)
             ax.add_patch(circle)
+        print(f"Haussdorff distance for RFTA: {Haussdorff_distances(rfta_contour, points):.4f}")
 
     plot_correspondence(good_sdf_points, good_points_on_surface, plt)
     # connect original points to projected points
@@ -1360,6 +1432,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, gradients, neighbors, gradient_estimation)
     
     plt.show()
+    return Haussdorff_distances(contour_segments, points), Haussdorff_distances(poisson_contour, points), Haussdorff_distances(rfta_contour, points)
 
 def test_visible_neighbors(n=4, show_all=False):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
@@ -1947,7 +2020,14 @@ def test_interpolation_gradients(n=4, use_sample_gradient=False):
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
-    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL, see_arcs=True)
+    # table = []
+    # for n in [10, 20, 25, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50]:
+    #     mc, psr, rfta = test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.LSTSQ, see_arcs=True)
+    #     table.append((n, mc, psr, rfta))
+    # for n, mc, psr, rfta in table:
+    #     print(f"{n:>3} | {mc:.4f} | {psr:.4f} | {rfta:.4f}")
     # test_single_gradient(30)
     # test_subdividing(30)
     # test_interpolation_gradients(20, use_sample_gradient=True)
+    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.ORACLE, see_arcs=False)
+
