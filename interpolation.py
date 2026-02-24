@@ -92,6 +92,8 @@ class CurlFree_Interpolator:
     # 内部向量化数学计算方法
     # =========================================================
     def _build_cf_matrix(self, X):
+        # 基于 PHS 核 \phi(r) = r^4 \log r 的 Hessian 矩阵
+        # H = r^2(4 log r + 1)I + (8 log r + 6)(\delta \otimes \delta)
         dx = X[:, 0:1] - X[:, 0:1].T
         dy = X[:, 1:2] - X[:, 1:2].T
         r2 = dx**2 + dy**2
@@ -128,7 +130,7 @@ class CurlFree_Interpolator:
         return A, P
 
     def _build_scalar_matrix(self, X):
-        # 2D 标量薄板样条 \phi(r) = r^2 \log r
+        # 2D TPS 核 \phi(r) = r^2 \log r，多项式空间 P_1（3个基）
         dx = X[:, 0:1] - X[:, 0:1].T
         dy = X[:, 1:2] - X[:, 1:2].T
         r2 = dx**2 + dy**2
@@ -138,9 +140,10 @@ class CurlFree_Interpolator:
             log_r = np.log(r)
             log_r[r == 0] = 0.0
             
-        A = r2 * log_r
+        A = r2 * log_r  # r^2 log r
         A[r == 0] = 0
         
+        # P_1 多项式空间: [1, x, y]（3 个基）
         P = np.ones((self.N, 3))
         P[:, 1] = X[:, 0]
         P[:, 2] = X[:, 1]
@@ -179,11 +182,12 @@ class CurlFree_Interpolator:
             log_r = np.log(r)
             log_r[r == 0] = 0.0
             
-        phi = r2 * log_r
+        phi = r2 * log_r  # r^2 log r
         phi[r == 0] = 0.0
         
         V = np.dot(phi, self.c_sc)
         x, y = X_query[:, 0], X_query[:, 1]
+        # P_1: b_0 + b_1*x + b_2*y
         V += self.b_sc[0] + self.b_sc[1]*x + self.b_sc[2]*y
         return V
     
@@ -208,6 +212,8 @@ class Interpolator:
             Will store the values at interpolation points (initialized as None)
         alpha : None
             Will store the interpolation coefficients (initialized as None)
+        beta : None
+            Will store the gradient coefficients (initialized as None)
         p : None
             Will store polynomial coefficients (initialized as None)
         q : None
@@ -218,6 +224,7 @@ class Interpolator:
         self.points = None
         self.values = None
         self.alpha = None
+        self.beta = None
         self.p = None
         self.q = None
         self.kernel_type = kernel
@@ -227,18 +234,137 @@ class Interpolator:
         else:
             self.kernel = lambda r: r**3  # Default to cubic kernel
 
-    def fit(self, points, values):
+    def fit(self, points, values, gradients=None):
         """
         Fit the interpolator with given points and their corresponding values.
 
         Parameters:
         points (np.ndarray): An array of shape (n_samples, m_dimensions) representing the input points.
         values (np.ndarray): An array of shape (n_samples,) representing the values at the input points.
+        gradients (np.ndarray, optional): An array of shape (n_samples, m_dimensions) representing the gradients at the input points. If provided, the interpolator will also fit to these gradients. Default is None.
         """
         self.points = points
         self.values = values
-        self.alpha, self.p, self.q = self._compute_coefficients(points, values)
+        if gradients is not None:
+            self.alpha, self.beta, self.p, self.q = self._compute_coefficients_with_gradients(points, values, gradients)
+        else:
+            self.alpha, self.p, self.q = self._compute_coefficients(points, values)
         self.trained = True
+    
+    def _compute_coefficients_with_gradients(self, points, values, gradients):
+        """
+        Compute Hermite RBF interpolation coefficients that fit both values and gradients.
+
+        Builds and solves the extended system:
+            [ Φ       -D_0     -D_1    | P_val  ] [α  ]   [f  ]
+            [ D_0^T    H_00     H_01   | P_gx  ] [β_x] = [g_x]
+            [ D_1^T    H_01^T   H_11   | P_gy  ] [β_y]   [g_y]
+            [ P_val^T  P_gx^T   P_gy^T | 0     ] [poly]   [0  ]
+
+        Parameters:
+        points (np.ndarray): (n, d) input points.
+        values (np.ndarray): (n,) values.
+        gradients (np.ndarray): (n, d) gradients.
+
+        Returns:
+        tuple: (alpha (n,), beta (n,d), p (d,), q (scalar))
+        """
+        n = points.shape[0]
+        d = points.shape[1]
+
+        # Pairwise differences and distances
+        diff = points[:, np.newaxis, :] - points[np.newaxis, :, :]  # (N, N, d)
+        r2 = np.sum(diff ** 2, axis=2)  # (N, N)
+        dist = np.sqrt(r2)              # (N, N)
+
+        # ---- Kernel matrix Φ (N×N): value-vs-value ----
+        with np.errstate(divide='ignore', invalid='ignore'):
+            if self.kernel_type == 'thin_plate':
+                log_r = np.log(dist)
+                log_r[dist == 0] = 0.0
+                Phi = r2 * log_r
+            else:
+                Phi = dist ** 3
+        np.fill_diagonal(Phi, 0.0)
+
+        # ---- First derivative coefficient (shared) ----
+        with np.errstate(divide='ignore', invalid='ignore'):
+            if self.kernel_type == 'thin_plate':
+                coeff1 = 2 * log_r + 1       # (N, N)
+            else:
+                coeff1 = 3 * dist            # (N, N)
+        coeff1[dist == 0] = 0.0
+
+        # D_k[i,j] = coeff1 * (x_i_k - x_j_k)  (first derivative w.r.t. eval point)
+        D = [coeff1 * diff[:, :, k] for k in range(d)]
+
+        # ---- Second mixed derivative factor ----
+        with np.errstate(divide='ignore', invalid='ignore'):
+            if self.kernel_type == 'thin_plate':
+                safe_r2 = r2.copy(); safe_r2[dist == 0] = 1.0
+                factor = 2.0 / safe_r2       # 2 d_l d_k / r^2 term
+            else:
+                safe_dist = dist.copy(); safe_dist[dist == 0] = 1.0
+                factor = 3.0 / safe_dist     # 3 d_l d_k / r term
+
+        # H_lk[i,j] = ∂²φ / (∂x_i_l ∂x_j_k) = -[ factor*d_l*d_k + coeff1*δ_{lk} ]
+        H = {}
+        for l in range(d):
+            for k in range(d):
+                Hlk = -(factor * diff[:, :, l] * diff[:, :, k])
+                if l == k:
+                    Hlk = Hlk - coeff1
+                Hlk[dist == 0] = 0.0
+                H[(l, k)] = Hlk
+
+        # ---- Assemble full system  (size = n*(1+d) + (d+1)) ----
+        size = n * (1 + d) + (d + 1)
+        M = np.zeros((size, size))
+        rhs = np.zeros(size)
+
+        # Block (value, α): Φ
+        M[:n, :n] = Phi
+        # Block (value, β_k): -D_k  (derivative w.r.t. center = -D_k)
+        for k in range(d):
+            M[:n, n + k * n: n + (k + 1) * n] = -D[k]
+        # Block (grad_l, α): D_l  (by symmetry equals (-D_l)^T = D_l since D_l is antisymmetric)
+        for l in range(d):
+            M[n + l * n: n + (l + 1) * n, :n] = D[l]
+        # Block (grad_l, β_k): H_lk
+        for l in range(d):
+            for k in range(d):
+                M[n + l * n: n + (l + 1) * n, n + k * n: n + (k + 1) * n] = H[(l, k)]
+
+        # Polynomial columns / orthogonality rows
+        ps = n * (1 + d)  # poly start index
+        # Value rows: [1, x_0, x_1, ...]
+        M[:n, ps] = 1.0
+        for k in range(d):
+            M[:n, ps + 1 + k] = points[:, k]
+        # Grad_l rows: [0, ..., 1 at position l, ...]
+        for l in range(d):
+            M[n + l * n: n + (l + 1) * n, ps + 1 + l] = 1.0
+        # Orthogonality rows (transpose of polynomial columns)
+        M[ps, :n] = 1.0
+        for k in range(d):
+            M[ps + 1 + k, :n] = points[:, k]
+            M[ps + 1 + k, n + k * n: n + (k + 1) * n] = 1.0
+
+        # RHS
+        rhs[:n] = values
+        for l in range(d):
+            rhs[n + l * n: n + (l + 1) * n] = gradients[:, l]
+
+        # Solve
+        coefficients, _, _, _ = np.linalg.lstsq(M, rhs, rcond=None)
+
+        alpha = coefficients[:n]
+        beta = np.zeros((n, d))
+        for k in range(d):
+            beta[:, k] = coefficients[n + k * n: n + (k + 1) * n]
+        q = coefficients[ps]
+        p = coefficients[ps + 1: ps + 1 + d]
+        return alpha, beta, p, q
 
     def _compute_coefficients(self, points, values):
         """
@@ -281,11 +407,27 @@ class Interpolator:
         Returns:
         np.ndarray: An array of shape (m_samples,) representing the predicted values at the new points.
         """
-        n_samples = self.points.shape[0]
-        m_samples = x_new.shape[0]
         distances = cdist(x_new, self.points, metric='euclidean')
         r = self.kernel(distances)  # Apply kernel to all distances at once
-        return r @ self.alpha + x_new @ self.p + self.q
+        result = r @ self.alpha + x_new @ self.p + self.q
+
+        if self.beta is not None:
+            # Add gradient basis contributions: Σ_j Σ_k β_{jk} · ψ_{jk}(x)
+            # ψ_{jk}(x) = ∂φ/∂(x_j)_k = -coeff1 · (x_k - x_{j,k})
+            diff = x_new[:, np.newaxis, :] - self.points[np.newaxis, :, :]  # (M, N, d)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                if self.kernel_type == 'thin_plate':
+                    log_r = np.log(distances)
+                    log_r[distances == 0] = 0.0
+                    coeff1 = 2 * log_r + 1
+                else:
+                    coeff1 = 3 * distances
+            coeff1[distances == 0] = 0.0
+            for k in range(self.points.shape[1]):
+                psi_k = -coeff1 * diff[:, :, k]  # (M, N)
+                result += psi_k @ self.beta[:, k]
+
+        return result
     
     def predict_gradient(self, x_new):
         """
@@ -309,6 +451,37 @@ class Interpolator:
         # Weighted sum over training points: alpha[j] * kernel_deriv[i,j,:] → gradients[i,:]
         gradients = np.einsum('j,ijd->id', self.alpha, kernel_deriv)
         gradients += self.p  # Add polynomial term gradient
+
+        if self.beta is not None:
+            # Add Hessian contribution: Σ_j Σ_k β_{jk} · ∂²φ/(∂x_l ∂(x_j)_k)
+            dist_sq = dist[..., 0]  # (m, n) squeeze keepdims
+            dist_flat = dist_sq  # already (m, n)
+            diff_nd = diff  # (m, n, d)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                if self.kernel_type == 'thin_plate':
+                    safe_r2 = (dist_flat ** 2).copy()
+                    safe_r2[dist_flat < 1e-10] = 1.0
+                    factor = 2.0 / safe_r2
+                    coeff1 = 2 * np.log(dist_flat) + 1
+                else:
+                    safe_dist = dist_flat.copy()
+                    safe_dist[dist_flat < 1e-10] = 1.0
+                    factor = 3.0 / safe_dist
+                    coeff1 = 3 * dist_flat
+            coeff1[dist_flat < 1e-10] = 0.0
+            factor[dist_flat < 1e-10] = 0.0
+
+            d_dim = self.points.shape[1]
+            for l in range(d_dim):
+                grad_l_beta = np.zeros(x_new.shape[0])
+                for k in range(d_dim):
+                    Hlk = -(factor * diff_nd[:, :, l] * diff_nd[:, :, k])
+                    if l == k:
+                        Hlk = Hlk - coeff1
+                    Hlk[dist_flat < 1e-10] = 0.0
+                    grad_l_beta += Hlk @ self.beta[:, k]
+                gradients[:, l] += grad_l_beta
+
         return gradients
     
     def sample_best_gradient(self, x_new, sdf, num_samples=10):

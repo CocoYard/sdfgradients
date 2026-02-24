@@ -792,7 +792,7 @@ def estimate_gradient_irls_single(points, sdf_values, ind, neighbors, last_gradi
     for i in range(iters):
         # Gaussian weighting: closer gradients get higher weights
         # Note: We add a small epsilon to sigma to prevent division by zero if sigma is too small
-        weights = np.exp((gradient_similarity - 1) / ((sigma**2)))
+        weights = np.exp((gradient_similarity - 1) / (sigma**2))
         
         # Prepare Weighted System
         # To minimize sum(w_i * r_i^2), we multiply A and b by sqrt(w_i)
@@ -1053,6 +1053,10 @@ def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, gradients, n
     
     fig.canvas.mpl_connect('button_press_event', on_click)
 
+def gradients_diff_norm(gradients1, gradients2):
+    """ Compute the mean L2 norm of the difference between two sets of gradients."""
+    return np.mean(np.linalg.norm(gradients1 - gradients2, axis=1))
+
 def Haussdorff_distances(shape, original_shape):
     """ Compute the Hausdorff distance between polylines (not point clouds).
 
@@ -1119,7 +1123,7 @@ def Haussdorff_distances(shape, original_shape):
 
     return float(max(np.max(d_s2o), np.max(d_o2s)))
 
-def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False, show_errors=False):
+def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False, show_errors=False, clamp_gradients=True):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     if interpolator is None:
         # Create and fit the interpolator
@@ -1129,6 +1133,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
     radii = np.abs(sdf_values)
     degenerate_arcs = va.get_short_arcs(visible_arcs, tol=1e-8)
+    gradients_gt, new_points = estimate_gradients_oracle(sdf_points, sdf_values, points)
 
     if on_gradient_neighbors:
         colinear_neighbors = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-5)
@@ -1157,11 +1162,12 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         elif gradient_estimation == GradientEstimation.LSTSQ:
             gradients, grad_errors = estimate_gradients_lstsq(sdf_points, sdf_values, neighbors)
         elif gradient_estimation == GradientEstimation.ORACLE:
-            gradients, new_points = estimate_gradients_oracle(sdf_points, sdf_values, points)
+            gradients = gradients_gt
             interpolator = CurlFree_Interpolator()
             interpolator.fit(sdf_points, sdf_values, gradients)
             # interpolator.fit(np.append(sdf_points, new_points, axis=0), np.append(sdf_values, np.zeros(len(new_points)), axis=0))
-
+    if clamp_gradients:
+        va.clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values)
 
     for i, angle in degenerate_arcs.items():
         # For points with degenerate arcs, set gradient directly toward the angle
@@ -1176,7 +1182,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     wrong_count = rate_gradient_estimation(sdf_points, points_on_surface, sdf_values, tol=1e-3)
     mask = wrong_count <= 0
     print(f"Number of points with correct projection: {np.sum(mask)} out of {len(sdf_points)}")
-    # mask = wrong_count >= 0
+    mask = wrong_count >= 0
     good_sdf_points = sdf_points[mask]
     points_on_surface_wrong = points_on_surface[~mask]
     good_points_on_surface = points_on_surface[mask]
@@ -1198,7 +1204,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     grid_x, grid_y = np.mgrid[0:1:100j, 0:1:100j]
     grid_points = np.vstack([grid_x.ravel(), grid_y.ravel()]).T
     if not interpolator.trained:
-        interpolator.fit(sdf_points, sdf_values)
+        interpolator.fit(sdf_points, sdf_values, gradients_gt)
     grid_values = interpolator.predict(grid_points).reshape(100, 100)
     im = ax.imshow(grid_values.T, extent=(0, 1, 0, 1), origin='lower', cmap='viridis')
     plt.colorbar(im, ax=ax, label='Interpolated SDF Values')
@@ -1265,8 +1271,11 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     if gradient_estimation in (GradientEstimation.RANSAC, GradientEstimation.IRLS):
         setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, gradients, neighbors, gradient_estimation)
     
+    grad_diff = gradients_diff_norm(gradients, gradients_gt)
+    print(f"{gradient_estimation.value} n={n} Mean L2 norm of gradient difference from oracle: {grad_diff:.4f}")
     plt.show()
-    return Haussdorff_distances(contour_segments, points), Haussdorff_distances(poisson_contour, points), Haussdorff_distances(rfta_contour, points)
+    # return Haussdorff_distances(contour_segments, points), Haussdorff_distances(poisson_contour, points), Haussdorff_distances(rfta_contour, points) if see_arcs else None
+    return grad_diff
 
 def test_visible_neighbors(n=4, show_all=False):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
@@ -1856,12 +1865,12 @@ if __name__ == "__main__":
     # test_visible_neighbors(30)  # interactive neighbor inspection
     # table = []
     # for n in [10, 20, 25, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50]:
-    #     mc, psr, rfta = test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.LSTSQ, see_arcs=True)
+    #     mc, psr, rfta = test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.IRLS, see_arcs=True)
     #     table.append((n, mc, psr, rfta))
     # for n, mc, psr, rfta in table:
-    #     print(f"{n:>3} | {mc:.4f} | {psr:.4f} | {rfta:.4f}")
+    #     print(f"{psr:.4f}")
     # test_single_gradient(30)
     # test_subdividing(30)
     # test_interpolation_gradients(20, use_sample_gradient=True)
-    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.ORACLE, see_arcs=False)
+    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.ORACLE, see_arcs=False, clamp_gradients=False)
 
