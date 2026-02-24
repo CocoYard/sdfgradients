@@ -1,7 +1,7 @@
 import gpytoolbox as gpy
 import numpy as np
 
-from interpolation import marching_cubes_2D
+from SDF_to_surface import marching_cubes_2D
 
 def estimate_gradient(points, sdf_values):
     """ estimation of gradients from SDF values at given points."""
