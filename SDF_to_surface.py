@@ -11,15 +11,17 @@ import iterative_projection as ip
 from interpolation import Interpolator, CurlFree_Interpolator
 from enum import Enum
 import time
+import optimization as opt
 
 class NeighborEstimation(Enum):
     VISIBLE_CONNECTIVITY = 'visible_connectivity'
     SPATIAL = 'spatial'
 
 class GradientEstimation(Enum):
+    CurlFree_OPT = 'curlfree_opt'
     INTERP_GLOBAL = 'interp_global'
     INTERP_LOCAL = 'interp_local'
-    ORACLE = 'oracle'
+    ORACLE_CURLFREE = 'oracle_curlfree'
     IRLS = 'irls'
     RANSAC = 'ransac'
     FINITE = 'finite'
@@ -337,6 +339,32 @@ def yongs_algorithm( points, distances, gradients ):
     # Compute the new points by moving along the gradient direction
     new_points = points - (distances[:, np.newaxis] * gradients)
     return new_points
+
+def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpolator : CurlFree_Interpolator):
+    """
+    Estimate gradients by optimizing a curl-free potential function to fit the signed distance data.
+
+    Parameters:
+    -----------
+    points: (N, d) array of point coordinates
+        The input points in d-dimensional space.
+    distances: (N,) array of signed distance values
+        The signed distance values for each point.
+    init_gradients: (N, d) array of initial gradient estimates
+        The initial gradient estimates at each point, which can be obtained from a global interpolator or other methods.
+
+    Returns:
+    ---------
+    gradients: (N, d) array of estimated gradient vectors
+        The estimated gradient vectors at each input point.
+    """
+    # optimize the gradients to be curl-free
+    gradients = opt.opt(points, distances, init_gradients, num_iter=500, lr=1e-2)
+    # gradients = opt.opt(points, init_gradients, num_iter=500, lr=1e-2)
+    gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
+    interpolator.fit(points, distances, gradients)  # Refit the interpolator with the original points and distances
+    return gradients
+
 
 def estimate_gradients_interp_global(sdf_points, sdf_values, interpolator : Interpolator, visible_arcs, degenerate_arcs, colinear_neighbors=None, clamp=True):
     '''
@@ -1152,7 +1180,12 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         if on_gradient_neighbors:
             for k, v in colinear_neighbors.items():
                 neighbors[k] = v
-        if gradient_estimation == GradientEstimation.IRLS:
+        if gradient_estimation == GradientEstimation.CurlFree_OPT:
+            # init_gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
+            init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors if on_gradient_neighbors else None)
+            interpolator = CurlFree_Interpolator()
+            gradients = estimate_gradients_curlfree_opt(sdf_points, sdf_values, init_gradients, interpolator)
+        elif gradient_estimation == GradientEstimation.IRLS:
             gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
         elif gradient_estimation == GradientEstimation.RANSAC:
             gradients, grad_errors = estimate_gradients_RANSAC(sdf_points, sdf_values, neighbors)
@@ -1161,7 +1194,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             gradients, grad_errors = estimate_gradients_finite_diff(sdf_points, sdf_values)
         elif gradient_estimation == GradientEstimation.LSTSQ:
             gradients, grad_errors = estimate_gradients_lstsq(sdf_points, sdf_values, neighbors)
-        elif gradient_estimation == GradientEstimation.ORACLE:
+        elif gradient_estimation == GradientEstimation.ORACLE_CURLFREE:
             gradients = gradients_gt
             interpolator = CurlFree_Interpolator()
             interpolator.fit(sdf_points, sdf_values, gradients)
@@ -1247,7 +1280,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     if see_arcs:
         Vr, Er = gpy.reach_for_the_arcs(sdf_points, sdf_values, fine_tune_iters=100, batch_size=1000)
         rfta_contour = obj_to_points(Vr, Er)[0]
-        plt.plot(rfta_contour[:, 0], rfta_contour[:, 1], 'y', linewidth=2, label='RFTA Contour')
+        # plt.plot(rfta_contour[:, 0], rfta_contour[:, 1], 'y', linewidth=2, label='RFTA Contour')
         # visualize visible arcs just like in test_visible_neighbors
         for i in range(len(visible_arcs)):
             # draw arc as a circle for simplicity
@@ -1871,6 +1904,6 @@ if __name__ == "__main__":
     #     print(f"{psr:.4f}")
     # test_single_gradient(30)
     # test_subdividing(30)
-    # test_interpolation_gradients(20, use_sample_gradient=True)
-    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.ORACLE, see_arcs=False, clamp_gradients=False)
+    # test_interpolation_gradients(30, use_sample_gradient=True)
+    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, see_arcs=False, clamp_gradients=False)
 
