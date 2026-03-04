@@ -359,7 +359,7 @@ def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpola
         The estimated gradient vectors at each input point.
     """
     # optimize the gradients to be curl-free
-    gradients = opt.opt(points, distances, init_gradients, num_iter=iters, lr=1e-2)
+    gradients = opt.opt(points, distances, init_gradients, num_iter=iters, lr=1e-3)
     # gradients = opt.opt(points, init_gradients, num_iter=500, lr=1e-2)
     gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
     interpolator.fit(points, distances, gradients)  # Refit the interpolator with the original points and distances
@@ -407,9 +407,9 @@ def estimate_gradients_interp_global(sdf_points, sdf_values, interpolator : Inte
         clamp_indices = va.clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values)
         if colinear_neighbors is not None:
             va.clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values, clamp_indices)
-
-    # gradients[704] *= -1.0  # manually flip the gradient for point 704 which is a special case with wrong orientation (TODO: find a more principled way to handle this)
-    # gradients[764] = np.array([np.cos(5/4*np.pi), np.sin(5/4*np.pi)])  # manually set the gradient for point 764 which is a special case with wrong orientation (TODO: find a more principled way to handle this)
+    for i, angle in degenerate_arcs.items():
+        # For points with degenerate arcs, set gradient directly toward the angle
+        gradients[i] = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
     return gradients
 
 def estimate_gradients_oracle( points, distances, vertices ):
@@ -1202,7 +1202,8 @@ def print_shape_distances(label, shape, original_shape):
     print(f"  {label}:  Hausdorff={d['hausdorff']:.4f}  H95={d['hausdorff_95']:.4f}  "
           f"Chamfer={d['chamfer']:.4f}  RMS={d['rms']:.4f}  IoU={d['iou']:.3f}")
 
-def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False, show_errors=False, clamp_gradients=False, iters=1000):
+def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False, 
+                             show_errors=False, clamp_gradients=False, iters=1000, resolution=500):
     print(f"Testing Gradient Estimation with n={n}, neighbor_estimation={neighbor_estimation}, gradient_estimation={gradient_estimation}, on_gradient_neighbors={on_gradient_neighbors}\n")
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     if interpolator is None:
@@ -1258,13 +1259,13 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             # interpolator.fit(np.append(sdf_points, new_points, axis=0), np.append(sdf_values, np.zeros(len(new_points)), axis=0))
     if clamp_gradients:
         va.clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values)
-
-    for i, angle in degenerate_arcs.items():
-        # For points with degenerate arcs, set gradient directly toward the angle
-        gradients[i] = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
-        # print(f"Point {i} has degenerate arc with angle {angle:.2f} radians. Setting gradient to {gradients[i]}.")
-        if 'grad_errors' in dir():
-            grad_errors[i] = 0.0  # Set error to 0 for these points since we are overriding the gradient
+    if gradient_estimation != GradientEstimation.CurlFree_OPT and  gradient_estimation != GradientEstimation.INTERP_GLOBAL:
+        for i, angle in degenerate_arcs.items():
+            # For points with degenerate arcs, set gradient directly toward the angle
+            gradients[i] = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
+            # print(f"Point {i} has degenerate arc with angle {angle:.2f} radians. Setting gradient to {gradients[i]}.")
+            if 'grad_errors' in dir():
+                grad_errors[i] = 0.0  # Set error to 0 for these points since we are overriding the gradient
 
     print("Estimated gradients shape:", gradients.shape)
     points_on_surface = yongs_algorithm(sdf_points, sdf_values, gradients)
@@ -1291,11 +1292,11 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     # visualize results in 2D as heatmap
     # set the size of the figure to be just enough to hold the heatmap
     fig, ax = plt.subplots(figsize=(8, 7))
-    grid_x, grid_y = np.mgrid[0:1:200j, 0:1:200j]
+    grid_x, grid_y = np.mgrid[0:1:resolution*1j, 0:1:resolution*1j]
     grid_points = np.vstack([grid_x.ravel(), grid_y.ravel()]).T
     if not interpolator.trained:
         interpolator.fit(sdf_points, sdf_values, gradients_gt)
-    grid_values = interpolator.predict(grid_points).reshape(200, 200)
+    grid_values = interpolator.predict(grid_points).reshape(resolution, resolution)
     im = ax.imshow(grid_values.T, extent=(0, 1, 0, 1), origin='lower', cmap='viridis')
     plt.colorbar(im, ax=ax, label='Interpolated SDF Values')
     # draw the contours at multiple levels (no transpose for contour!)
@@ -1966,4 +1967,6 @@ if __name__ == "__main__":
     # test_single_gradient(30)
     # test_subdividing(30)
     # test_interpolation_gradients(30, use_sample_gradient=True)
-    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, iters=5000, see_arcs=False, clamp_gradients=False)
+    for n in [30]:
+        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, iters=2000, see_arcs=True, clamp_gradients=False)
+    # test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL, iters=5000, see_arcs=False, clamp_gradients=False)

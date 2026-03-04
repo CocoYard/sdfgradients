@@ -260,7 +260,8 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
         grads_param = torch.tensor(init_grads_np, dtype=dtype, device=device, requires_grad=True)
         opt_params = [grads_param]
     
-    surface_weights = torch.ones_like(values)
+    # surface_weights = torch.ones_like(values)
+    surface_weights = torch.exp(-torch.abs(values) * 10)
     
     def rebuild_matrices(current_grads_detached):
         """用当前（detached）梯度重新计算投影点并分解矩阵。"""
@@ -348,11 +349,28 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
         violation = F.relu(signed_violation)
         loss_proj = torch.mean(surface_weights * (violation**2))
         
-        # 插值能量项（clamp 到非负，PHS 核矩阵是条件正定，提取子块可能为负）
-        # energy_grad = torch.matmul(c_grad.T, torch.matmul(A_grad_core, c_grad)).squeeze()
-        # energy_scal = torch.matmul(w_scal.T, torch.matmul(A_scal_core, w_scal)).squeeze()
-        # loss_energy = torch.clamp(energy_grad, min=0.0) + torch.clamp(energy_scal, min=0.0)
-        loss_energy = 0.0
+        # 插值能量：投影点处插值场的 Laplacian 的平方
+        # 对 Eikonal 函数 |∇f|=1，Δf = κ（曲率），最小化 Δf² 即鼓励低曲率
+        N_proj = N_cf - N
+        if N_proj > 0:
+            proj_pts = all_base_points[N:].detach().requires_grad_(True)  # (N_proj, 2)
+            f_at_proj = evaluate_full_field_with_projection(
+                proj_pts, all_base_points.detach(), c_grad, p_grad, w_scal, p_scal)
+            # 一阶梯度
+            grad_f = torch.autograd.grad(
+                f_at_proj.sum(), proj_pts, create_graph=True)[0]          # (N_proj, 2)
+            # 二阶：∂²f/∂x² 和 ∂²f/∂y²
+            df_dx = grad_f[:, 0]  # (N_proj,)
+            df_dy = grad_f[:, 1]  # (N_proj,)
+            d2f_dx2 = torch.autograd.grad(
+                df_dx.sum(), proj_pts, create_graph=True)[0][:, 0]        # (N_proj,)
+            d2f_dy2 = torch.autograd.grad(
+                df_dy.sum(), proj_pts, create_graph=True)[0][:, 1]        # (N_proj,)
+            laplacian = d2f_dx2 + d2f_dy2                                 # (N_proj,)
+            loss_energy = torch.mean(laplacian ** 2)
+        else:
+            loss_energy = c_grad.new_zeros(1).squeeze()
+        # loss_energy = 0.0
         
         # 总损失：投影误差 + Eikonal 约束 + 插值能量
         if hard_eikonal:
@@ -372,7 +390,7 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
         optimizer.step()
         
         if (i+1) % 500 == 0 or i == 0:
-            print(f"Step {i+1:3d} | Proj: {loss_proj.item():.6e}  Eikonal: {loss_eikonal.item():.6e}  Energy: {loss_energy:.6e}  Total: {loss.item():.6e}")
+            print(f"Step {i+1:3d} | Proj: {loss_proj.item():.6e}  Energy: {loss_energy:.6e}  Eikonal: {loss_eikonal.item():.6e}  Total: {loss.item():.6e}")
             
     if hard_eikonal:
         final_grads_x = torch.cos(theta)

@@ -67,6 +67,8 @@ class CurlFree_Interpolator:
         """
         根据给定的 SDF 点集、距离值和梯度进行插值拟合。
         """
+        if self.trained:
+            return
         self.X_train = np.asarray(sdf_points)
         sdf_values = np.asarray(sdf_values)
         sdf_gradients = np.asarray(sdf_gradients)
@@ -564,52 +566,110 @@ class Interpolator:
 
         return gradients
     
-    def sample_best_gradient(self, x_new, sdf, num_samples=10):
+    def sample_best_gradient(self, x_new, sdf, num_coarse=24, tol=1e-6):
         """
-        Sample a series of gradients around the input point x_new and project the x_new to the surface along that gradient.
-        Predict the SDF values and return the gradient that has the smallest absolute predicted value.
+        Find the best gradient direction by coarse sweep + bounded scalar optimization.
+
+        First performs a coarse uniform sweep over the unit circle (plus the RBF-predicted
+        gradient) to locate a promising angular region, then refines with
+        scipy.optimize.minimize_scalar for high precision.
 
         Parameters:
         x_new (np.ndarray): An array of shape (dimensions,) representing the new input point.
         sdf (float): The signed distance value at the input point.
-        num_samples (int): The number of directions to sample around the input point. Default is 10.
+        num_coarse (int): Number of uniformly spaced directions in the coarse sweep. Default is 24.
+        tol (float): Absolute tolerance for the angular refinement. Default is 1e-6.
 
         Returns:
-        np.ndarray: An array of shape (dimensions,) representing the best gradient direction for the input point.
+        np.ndarray: An array of shape (dimensions,) representing the best gradient direction.
         """
-        # divide the unit circle into num_samples directions uniformly in 2D
-        angles = np.linspace(0, 2 * np.pi, num_samples, endpoint=False)
-        directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)
-        directions = np.vstack([directions, self.predict_gradient(x_new.reshape(1, -1))])  # Add the predicted gradient as an additional direction
-        samples = x_new - sdf * directions
-        predictions = self.predict(samples)
-        if sdf > 0:
-            best_idx = np.argmin(predictions)  # For points outside the surface, we want to minimize the predicted SDF
-        else:
-            best_idx = np.argmax(predictions)  # For points inside the surface, we want to maximize the predicted SDF
-        return directions[best_idx] / np.linalg.norm(directions[best_idx])  # Normalize the best direction
+        from scipy.optimize import minimize_scalar
+
+        sign = 1.0 if sdf > 0 else -1.0
+
+        def objective(angle):
+            direction = np.array([np.cos(angle), np.sin(angle)])
+            sample = (x_new - sdf * direction).reshape(1, -1)
+            return sign * self.predict(sample)[0]
+
+        # Coarse sweep (uniform + predicted gradient direction)
+        angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)
+        pred_grad = self.predict_gradient(x_new.reshape(1, -1)).ravel()
+        pred_angle = np.arctan2(pred_grad[1], pred_grad[0])
+        all_angles = np.append(angles, pred_angle)
+
+        all_dirs = np.stack([np.cos(all_angles), np.sin(all_angles)], axis=1)
+        samples = x_new - sdf * all_dirs
+        preds = self.predict(samples)
+        obj_vals = sign * preds
+        best_idx = np.argmin(obj_vals)
+        best_angle = all_angles[best_idx]
+
+        # Refine with bounded scalar optimization around the best coarse angle
+        delta = np.pi / num_coarse
+        result = minimize_scalar(objective,
+                                 bounds=(best_angle - delta, best_angle + delta),
+                                 method='bounded',
+                                 options={'xatol': tol})
+        best_angle = result.x
+        direction = np.array([np.cos(best_angle), np.sin(best_angle)])
+        return direction
     
-    def sample_best_gradients(self, x_new: np.ndarray, sdf: np.ndarray, num_samples=50):
+    def sample_best_gradients(self, x_new: np.ndarray, sdf: np.ndarray,
+                               num_coarse=24, refine_steps=4, num_refine=12):
         """
-        Batch version of sample_best_gradient for multiple input points. Sample a series of gradients around each input point and project the points to the surface along those gradients.
-        Predict the SDF values and return the gradients that have the smallest absolute predicted value for each point.
-        
+        Batch version: find best gradient directions via coarse sweep + iterative
+        narrowing refinement (similar to binary search on the angle).
+
+        Phase 1 — coarse uniform sweep over the full circle to locate the best
+        angular region per point.
+        Phase 2 — repeatedly zoom into a smaller interval around the current best
+        angle and re-evaluate, shrinking the search window each iteration.
+
         Parameters:
-        x_new (np.ndarray): An array of shape (batch_size, dimensions) representing the new input points.
-        sdf (np.ndarray): An array of shape (batch_size,) representing the signed distance values at the input points.
-        num_samples (int): The number of directions to sample around each input point. Default is 10.
+        x_new (np.ndarray): Shape (batch_size, dimensions) — input points.
+        sdf (np.ndarray): Shape (batch_size,) — signed distance values.
+        num_coarse (int): Directions in the initial coarse sweep. Default 24.
+        refine_steps (int): Number of zoom-in refinement iterations. Default 4.
+        num_refine (int): Directions evaluated per refinement step. Default 12.
 
         Returns:
-        np.ndarray: An array of shape (batch_size, dimensions) representing the best gradient directions for each input point.
+        np.ndarray: Shape (batch_size, dimensions) — best gradient directions (unit vectors).
         """
-        # divide the unit circle into num_samples directions uniformly in 2D
-        angles = np.linspace(0, 2 * np.pi, num_samples, endpoint=False)
-        directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)  # Shape (num_samples, 2)
         batch_size = x_new.shape[0]
-        # directions = np.vstack([directions, self.predict_gradient(x_new).reshape(-1, 2)])  # Add the predicted gradients as additional directions, shape (num_samples + batch_size, 2)
-        samples = x_new[:, np.newaxis, :] - sdf[:, np.newaxis, np.newaxis] * directions[np.newaxis, :, :]  # Shape (batch_size, num_samples + batch_size, 2)
-        predictions = self.predict(samples.reshape(-1, 2)).reshape(batch_size, -1)  # Shape (batch_size, num_samples + batch_size)
-        best_indices = np.where(sdf.ravel() > 0, np.argmin(predictions, axis=1), np.argmax(predictions, axis=1))  # Shape (batch_size,)
-        best_directions = directions[best_indices]  # Shape (batch_size, 2)
-        best_directions /= np.linalg.norm(best_directions, axis=1, keepdims=True)  # Normalize the best directions
-        return best_directions
+        sdf_flat = sdf.ravel()
+        sign = np.where(sdf_flat > 0, 1.0, -1.0)  # (batch,)
+
+        # --- Phase 1: coarse sweep ---
+        angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)  # (C,)
+        dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)       # (C, 2)
+
+        # samples: (batch, C, 2)
+        samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs[None, :, :]
+        preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_coarse)
+        obj = preds * sign[:, None]
+        best_idx = np.argmin(obj, axis=1)           # (batch,)
+        best_angles = angles[best_idx]              # (batch,)
+
+        # --- Phase 2: iterative refinement ---
+        half_range = np.pi / num_coarse  # initial half-width of search window
+
+        for _ in range(refine_steps):
+            offsets = np.linspace(-1.0, 1.0, num_refine)               # (R,)
+            local_angles = best_angles[:, None] + half_range * offsets  # (batch, R)
+
+            cos_a = np.cos(local_angles)  # (batch, R)
+            sin_a = np.sin(local_angles)
+            # samples: (batch, R, 2)
+            samples = x_new[:, None, :] - sdf_flat[:, None, None] * np.stack([cos_a, sin_a], axis=2)
+            preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_refine)
+            obj = preds * sign[:, None]
+            best_local = np.argmin(obj, axis=1)
+            best_angles = local_angles[np.arange(batch_size), best_local]
+
+            # Shrink window: next half_range = one spacing of current grid
+            half_range = 2.0 * half_range / (num_refine - 1)
+
+        best_dirs = np.stack([np.cos(best_angles), np.sin(best_angles)], axis=1)
+        best_dirs /= np.linalg.norm(best_dirs, axis=1, keepdims=True)
+        return best_dirs
