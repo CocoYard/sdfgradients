@@ -1,27 +1,25 @@
 import torch
-import torch.nn.functional as F
 import numpy as np
-import sys
 
 def build_two_step_macedo_matrices_with_projection(points, values, init_gradients, min_proj_distance=1e-8):
     """
-    改进版两步法矩阵构建，使用投影点增强梯度插值。
-    投影点位置：P_proj = P - S * d
+    Improved two-step matrix construction using projected points to enhance gradient interpolation.
+    Projected point position: P_proj = P - S * d
     
-    与 interpolation.py 中的 CurlFree_Interpolator 相同策略：
-    - 过滤掉与已有点距离太近的投影点
-    - 在所有基点（原始 + 有效投影点）上同时约束梯度
-    - 构建方阵系统 (2*N_cf+5, 2*N_cf+5)，避免奇异矩阵
+    Same strategy as CurlFree_Interpolator in interpolation.py:
+    - Filter out projected points too close to existing points
+    - Constrain gradients on all base points (original + valid projected)
+    - Build a square system (2*N_cf+5, 2*N_cf+5) to avoid singular matrices
     
-    返回: A_grad, A_scalar, all_base_points, valid_mask
+    Returns: A_grad, A_scalar, all_base_points, valid_mask
     """
     N, d = points.shape
     device, dtype = points.device, points.dtype
     
-    # 计算投影点：P_proj = P - S * d
+    # Compute projected points: P_proj = P - S * d
     projected_points = points - values.unsqueeze(1) * init_gradients
     
-    # 过滤投影点：保留与所有已有点距离足够远的投影点
+    # Filter projected points: keep only those far enough from all existing points
     valid_mask = torch.ones(N, dtype=torch.bool, device=device)
     for i in range(N):
         dists_to_orig = torch.norm(projected_points[i] - points, dim=1)
@@ -41,9 +39,9 @@ def build_two_step_macedo_matrices_with_projection(points, values, init_gradient
     #       f"total CF base points: {N_cf}")
     
     # ==========================================
-    # Step 1: 梯度插值矩阵 A_grad (Curl-free)
-    # 基于 PHS phi(r) = r^4 log r 的 Hessian
-    # 在所有 N_cf 个基点上约束梯度 → 方阵 (2*N_cf+5, 2*N_cf+5)
+    # Step 1: Gradient interpolation matrix A_grad (Curl-free)
+    # Based on Hessian of PHS phi(r) = r^4 log r
+    # Constrain gradients on all N_cf base points -> square system (2*N_cf+5, 2*N_cf+5)
     # ==========================================
     delta = all_base_points.unsqueeze(1) - all_base_points.unsqueeze(0)
     r2 = torch.sum(delta**2, dim=-1)
@@ -58,7 +56,7 @@ def build_two_step_macedo_matrices_with_projection(points, values, init_gradient
     
     A_grad_core = H_blocks.permute(0, 2, 1, 3).reshape(N_cf * d, N_cf * d)
     
-    # 多项式约束矩阵 (2*N_cf, 5)
+    # Polynomial constraint matrix (2*N_cf, 5)
     P_grad = torch.zeros((2 * N_cf, 5), device=device, dtype=dtype)
     P_grad[0::2, 0] = 1.0
     P_grad[1::2, 1] = 1.0
@@ -70,10 +68,10 @@ def build_two_step_macedo_matrices_with_projection(points, values, init_gradient
     A_grad = torch.cat([
         torch.cat([A_grad_core, P_grad], dim=1),
         torch.cat([P_grad.T, torch.zeros((5, 5), device=device, dtype=dtype)], dim=1)
-    ], dim=0)  # (2*N_cf+5, 2*N_cf+5) — 方阵
+    ], dim=0)  # (2*N_cf+5, 2*N_cf+5) -- square matrix
     
     # ==========================================
-    # Step 2: 残差插值矩阵 A_scalar（只用原始 N 个点）
+    # Step 2: Residual interpolation matrix A_scalar (original N points only)
     # ==========================================
     delta_orig = points.unsqueeze(1) - points.unsqueeze(0)
     r2_orig = torch.sum(delta_orig**2, dim=-1)
@@ -91,7 +89,7 @@ def build_two_step_macedo_matrices_with_projection(points, values, init_gradient
         torch.cat([E_scal.T, torch.zeros((3, 3), device=device, dtype=dtype)], dim=1)
     ], dim=0)
     
-    # 正则化
+    # Regularization
     A_grad += torch.eye(A_grad.shape[0], device=device, dtype=dtype) * 1e-10
     A_scalar += torch.eye(A_scalar.shape[0], device=device, dtype=dtype) * 1e-10
     
@@ -99,9 +97,9 @@ def build_two_step_macedo_matrices_with_projection(points, values, init_gradient
 
 def build_two_step_macedo_matrices(points):
     """
-    严格按照论文构建两步法矩阵。
-    第一步（梯度）：PHS 核 phi(r) = r^4 log(r) 的 Hessian 用于梯度插值
-    第二步（残差）：TPS 核 phi(r) = r^2 log(r)，对应 P_1 多项式空间（3个基）
+    Build two-step matrices strictly following the paper.
+    Step 1 (gradient): Hessian of PHS kernel phi(r) = r^4 log(r) for gradient interpolation
+    Step 2 (residual): TPS kernel phi(r) = r^2 log(r) with P_1 polynomial space (3 bases)
     """
     N, d = points.shape
     device, dtype = points.device, points.dtype
@@ -110,12 +108,12 @@ def build_two_step_macedo_matrices(points):
     r2 = torch.sum(delta**2, dim=-1)
     r = torch.sqrt(r2)
     
-    # 安全的 log(r) 计算，防止 r=0 时出现 NaN
+    # Safe log(r) computation to prevent NaN when r=0
     log_r = torch.where(r < 1e-12, torch.zeros_like(r), torch.log(r))
     
     # ==========================================
-    # Step 1: 梯度插值矩阵 A_grad (Curl-free)
-    # 基于 PHS phi(r) = r^4 log r 的 Hessian:
+    # Step 1: Gradient interpolation matrix A_grad (Curl-free)
+    # Based on Hessian of PHS phi(r) = r^4 log r:
     # H = r^2(4 log r + 1)I + (8 log r + 6)(delta @ delta^T)
     # ==========================================
     I = torch.eye(d, device=device, dtype=dtype).view(1, 1, d, d)
@@ -126,14 +124,14 @@ def build_two_step_macedo_matrices(points):
                
     A_grad_core = H_blocks.permute(0, 2, 1, 3).reshape(N * d, N * d)
     
-    # 梯度的多项式约束矩阵 (2N, 5)，对应势函数 P_2 去掉常数项
+    # Polynomial constraint matrix for gradients (2N, 5), corresponding to P_2 potential without constant term
     P_grad = torch.zeros((2 * N, 5), device=device, dtype=dtype)
-    P_grad[0::2, 0] = 1.0         # px 的常数项
-    P_grad[1::2, 1] = 1.0         # py 的常数项
-    P_grad[0::2, 2] = points[:, 1]  # x*y 的 x 分量
-    P_grad[1::2, 2] = points[:, 0]  # x*y 的 y 分量
-    P_grad[0::2, 3] = points[:, 0]  # x^2 系数
-    P_grad[1::2, 4] = points[:, 1]  # y^2 系数
+    P_grad[0::2, 0] = 1.0         # constant term for px
+    P_grad[1::2, 1] = 1.0         # constant term for py
+    P_grad[0::2, 2] = points[:, 1]  # x-component of x*y
+    P_grad[1::2, 2] = points[:, 0]  # y-component of x*y
+    P_grad[0::2, 3] = points[:, 0]  # x^2 coefficient
+    P_grad[1::2, 4] = points[:, 1]  # y^2 coefficient
     
     A_grad = torch.cat([
         torch.cat([A_grad_core, P_grad], dim=1),
@@ -141,12 +139,12 @@ def build_two_step_macedo_matrices(points):
     ], dim=0)
     
     # ==========================================
-    # Step 2: 残差插值矩阵 A_scalar
-    # 2D TPS: phi = r^2 log r，P_1 多项式空间（3个基）
+    # Step 2: Residual interpolation matrix A_scalar
+    # 2D TPS: phi = r^2 log r, P_1 polynomial space (3 bases)
     # ==========================================
     A_scal_core = r2 * log_r  # r^2 log r
     
-    # 势函数的多项式尾巴 P_1(x, y) = a_0 + a_1*x + a_2*y
+    # Polynomial tail P_1(x, y) = a_0 + a_1*x + a_2*y
     E_scal = torch.cat([
         torch.ones((N, 1), device=device, dtype=dtype),
         points
@@ -156,7 +154,7 @@ def build_two_step_macedo_matrices(points):
         torch.cat([E_scal.T, torch.zeros((3, 3), device=device, dtype=dtype)], dim=1)
     ], dim=0)
     
-    # 极小扰动保证 LU 分解安全
+    # Tiny perturbation to ensure safe LU factorization
     A_grad += torch.eye(A_grad.shape[0], device=device, dtype=dtype) * 1e-10
     A_scalar += torch.eye(A_scalar.shape[0], device=device, dtype=dtype) * 1e-10
     
@@ -164,15 +162,15 @@ def build_two_step_macedo_matrices(points):
 
 def _safe_r_logr(r2):
     """
-    从 r^2 安全计算 r 和 log(r)，前向和反向传播都不产生 inf/NaN。
-    对 r=0 的位置，返回 r=0, log_r=0（核函数值恰好为 0，因为
-    grad_phi ∝ delta=0, TPS ∝ r^2*log_r → 0·(-∞)=0）。
+    Safely compute r and log(r) from r^2, producing no inf/NaN in forward or backward pass.
+    For r=0 positions, returns r=0, log_r=0 (kernel values are exactly 0 since
+    grad_phi is proportional to delta=0, TPS is proportional to r^2*log_r -> 0*(-inf)=0).
     """
     eps = 1e-24
-    r2_safe = r2 + eps                     # 保证 >0，sqrt 梯度有限
+    r2_safe = r2 + eps                     # Ensure >0, finite sqrt gradient
     r = torch.sqrt(r2_safe)
     log_r = 0.5 * torch.log(r2_safe)       # log(sqrt(r2+eps))
-    # 将真正 r≈0 的位置的 log_r 置零（核函数在对角线上本身为 0）
+    # Zero out log_r where r is truly ~0 (kernel is 0 on the diagonal anyway)
     mask = (r2 < 1e-20)
     log_r = log_r.masked_fill(mask, 0.0)
     r = r.masked_fill(mask, 0.0)
@@ -180,7 +178,7 @@ def _safe_r_logr(r2):
 
 def evaluate_full_field(target_points, base_points, c_grad, p_grad, w_scal, p_scal):
     """
-    计算总势函数场 f(x) = Phi_grad(x) + S_res(x)
+    Evaluate the total potential field f(x) = Phi_grad(x) + S_res(x)
     """
     N_base = base_points.shape[0]
     
@@ -188,7 +186,7 @@ def evaluate_full_field(target_points, base_points, c_grad, p_grad, w_scal, p_sc
     r2 = torch.sum(delta**2, dim=-1)
     r, log_r = _safe_r_logr(r2)
     
-    # 1. 计算无旋势函数 Phi_grad(x)
+    # 1. Compute curl-free potential Phi_grad(x)
     grad_phi_blocks = r2.unsqueeze(-1) * (4 * log_r.unsqueeze(-1) + 1.0) * delta
     c_reshaped = c_grad.view(N_base, 2)
     Phi_rbf = torch.einsum('tbd,bd->t', grad_phi_blocks, c_reshaped)
@@ -198,7 +196,7 @@ def evaluate_full_field(target_points, base_points, c_grad, p_grad, w_scal, p_sc
     Phi_poly = p_grad[0]*x + p_grad[1]*y + p_grad[2]*x*y + 0.5*p_grad[3]*x**2 + 0.5*p_grad[4]*y**2
     Phi = Phi_rbf + Phi_poly
     
-    # 2. 计算残差标量场 S_res(x)
+    # 2. Compute residual scalar field S_res(x)
     S_phi = r2 * log_r
     S_val = torch.matmul(S_phi, w_scal).squeeze()
     S_poly = p_scal[0] + p_scal[1]*x + p_scal[2]*y
@@ -207,16 +205,16 @@ def evaluate_full_field(target_points, base_points, c_grad, p_grad, w_scal, p_sc
 
 def evaluate_full_field_with_projection(target_points, base_points, c_grad, p_grad, w_scal, p_scal):
     """
-    计算总势函数场 f(x) = Phi_grad(x) + S_res(x)
+    Evaluate the total potential field f(x) = Phi_grad(x) + S_res(x)
     
-    base_points: 梯度插值基点（原点 + 有效投影点）
-    w_scal: 残差插值系数，对应原始 N 个点
+    base_points: gradient interpolation base points (original + valid projected)
+    w_scal: residual interpolation coefficients, corresponding to the original N points
     """
     N_base = base_points.shape[0]
     N_orig = w_scal.shape[0]
     base_points_orig = base_points[:N_orig]
     
-    # --- 梯度势函数（使用所有基点）---
+    # --- Gradient potential (using all base points) ---
     delta = target_points.unsqueeze(1) - base_points.unsqueeze(0)
     r2 = torch.sum(delta**2, dim=-1)
     r, log_r = _safe_r_logr(r2)
@@ -230,7 +228,7 @@ def evaluate_full_field_with_projection(target_points, base_points, c_grad, p_gr
     Phi_poly = p_grad[0]*x + p_grad[1]*y + p_grad[2]*x*y + 0.5*p_grad[3]*x**2 + 0.5*p_grad[4]*y**2
     Phi = Phi_rbf + Phi_poly
     
-    # --- 残差标量场（只用原始基点）---
+    # --- Residual scalar field (original base points only) ---
     delta_orig = target_points.unsqueeze(1) - base_points_orig.unsqueeze(0)
     r2_orig = torch.sum(delta_orig**2, dim=-1) # 2x2
     _, log_r_orig = _safe_r_logr(r2_orig)
@@ -241,7 +239,27 @@ def evaluate_full_field_with_projection(target_points, base_points, c_grad, p_gr
     
     return Phi + (S_val + S_poly)
 
-def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_every=50, hard_eikonal=False):
+def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_every=1, hard_eikonal=False,
+        w_proj=1.0, w_smooth=1, w_init=0.01, w_eikonal=0.1, k_neighbors=6):
+    """
+    Optimize the SDF gradient field to be consistent with the given SDF values.
+    
+    Loss function design:
+      1. Bilateral projection loss: f(P - s*g)^2 -> 0
+         Projected points should lie on the zero level set; minimize f^2 directly.
+      2. Gradient smoothness loss (k-NN): sum w_ij (1 - g_i . g_j)^2
+         Penalize inconsistent gradient directions between neighbors to prevent winding.
+      3. Initial gradient anchor: ||g - g_init||^2
+         Mild regularization to prevent gradients from drifting far from the initial estimate.
+      4. Eikonal constraint (soft mode): (|g| - 1)^2
+    
+    Parameters:
+        w_proj:      Projection loss weight (default 1.0)
+        w_smooth:    Smoothness loss weight (default 0.1)
+        w_init:      Initial gradient anchor weight (default 0.01)
+        w_eikonal:   Eikonal constraint weight (default 0.1, soft mode only)
+        k_neighbors: Number of k-NN neighbors for smoothness loss (default 6)
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float64
     print(f"Device: {device}, dtype: {dtype}")
@@ -250,28 +268,45 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
     values = torch.tensor(values_np, dtype=dtype, device=device).squeeze()
     N = points.shape[0]
     
+    # Normalized initial gradients (for anchor loss)
+    init_grads_tensor = torch.tensor(init_grads_np, dtype=dtype, device=device)
+    init_grads_tensor = init_grads_tensor / (torch.norm(init_grads_tensor, dim=1, keepdim=True) + 1e-12)
+    
+    # ==========================================
+    # Precompute k-NN graph (static, computed once)
+    # ==========================================
+    with torch.no_grad():
+        k = min(k_neighbors, N - 1)
+        dists_matrix = torch.cdist(points, points)  # (N, N)
+        _, knn_idx = torch.topk(dists_matrix, k + 1, largest=False)
+        knn_idx = knn_idx[:, 1:]  # Exclude self -> (N, k)
+        # Inverse distance weights: closer neighbors have more influence
+        knn_dists = torch.gather(dists_matrix, 1, knn_idx)  # (N, k)
+        knn_weights = 1.0 / (knn_dists + 1e-10)
+        knn_weights = knn_weights / knn_weights.sum(dim=1, keepdim=True)  # Normalize
+    
     if hard_eikonal:
-        # Eikonal 硬约束：只优化 theta，梯度自动满足 |g|=1
+        # Eikonal hard constraint: optimize theta only, gradients automatically satisfy |g|=1
         init_angles = np.arctan2(init_grads_np[:, 1], init_grads_np[:, 0])
         theta = torch.tensor(init_angles, dtype=dtype, device=device, requires_grad=True)
         opt_params = [theta]
     else:
-        # 软约束：直接优化梯度向量，用 Eikonal loss 惩罚偏离单位长度
+        # Soft constraint: optimize gradient vectors directly, penalize deviation from unit length
         grads_param = torch.tensor(init_grads_np, dtype=dtype, device=device, requires_grad=True)
         opt_params = [grads_param]
     
-    # surface_weights = torch.ones_like(values)
-    surface_weights = torch.exp(-torch.abs(values) * 10)
+    # Gentle decay weights: unlike exp(-|s|*10), does not aggressively ignore far-from-surface points
+    surface_weights = 1.0 / (1.0 + torch.abs(values))
     
     def rebuild_matrices(current_grads_detached):
-        """用当前（detached）梯度重新计算投影点并分解矩阵。"""
+        """Recompute projected points and factorize matrices using current (detached) gradients."""
         A_g, A_s, base_pts, v_mask = build_two_step_macedo_matrices_with_projection(
             points, values, current_grads_detached)
         LU_g, piv_g = torch.linalg.lu_factor(A_g)
         LU_s, piv_s = torch.linalg.lu_factor(A_s)
         return A_g, A_s, base_pts, v_mask, LU_g, piv_g, LU_s, piv_s
     
-    # 初始构建
+    # Initial construction
     print("Building two-step matrices with projection (initial)...")
     with torch.no_grad():
         if hard_eikonal:
@@ -281,15 +316,15 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
     A_grad, A_scalar, all_base_points, valid_mask, LU_grad, pivots_grad, LU_scal, pivots_scal = \
         rebuild_matrices(cur_grads)
     N_cf = all_base_points.shape[0]
-    A_grad_core = A_grad[:2*N_cf, :2*N_cf]
-    A_scal_core = A_scalar[:N, :N]
     
     optimizer = torch.optim.Adam(opt_params, lr=lr)
     
-    print(f"Starting optimization (rebuild matrices every {rebuild_every} steps, "
-          f"hard_eikonal={hard_eikonal})...")
+    print(f"Starting optimization (rebuild every {rebuild_every} steps, "
+          f"hard_eikonal={hard_eikonal}, k={k})...")
+    print(f"Weights: proj={w_proj}, smooth={w_smooth}, init={w_init}, eikonal={w_eikonal}")
+    
     for i in range(num_iter):
-        # 每隔 rebuild_every 步用当前梯度重新计算投影点和矩阵分解
+        # Recompute projected points and matrix factorization every rebuild_every steps
         if i > 0 and i % rebuild_every == 0:
             with torch.no_grad():
                 if hard_eikonal:
@@ -299,8 +334,6 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
             A_grad, A_scalar, all_base_points, valid_mask, LU_grad, pivots_grad, LU_scal, pivots_scal = \
                 rebuild_matrices(cur_grads)
             N_cf = all_base_points.shape[0]
-            A_grad_core = A_grad[:2*N_cf, :2*N_cf]
-            A_scal_core = A_scalar[:N, :N]
         
         optimizer.zero_grad()
         
@@ -313,21 +346,26 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
             grads_x = grads[:, 0]
             grads_y = grads[:, 1]
         
-        # Eikonal 约束
-        grad_norms = torch.sqrt(grads_x**2 + grads_y**2)
-        loss_eikonal = torch.mean((grad_norms - 1.0)**2)
+        # Normalize gradient directions (for smoothness and anchor losses)
+        grad_norms = torch.norm(grads, dim=1, keepdim=True)
+        grads_normalized = grads / (grad_norms + 1e-12)
         
-        # 在所有基点上约束梯度（投影点梯度 = 对应原始点梯度）
+        # =========================================
+        # Loss 1: Eikonal constraint (|g| - 1)^2
+        # =========================================
+        loss_eikonal = torch.mean((grad_norms.squeeze() - 1.0)**2)
+        
+        # Constrain gradients on all base points (projected point gradients = corresponding original gradients)
         all_grads = torch.cat([grads, grads[valid_mask]], dim=0)  # (N_cf, 2)
         
-        # --- 两步法 ---
-        # Step 1: 解 Curl-free 梯度系数
+        # --- Two-step solve for interpolation coefficients ---
+        # Step 1: Solve curl-free gradient coefficients
         y_grad = torch.cat([all_grads.view(-1, 1), torch.zeros((5, 1), device=device, dtype=dtype)], dim=0)
         coeffs_grad_all = torch.linalg.lu_solve(LU_grad, pivots_grad, y_grad)
         c_grad = coeffs_grad_all[:2*N_cf]
         p_grad = coeffs_grad_all[2*N_cf:]
         
-        # Step 2: 算残差并求解标量系数
+        # Step 2: Compute residual and solve scalar coefficients
         Phi_at_points = evaluate_full_field_with_projection(
             points, all_base_points, c_grad, p_grad,
             torch.zeros(N, 1, device=device, dtype=dtype),
@@ -339,48 +377,48 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
         w_scal = coeffs_scal_all[:N]
         p_scal = coeffs_scal_all[N:]
         
-        # --- 单侧投影 Loss ---
+        # =========================================
+        # Loss 2: Bilateral projection loss f(P - s*g)^2 -> 0
+        # Projected points should lie near the zero level set; minimize f^2 directly.
+        # Stronger than one-sided ReLU: requires both correct sign and near-zero value.
+        # =========================================
         p_proj = points - values.unsqueeze(1) * grads
         projected_values = evaluate_full_field_with_projection(
             p_proj, all_base_points, c_grad, p_grad, w_scal, p_scal)
+        loss_proj = torch.mean(surface_weights * projected_values**2)
         
-        # 单侧惩罚：sign(s) * f(proj) > 0 → 违反（投影点应该穿过零等值面）
-        signed_violation = torch.sign(values) * projected_values
-        violation = F.relu(signed_violation)
-        loss_proj = torch.mean(surface_weights * (violation**2))
+        # =========================================
+        # Loss 3: Gradient field smoothness loss (k-NN Dirichlet energy)
+        # Penalize inconsistent gradient directions between neighbors -> prevent winding and jumps
+        # Uses (1 - cos theta) as angular deviation measure
+        # =========================================
+        neighbor_grads = grads_normalized[knn_idx]  # (N, k, 2)
+        dot_products = torch.sum(
+            grads_normalized.unsqueeze(1) * neighbor_grads, dim=-1)  # (N, k)
+        # Clamp to prevent numerical errors exceeding 1
+        dot_products = torch.clamp(dot_products, -1.0, 1.0)
+        angular_diff = 1.0 - dot_products  # 0=fully aligned, 2=fully opposite
+        loss_smooth = torch.mean(knn_weights * angular_diff**2)
         
-        # 插值能量：投影点处插值场的 Laplacian 的平方
-        # 对 Eikonal 函数 |∇f|=1，Δf = κ（曲率），最小化 Δf² 即鼓励低曲率
-        N_proj = N_cf - N
-        if N_proj > 0:
-            proj_pts = all_base_points[N:].detach().requires_grad_(True)  # (N_proj, 2)
-            f_at_proj = evaluate_full_field_with_projection(
-                proj_pts, all_base_points.detach(), c_grad, p_grad, w_scal, p_scal)
-            # 一阶梯度
-            grad_f = torch.autograd.grad(
-                f_at_proj.sum(), proj_pts, create_graph=True)[0]          # (N_proj, 2)
-            # 二阶：∂²f/∂x² 和 ∂²f/∂y²
-            df_dx = grad_f[:, 0]  # (N_proj,)
-            df_dy = grad_f[:, 1]  # (N_proj,)
-            d2f_dx2 = torch.autograd.grad(
-                df_dx.sum(), proj_pts, create_graph=True)[0][:, 0]        # (N_proj,)
-            d2f_dy2 = torch.autograd.grad(
-                df_dy.sum(), proj_pts, create_graph=True)[0][:, 1]        # (N_proj,)
-            laplacian = d2f_dx2 + d2f_dy2                                 # (N_proj,)
-            loss_energy = torch.mean(laplacian ** 2)
-        else:
-            loss_energy = c_grad.new_zeros(1).squeeze()
-        # loss_energy = 0.0
+        # =========================================
+        # Loss 4: Initial gradient anchor (mild regularization)
+        # Prevent gradients from drifting far from initial estimate
+        # =========================================
+        loss_init = torch.mean(torch.sum(
+            (grads_normalized - init_grads_tensor)**2, dim=1))
         
-        # 总损失：投影误差 + Eikonal 约束 + 插值能量
+        # =========================================
+        # Total loss
+        # =========================================
         if hard_eikonal:
-            loss = loss_proj + 0.01 * loss_energy
+            loss = w_proj * loss_proj + w_smooth * loss_smooth + w_init * loss_init
         else:
-            loss = loss_proj + 0.01 * loss_energy + 0.1 * loss_eikonal
+            loss = ( w_smooth * loss_smooth +
+                    w_init * loss_init + w_eikonal * loss_eikonal)
         
         loss.backward()
         
-        # NaN 检测 & 梯度裁剪
+        # NaN detection & gradient clipping
         param = theta if hard_eikonal else grads_param
         if torch.isnan(param.grad).any():
             print(f"  !! NaN gradient detected at step {i+1}, skipping update")
@@ -389,8 +427,12 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
         torch.nn.utils.clip_grad_norm_([param], max_norm=1.0)
         optimizer.step()
         
-        if (i+1) % 500 == 0 or i == 0:
-            print(f"Step {i+1:3d} | Proj: {loss_proj.item():.6e}  Energy: {loss_energy:.6e}  Eikonal: {loss_eikonal.item():.6e}  Total: {loss.item():.6e}")
+        if (i+1) % 100 == 0 or i == 0:
+            print(f"Step {i+1:3d} | Proj: {loss_proj.item():.6e}  "
+                  f"Smooth: {loss_smooth.item():.6e}  "
+                  f"Init: {loss_init.item():.6e}  "
+                  f"Eikonal: {loss_eikonal.item():.6e}  "
+                  f"Total: {loss.item():.6e}")
             
     if hard_eikonal:
         final_grads_x = torch.cos(theta)
