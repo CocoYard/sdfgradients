@@ -5,10 +5,25 @@ class CurlFree_Interpolator:
     """
     基于旋度自由 RBF (Curl-Free RBF) 和标量薄板样条 (Thin-Plate Spline) 
     的 SDF 全局插值器。
+    
+    当 use_projection=True 时，会将原始采样点沿梯度方向投影到表面附近，
+    作为额外的梯度约束点，增强插值精度。
     """
-    def __init__(self):
+    def __init__(self, use_projection=False, min_proj_distance=1e-8):
+        """
+        Parameters:
+            use_projection: 是否使用投影点增强梯度插值
+            min_proj_distance: 投影点与所有已有点的最小距离阈值，
+                               低于此距离的投影点将被丢弃以避免矩阵病态
+        """
         self.X_train = None
         self.N = 0
+        self.use_projection = use_projection
+        self.min_proj_distance = min_proj_distance
+        
+        # 梯度插值使用的所有基点（原始 + 有效投影点）
+        self.X_cf_base = None
+        self.N_cf = 0  # 梯度插值的基点数量
         
         # 旋度自由基底系数
         self.c_cf = None 
@@ -18,7 +33,35 @@ class CurlFree_Interpolator:
         self.c_sc = None
         self.b_sc = None
 
+        # 标量残差插值使用的基点（原始 + 有效投影点）
+        self.X_sc_base = None
+        self.N_sc = 0
+
         self.trained = False
+
+    def _filter_projected_points(self, original_points, projected_points, gradients):
+        """
+        过滤投影点：只保留与所有已有点（原始+已接受的投影点）距离足够远的投影点。
+        返回有效投影点的索引。
+        """
+        N = original_points.shape[0]
+        valid_mask = np.ones(N, dtype=bool)
+        
+        for i in range(N):
+            # 检查投影点到所有原始点的距离
+            dists_to_orig = np.linalg.norm(projected_points[i] - original_points, axis=1)
+            if np.min(dists_to_orig) < self.min_proj_distance:
+                valid_mask[i] = False
+                continue
+            
+            # 检查投影点到已接受的其他投影点的距离
+            if np.any(valid_mask[:i]):
+                accepted_proj = projected_points[:i][valid_mask[:i]]
+                dists_to_proj = np.linalg.norm(projected_points[i] - accepted_proj, axis=1)
+                if len(dists_to_proj) > 0 and np.min(dists_to_proj) < self.min_proj_distance:
+                    valid_mask[i] = False
+        
+        return valid_mask
 
     def fit(self, sdf_points, sdf_values, sdf_gradients):
         """
@@ -32,7 +75,28 @@ class CurlFree_Interpolator:
         # ---------------------------------------------------------
         # 阶段 1：利用旋度自由 RBF 拟合 SDF 的梯度场 (产生初始势能场)
         # ---------------------------------------------------------
-        A_cf, P_cf = self._build_cf_matrix(self.X_train)
+        if self.use_projection:
+            # 计算投影点：P_proj = P - S * d
+            projected_points = self.X_train - sdf_values[:, np.newaxis] * sdf_gradients
+            
+            # 过滤掉太近的投影点
+            valid_mask = self._filter_projected_points(self.X_train, projected_points, sdf_gradients)
+            valid_proj = projected_points[valid_mask]
+            valid_proj_grads = sdf_gradients[valid_mask]
+            
+            # 合并原始点和有效投影点
+            self.X_cf_base = np.vstack([self.X_train, valid_proj])
+            self.N_cf = self.X_cf_base.shape[0]
+            all_grads = np.vstack([sdf_gradients, valid_proj_grads])
+            
+            print(f"  Projection: {valid_mask.sum()}/{self.N} projected points accepted, "
+                  f"total CF base points: {self.N_cf}")
+        else:
+            self.X_cf_base = self.X_train
+            self.N_cf = self.N
+            all_grads = sdf_gradients
+        
+        A_cf, P_cf = self._build_cf_matrix_general(self.X_cf_base)
         
         # 组装全局矩阵
         M_cf = np.block([
@@ -40,28 +104,35 @@ class CurlFree_Interpolator:
             [P_cf.T, np.zeros((5, 5))]
         ])
         
-        # 展平梯度数据并组装 RHS
-        u = np.zeros(2 * self.N)
-        u[0::2] = sdf_gradients[:, 0]
-        u[1::2] = sdf_gradients[:, 1]
+        # 展平所有梯度数据并组装 RHS
+        u = np.zeros(2 * self.N_cf)
+        u[0::2] = all_grads[:, 0]
+        u[1::2] = all_grads[:, 1]
         RHS_cf = np.concatenate((u, np.zeros(5)))
         
         # 求解 CF 系数
         sol_cf = np.linalg.solve(M_cf, RHS_cf)
-        self.c_cf = sol_cf[:2 * self.N].reshape((self.N, 2))
-        self.b_cf = sol_cf[2 * self.N:]
+        self.c_cf = sol_cf[:2 * self.N_cf].reshape((self.N_cf, 2))
+        self.b_cf = sol_cf[2 * self.N_cf:]
 
         # ---------------------------------------------------------
         # 阶段 2：计算初始势能场的偏差，并用标量 RBF 拟合残差
+        # 同样使用原始点 + 有效投影点（投影点 SDF=0）
         # ---------------------------------------------------------
-        # 获取采样点上当前的势能估计值
-        initial_potential = self._eval_cf_potential(self.X_train)
+        if self.use_projection:
+            self.X_sc_base = np.vstack([self.X_train, valid_proj])
+            self.N_sc = self.X_sc_base.shape[0]
+            # 投影点的真实 SDF 值为 0
+            all_sdf_for_sc = np.concatenate([sdf_values, np.zeros(len(valid_proj))])
+        else:
+            self.X_sc_base = self.X_train
+            self.N_sc = self.N
+            all_sdf_for_sc = sdf_values
+
+        initial_potential = self._eval_cf_potential(self.X_sc_base)
+        residual = all_sdf_for_sc - initial_potential
         
-        # 计算我们需要补偿的残差 (目标值 - 当前值)
-        residual = sdf_values - initial_potential
-        
-        # 构建薄板样条 (Thin-Plate Spline) 标量矩阵
-        A_sc, P_sc = self._build_scalar_matrix(self.X_train)
+        A_sc, P_sc = self._build_scalar_matrix(self.X_sc_base)
         
         M_sc = np.block([
             [A_sc, P_sc],
@@ -70,10 +141,9 @@ class CurlFree_Interpolator:
         
         RHS_sc = np.concatenate((residual, np.zeros(3)))
         
-        # 求解标量 RBF 系数
         sol_sc = np.linalg.solve(M_sc, RHS_sc)
-        self.c_sc = sol_sc[:self.N]
-        self.b_sc = sol_sc[self.N:]
+        self.c_sc = sol_sc[:self.N_sc]
+        self.b_sc = sol_sc[self.N_sc:]
         self.trained = True
 
     def predict(self, query_points):
@@ -91,9 +161,12 @@ class CurlFree_Interpolator:
     # =========================================================
     # 内部向量化数学计算方法
     # =========================================================
-    def _build_cf_matrix(self, X):
-        # 基于 PHS 核 \phi(r) = r^4 \log r 的 Hessian 矩阵
-        # H = r^2(4 log r + 1)I + (8 log r + 6)(\delta \otimes \delta)
+    def _build_cf_matrix_general(self, X):
+        """
+        构建旋度自由梯度插值矩阵，适用于任意数量的基点。
+        基于 PHS 核 phi(r) = r^4 log r 的 Hessian 矩阵。
+        """
+        N_pts = X.shape[0]
         dx = X[:, 0:1] - X[:, 0:1].T
         dy = X[:, 1:2] - X[:, 1:2].T
         r2 = dx**2 + dy**2
@@ -110,16 +183,15 @@ class CurlFree_Interpolator:
         p12 = term1 * dx * dy
         p22 = term1 * dy**2 + term2
         
-        # 处理 r=0 的奇点
         p11[r == 0] = 0; p12[r == 0] = 0; p22[r == 0] = 0
         
-        A = np.zeros((2 * self.N, 2 * self.N))
+        A = np.zeros((2 * N_pts, 2 * N_pts))
         A[0::2, 0::2] = p11
         A[0::2, 1::2] = p12
         A[1::2, 0::2] = p12
         A[1::2, 1::2] = p22
         
-        P = np.zeros((2 * self.N, 5))
+        P = np.zeros((2 * N_pts, 5))
         P[0::2, 0] = 1
         P[1::2, 1] = 1
         P[0::2, 2] = X[:, 1]
@@ -129,8 +201,13 @@ class CurlFree_Interpolator:
         
         return A, P
 
+    def _build_cf_matrix(self, X):
+        """兼容旧接口"""
+        return self._build_cf_matrix_general(X)
+
     def _build_scalar_matrix(self, X):
         # 2D TPS 核 \phi(r) = r^2 \log r，多项式空间 P_1（3个基）
+        N_pts = X.shape[0]
         dx = X[:, 0:1] - X[:, 0:1].T
         dy = X[:, 1:2] - X[:, 1:2].T
         r2 = dx**2 + dy**2
@@ -144,15 +221,16 @@ class CurlFree_Interpolator:
         A[r == 0] = 0
         
         # P_1 多项式空间: [1, x, y]（3 个基）
-        P = np.ones((self.N, 3))
+        P = np.ones((N_pts, 3))
         P[:, 1] = X[:, 0]
         P[:, 2] = X[:, 1]
         return A, P
 
     def _eval_cf_potential(self, X_query):
-        # 利用广播快速计算所有 query_points 到所有 train_points 的距离向量
-        dx = X_query[:, 0:1] - self.X_train[:, 0] # 形状: (M, N)
-        dy = X_query[:, 1:2] - self.X_train[:, 1] # <- 改成 1:2
+        # 使用梯度插值的基点（可能包含投影点）
+        base = self.X_cf_base
+        dx = X_query[:, 0:1] - base[:, 0]  # 形状: (M, N_cf)
+        dy = X_query[:, 1:2] - base[:, 1]
         r2 = dx**2 + dy**2
         r = np.sqrt(r2)
         
@@ -173,8 +251,10 @@ class CurlFree_Interpolator:
         return V
 
     def _eval_scalar_potential(self, X_query):
-        dx = X_query[:, 0:1] - self.X_train[:, 0]
-        dy = X_query[:, 1:2] - self.X_train[:, 1]
+        # 使用标量残差插值的基点（可能包含投影点）
+        base = self.X_sc_base
+        dx = X_query[:, 0:1] - base[:, 0]
+        dy = X_query[:, 1:2] - base[:, 1]
         r2 = dx**2 + dy**2
         r = np.sqrt(r2)
         

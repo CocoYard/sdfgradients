@@ -340,7 +340,7 @@ def yongs_algorithm( points, distances, gradients ):
     new_points = points - (distances[:, np.newaxis] * gradients)
     return new_points
 
-def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpolator : CurlFree_Interpolator):
+def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpolator : CurlFree_Interpolator, iters):
     """
     Estimate gradients by optimizing a curl-free potential function to fit the signed distance data.
 
@@ -359,7 +359,7 @@ def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpola
         The estimated gradient vectors at each input point.
     """
     # optimize the gradients to be curl-free
-    gradients = opt.opt(points, distances, init_gradients, num_iter=500, lr=1e-2)
+    gradients = opt.opt(points, distances, init_gradients, num_iter=iters, lr=1e-2)
     # gradients = opt.opt(points, init_gradients, num_iter=500, lr=1e-2)
     gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
     interpolator.fit(points, distances, gradients)  # Refit the interpolator with the original points and distances
@@ -952,7 +952,7 @@ def rate_gradient_estimation(sdf_points, points_on_surface, sdf_values, tol=1e-3
     
     return wrong_count
 
-def marching_cubes_2D(sdf_points, sdf_values):
+def marching_cubes_2D(sdf_values):
     """ Extract 0-level contour from 2D SDF values using marching squares on the grid.
     Assumes sdf_points are on a regular n×n grid in [0,1]×[0,1]."""
     from skimage import measure
@@ -1085,73 +1085,125 @@ def gradients_diff_norm(gradients1, gradients2):
     """ Compute the mean L2 norm of the difference between two sets of gradients."""
     return np.mean(np.linalg.norm(gradients1 - gradients2, axis=1))
 
+def _point_to_polylines_min_dist(points, polylines):
+    """Min distance from each query point to the *segments* of polylines."""
+    min_dists = np.full(len(points), np.inf)
+    for poly in polylines:
+        if len(poly) < 2:
+            dists = np.linalg.norm(points - poly[0], axis=1)
+            min_dists = np.minimum(min_dists, dists)
+            continue
+        a = poly[:-1]
+        b = poly[1:]
+        ab = b - a
+        ab_sq = np.sum(ab ** 2, axis=1)
+        chunk = max(1, 50_000 // max(len(a), 1))
+        for i0 in range(0, len(points), chunk):
+            i1 = min(i0 + chunk, len(points))
+            pts = points[i0:i1]
+            ap = pts[:, None, :] - a[None, :, :]
+            t = np.sum(ap * ab[None, :, :], axis=2) / np.maximum(ab_sq[None, :], 1e-30)
+            t = np.clip(t, 0.0, 1.0)
+            closest = a[None, :, :] + t[:, :, None] * ab[None, :, :]
+            dists = np.linalg.norm(pts[:, None, :] - closest, axis=2)
+            min_dists[i0:i1] = np.minimum(min_dists[i0:i1], np.min(dists, axis=1))
+    return min_dists
+
+def _normalise_to_polyline_list(shape):
+    """Convert shape to list-of-polylines."""
+    if isinstance(shape, np.ndarray):
+        return [shape]
+    return list(shape)
+
+def _polygon_area_signed(poly):
+    """Signed area of a simple polygon using the shoelace formula."""
+    x, y = poly[:, 0], poly[:, 1]
+    return 0.5 * np.sum(x[:-1] * y[1:] - x[1:] * y[:-1])
+
 def Haussdorff_distances(shape, original_shape):
-    """ Compute the Hausdorff distance between polylines (not point clouds).
+    """Backward-compatible wrapper — returns only the Hausdorff distance (float)."""
+    return shape_distances(shape, original_shape)['hausdorff']
+
+def shape_distances(shape, original_shape):
+    """Compute multiple shape-difference metrics between two sets of polylines.
 
     Parameters
     ----------
     shape : list of (N_i, 2) arrays, or a single (N, 2) array
-        One or more polylines, e.g. [[seg1], [seg2]] from marching cubes.
+        One or more polylines (e.g. from marching cubes).
     original_shape : (M, 2) array or list of (M_j, 2) arrays
         The reference polyline(s).
 
     Returns
     -------
-    float  – the (symmetric) Hausdorff distance, computed as
-             max(directed_H(shape→original), directed_H(original→shape))
-             using point-to-segment distances.
+    dict with keys:
+        hausdorff : float — max of directed Hausdorff distances (worst-case)
+        hausdorff_95 : float — 95-th percentile Hausdorff (robust worst-case)
+        chamfer : float — symmetric mean point-to-segment distance
+        rms : float — symmetric root-mean-square point-to-segment distance
+        iou : float — intersection-over-union of enclosed areas (0–1, higher=better)
     """
+    shape_list = _normalise_to_polyline_list(shape)
+    orig_list  = _normalise_to_polyline_list(original_shape)
 
-    def _point_to_polylines_min_dist(points, polylines):
-        """Min distance from each query point to the *segments* of polylines."""
-        min_dists = np.full(len(points), np.inf)
-        for poly in polylines:
-            if len(poly) < 2:
-                # Degenerate single-point polyline
-                dists = np.linalg.norm(points - poly[0], axis=1)
-                min_dists = np.minimum(min_dists, dists)
-                continue
-            a = poly[:-1]   # (S, 2) segment start points
-            b = poly[1:]    # (S, 2) segment end points
-            ab = b - a      # (S, 2)
-            ab_sq = np.sum(ab ** 2, axis=1)  # (S,)
-            # Process in chunks to limit memory (M * S * 2 floats)
-            chunk = max(1, 50_000 // max(len(a), 1))
-            for i0 in range(0, len(points), chunk):
-                i1 = min(i0 + chunk, len(points))
-                pts = points[i0:i1]                          # (C, 2)
-                ap = pts[:, None, :] - a[None, :, :]         # (C, S, 2)
-                t = np.sum(ap * ab[None, :, :], axis=2) / np.maximum(ab_sq[None, :], 1e-30)
-                t = np.clip(t, 0.0, 1.0)                     # (C, S)
-                closest = a[None, :, :] + t[:, :, None] * ab[None, :, :]  # (C, S, 2)
-                dists = np.linalg.norm(pts[:, None, :] - closest, axis=2) # (C, S)
-                min_dists[i0:i1] = np.minimum(min_dists[i0:i1],
-                                              np.min(dists, axis=1))
-        return min_dists
-
-    # ---- normalise inputs to list-of-polylines ----
-    if isinstance(shape, np.ndarray):
-        shape_list = [shape]
-    else:
-        shape_list = list(shape)
-
-    if isinstance(original_shape, np.ndarray):
-        orig_list = [original_shape]
-    else:
-        orig_list = list(original_shape)
-
-    # Gather all vertices from each side
     shape_verts = np.concatenate(shape_list, axis=0)
     orig_verts  = np.concatenate(orig_list, axis=0)
 
-    # directed Hausdorff: shape → original  (each shape vertex → nearest original segment)
+    # directed distances
     d_s2o = _point_to_polylines_min_dist(shape_verts, orig_list)
-    # directed Hausdorff: original → shape  (each original vertex → nearest shape segment)
     d_o2s = _point_to_polylines_min_dist(orig_verts, shape_list)
 
-    return float(max(np.max(d_s2o), np.max(d_o2s)))
+    # Hausdorff
+    hausdorff = float(max(np.max(d_s2o), np.max(d_o2s)))
+    hausdorff_95 = float(max(np.percentile(d_s2o, 95), np.percentile(d_o2s, 95)))
 
-def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False, show_errors=False, clamp_gradients=True):
+    # Chamfer (symmetric mean)
+    chamfer = float(np.mean(d_s2o) + np.mean(d_o2s)) / 2.0
+
+    # RMS (symmetric root-mean-square)
+    rms = float(np.sqrt((np.mean(d_s2o ** 2) + np.mean(d_o2s ** 2)) / 2.0))
+
+    # IoU via rasterisation on a 500×500 grid in [0,1]²
+    from matplotlib.path import Path
+    res = 500
+    xs = np.linspace(0, 1, res)
+    ys = np.linspace(0, 1, res)
+    grid = np.array(np.meshgrid(xs, ys)).T.reshape(-1, 2)
+
+    def _raster(polylines):
+        mask = np.zeros(len(grid), dtype=bool)
+        for poly in polylines:
+            if len(poly) < 3:
+                continue
+            # close the polygon if not already closed
+            if not np.allclose(poly[0], poly[-1]):
+                poly = np.vstack([poly, poly[:1]])
+            path = Path(poly)
+            mask |= path.contains_points(grid)
+        return mask
+
+    mask_s = _raster(shape_list)
+    mask_o = _raster(orig_list)
+    intersection = np.sum(mask_s & mask_o)
+    union = np.sum(mask_s | mask_o)
+    iou = float(intersection / max(union, 1))
+
+    return {
+        'hausdorff': hausdorff,
+        'hausdorff_95': hausdorff_95,
+        'chamfer': chamfer,
+        'rms': rms,
+        'iou': iou,
+    }
+
+def print_shape_distances(label, shape, original_shape):
+    """Compute and pretty-print all shape distance metrics."""
+    d = shape_distances(shape, original_shape)
+    print(f"  {label}:  Hausdorff={d['hausdorff']:.4f}  H95={d['hausdorff_95']:.4f}  "
+          f"Chamfer={d['chamfer']:.4f}  RMS={d['rms']:.4f}  IoU={d['iou']:.3f}")
+
+def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False, show_errors=False, clamp_gradients=False, iters=1000):
+    print(f"Testing Gradient Estimation with n={n}, neighbor_estimation={neighbor_estimation}, gradient_estimation={gradient_estimation}, on_gradient_neighbors={on_gradient_neighbors}\n")
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
     if interpolator is None:
         # Create and fit the interpolator
@@ -1165,8 +1217,13 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
 
     if on_gradient_neighbors:
         colinear_neighbors = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-5)
+        print(f"Number of colinear neighbors: {len(colinear_neighbors)}")
     if gradient_estimation == GradientEstimation.INTERP_GLOBAL:
         gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors if on_gradient_neighbors else None)
+        projections = sdf_points - sdf_values[:, np.newaxis] * gradients
+        to_fit_points = np.vstack([sdf_points, projections])
+        to_fit_values = np.concatenate([sdf_values, np.zeros(len(projections))])
+        interpolator.fit(to_fit_points, to_fit_values)    
     elif gradient_estimation == GradientEstimation.INTERP_LOCAL:
         pass
     else:
@@ -1183,8 +1240,8 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         if gradient_estimation == GradientEstimation.CurlFree_OPT:
             # init_gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
             init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors if on_gradient_neighbors else None)
-            interpolator = CurlFree_Interpolator()
-            gradients = estimate_gradients_curlfree_opt(sdf_points, sdf_values, init_gradients, interpolator)
+            interpolator = CurlFree_Interpolator(use_projection=True)
+            gradients = estimate_gradients_curlfree_opt(sdf_points, sdf_values, init_gradients, interpolator, iters)
         elif gradient_estimation == GradientEstimation.IRLS:
             gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
         elif gradient_estimation == GradientEstimation.RANSAC:
@@ -1196,7 +1253,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             gradients, grad_errors = estimate_gradients_lstsq(sdf_points, sdf_values, neighbors)
         elif gradient_estimation == GradientEstimation.ORACLE_CURLFREE:
             gradients = gradients_gt
-            interpolator = CurlFree_Interpolator()
+            interpolator = CurlFree_Interpolator(use_projection=True)
             interpolator.fit(sdf_points, sdf_values, gradients)
             # interpolator.fit(np.append(sdf_points, new_points, axis=0), np.append(sdf_values, np.zeros(len(new_points)), axis=0))
     if clamp_gradients:
@@ -1220,8 +1277,8 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     points_on_surface_wrong = points_on_surface[~mask]
     good_points_on_surface = points_on_surface[mask]
     good_gradients = gradients[mask]
-    contour_segments = marching_cubes_2D(sdf_points, sdf_values)
-    print(f"Haussdorff distance for MC: {Haussdorff_distances(contour_segments, points):.4f}")
+    contour_segments = marching_cubes_2D(sdf_values)
+    print_shape_distances('MC', contour_segments, points)
 
     V, E = gpy.point_cloud_to_mesh( good_points_on_surface, good_gradients,
     method='PSR',
@@ -1229,21 +1286,24 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     psr_outer_boundary_type="Neumann",
     )
     poisson_contour = obj_to_points(V, E)[0]
-    print(f"Haussdorff distance for PSR: {Haussdorff_distances(poisson_contour, points):.4f}")
+    print_shape_distances('PSR', poisson_contour, points)
 
     # visualize results in 2D as heatmap
     # set the size of the figure to be just enough to hold the heatmap
     fig, ax = plt.subplots(figsize=(8, 7))
-    grid_x, grid_y = np.mgrid[0:1:100j, 0:1:100j]
+    grid_x, grid_y = np.mgrid[0:1:200j, 0:1:200j]
     grid_points = np.vstack([grid_x.ravel(), grid_y.ravel()]).T
     if not interpolator.trained:
         interpolator.fit(sdf_points, sdf_values, gradients_gt)
-    grid_values = interpolator.predict(grid_points).reshape(100, 100)
+    grid_values = interpolator.predict(grid_points).reshape(200, 200)
     im = ax.imshow(grid_values.T, extent=(0, 1, 0, 1), origin='lower', cmap='viridis')
     plt.colorbar(im, ax=ax, label='Interpolated SDF Values')
     # draw the contours at multiple levels (no transpose for contour!)
     contour_levels = np.linspace(-.5, .5, 21)
     ax.contour(grid_x, grid_y, grid_values, levels=contour_levels, colors='yellow', linewidths=0.5, alpha=0.5)
+    contour_segments_interpolation = marching_cubes_2D(grid_values.ravel())
+    print_shape_distances('Interp', contour_segments_interpolation, points)
+
     # visualize results in 2D
     # overlay the original shape
     plt.scatter(sdf_points[:, 0], sdf_points[:, 1], c='r', s=3, label='Original Grid Points')
@@ -1255,7 +1315,6 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             for idx in v:
                 ids.add(idx)
         ids = list(ids)
-        print(f"\nNumber of colinear neighbors: {len(colinear_neighbors)}")
         # show all points in colinear_neighbors with white color
         plt.scatter(sdf_points[ids, 0], sdf_points[ids, 1], c='white', s=10, label='on-gradient Points')
     # Add error labels on each point if available
@@ -1276,11 +1335,13 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     for k, seg in enumerate(contour_segments):
         plt.plot(seg[:, 0], seg[:, 1], 'k', linewidth=2, label='MC Contour' if k == 0 else None)
     plt.plot(poisson_contour[:, 0], poisson_contour[:, 1], 'm', linewidth=2, label='PSR Contour')
+    for k, seg in enumerate(contour_segments_interpolation):
+        plt.plot(seg[:, 0], seg[:, 1], 'y', linewidth=2, label='Interpolated Contour' if k == 0 else None)
 
     if see_arcs:
         Vr, Er = gpy.reach_for_the_arcs(sdf_points, sdf_values, fine_tune_iters=100, batch_size=1000)
         rfta_contour = obj_to_points(Vr, Er)[0]
-        # plt.plot(rfta_contour[:, 0], rfta_contour[:, 1], 'y', linewidth=2, label='RFTA Contour')
+        plt.plot(rfta_contour[:, 0], rfta_contour[:, 1], 'c', linewidth=2, label='RFTA Contour')
         # visualize visible arcs just like in test_visible_neighbors
         for i in range(len(visible_arcs)):
             # draw arc as a circle for simplicity
@@ -1289,7 +1350,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             color = '#FF6B9D' if sdf_values[i] < 0 else "#4ECDC5"
             circle = plt.Circle(center, radius, color=color, fill=False, alpha=1, linewidth=.3)
             ax.add_patch(circle)
-        print(f"Haussdorff distance for RFTA: {Haussdorff_distances(rfta_contour, points):.4f}")
+        print_shape_distances('RFTA', rfta_contour, points)
 
     plot_correspondence(good_sdf_points, good_points_on_surface, plt)
     # connect original points to projected points
@@ -1305,10 +1366,10 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, gradients, neighbors, gradient_estimation)
     
     grad_diff = gradients_diff_norm(gradients, gradients_gt)
-    print(f"{gradient_estimation.value} n={n} Mean L2 norm of gradient difference from oracle: {grad_diff:.4f}")
+    print(f"{gradient_estimation.value} n={n} Mean L2 norm of gradient difference from ground truth: {grad_diff:.4f}")
     plt.show()
-    # return Haussdorff_distances(contour_segments, points), Haussdorff_distances(poisson_contour, points), Haussdorff_distances(rfta_contour, points) if see_arcs else None
-    return grad_diff
+    return Haussdorff_distances(contour_segments, points), Haussdorff_distances(poisson_contour, points), Haussdorff_distances(contour_segments_interpolation, points), Haussdorff_distances(rfta_contour, points) if see_arcs else None
+    # return grad_diff
 
 def test_visible_neighbors(n=4, show_all=False):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
@@ -1897,13 +1958,12 @@ if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
     # table = []
-    # for n in [10, 20, 25, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50]:
-    #     mc, psr, rfta = test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.IRLS, see_arcs=True)
-    #     table.append((n, mc, psr, rfta))
-    # for n, mc, psr, rfta in table:
-    #     print(f"{psr:.4f}")
+    # for n in [15, 30]:
+    #     mc, psr, intp, _ = test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL, see_arcs=False)
+    #     table.append((n, mc, psr, intp))
+    # for n, mc, psr, intp in table:
+    #     print(f"{n} {mc:.4f} {psr:.4f} {intp:.4f}")
     # test_single_gradient(30)
     # test_subdividing(30)
     # test_interpolation_gradients(30, use_sample_gradient=True)
-    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, see_arcs=False, clamp_gradients=False)
-
+    test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, iters=5000, see_arcs=False, clamp_gradients=False)
