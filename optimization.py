@@ -1,5 +1,88 @@
-import torch
 import numpy as np
+from interpolation import CurlFree_Interpolator
+import torch
+
+def iterative_projection(points, values, init_gradients, num_iter=10,
+                         num_coarse=24, refine_steps=4, num_refine=12):
+    """
+    Iteratively refine SDF gradients by projecting sample points onto the zero
+    level set of a curl-free interpolant, then finding the best gradient
+    direction via sample_best_gradients (coarse sweep + angular refinement).
+
+    Algorithm (each iteration):
+      1. Fit a CurlFree_Interpolator with current gradients (use_projection=True).
+      2. For each sample point, search over directions to find the one whose
+         projection P - s*g lands closest to the zero level set of the
+         interpolant (via sample_best_gradients).
+      3. Update gradients := best directions found.
+      4. Repeat.
+
+    Parameters
+    ----------
+    points : (N, 2) array
+        Sample point coordinates.
+    values : (N,) array
+        Signed distance values at each sample point.
+    init_gradients : (N, 2) array
+        Initial unit gradient estimates.
+    num_iter : int
+        Number of projection-refit iterations (default 10).
+    num_coarse : int
+        Number of uniformly spaced directions in the coarse sweep (default 24).
+    refine_steps : int
+        Number of zoom-in refinement iterations (default 4).
+    num_refine : int
+        Directions evaluated per refinement step (default 12).
+
+    Returns
+    -------
+    gradients : (N, 2) array
+        Refined unit gradient vectors.
+    interpolator : CurlFree_Interpolator
+        The final fitted interpolator (ready for predict / marching cubes).
+    """
+    points = np.asarray(points, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64).ravel()
+    gradients = np.array(init_gradients, dtype=np.float64, copy=True)
+
+    # Normalize initial gradients
+    norms = np.linalg.norm(gradients, axis=1, keepdims=True)
+    gradients /= np.maximum(norms, 1e-12)
+
+    for it in range(num_iter):
+        # ----- Step 1: Fit interpolant with current gradients -----
+        interpolator = CurlFree_Interpolator(use_projection=True)
+        interpolator.fit(points, values, gradients)
+
+        # ----- Step 2: Find best gradient via angular search on the interpolant -----
+        new_gradients = interpolator.sample_best_gradients(
+            points, values,
+            num_coarse=num_coarse,
+            refine_steps=refine_steps,
+            num_refine=num_refine)
+
+        # ----- Convergence diagnostic -----
+        cos_sim = np.sum(gradients * new_gradients, axis=1)
+        mean_cos = np.mean(cos_sim)
+        max_angle_deg = np.degrees(np.arccos(np.clip(np.min(cos_sim), -1, 1)))
+
+        # Projection error: f(P - s*g) should be ~0
+        proj_pts = points - values[:, np.newaxis] * new_gradients
+        proj_vals = interpolator.predict(proj_pts)
+        proj_rmse = np.sqrt(np.mean(proj_vals**2))
+
+        print(f"Iter {it+1:3d} | mean cos_sim: {mean_cos:.6f}  "
+              f"max angle change: {max_angle_deg:.2f}\u00b0  "
+              f"proj RMSE: {proj_rmse:.6e}")
+
+        gradients = new_gradients
+
+    # Final fit with converged gradients
+    interpolator = CurlFree_Interpolator(use_projection=True)
+    interpolator.fit(points, values, gradients)
+
+    return gradients, interpolator
+
 
 def build_two_step_macedo_matrices_with_projection(points, values, init_gradients, min_proj_distance=1e-8):
     """

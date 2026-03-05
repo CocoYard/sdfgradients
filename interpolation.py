@@ -272,7 +272,112 @@ class CurlFree_Interpolator:
         # P_1: b_0 + b_1*x + b_2*y
         V += self.b_sc[0] + self.b_sc[1]*x + self.b_sc[2]*y
         return V
-    
+
+    def sample_best_gradient(self, x_new, sdf, num_coarse=24, tol=1e-6):
+        """
+        Find the best gradient direction by coarse sweep + bounded scalar optimization.
+
+        First performs a coarse uniform sweep over the unit circle to locate a
+        promising angular region, then refines with scipy.optimize.minimize_scalar
+        for high precision.
+
+        Parameters:
+        x_new (np.ndarray): Shape (dimensions,) — the query point.
+        sdf (float): The signed distance value at the query point.
+        num_coarse (int): Number of uniformly spaced directions in the coarse sweep. Default 24.
+        tol (float): Absolute tolerance for the angular refinement. Default 1e-6.
+
+        Returns:
+        np.ndarray: Shape (dimensions,) — the best gradient direction (unit vector).
+        """
+        from scipy.optimize import minimize_scalar
+
+        sign = 1.0 if sdf > 0 else -1.0
+
+        def objective(angle):
+            direction = np.array([np.cos(angle), np.sin(angle)])
+            sample = (x_new - sdf * direction).reshape(1, -1)
+            return sign * self.predict(sample)[0]
+
+        # Coarse sweep (uniform angles)
+        angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)
+
+        all_dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+        samples = x_new - sdf * all_dirs
+        preds = self.predict(samples)
+        obj_vals = sign * preds
+        best_idx = np.argmin(obj_vals)
+        best_angle = angles[best_idx]
+
+        # Refine with bounded scalar optimization around the best coarse angle
+        delta = np.pi / num_coarse
+        result = minimize_scalar(objective,
+                                 bounds=(best_angle - delta, best_angle + delta),
+                                 method='bounded',
+                                 options={'xatol': tol})
+        best_angle = result.x
+        direction = np.array([np.cos(best_angle), np.sin(best_angle)])
+        return direction
+
+    def sample_best_gradients(self, x_new, sdf, num_coarse=24,
+                              refine_steps=4, num_refine=12):
+        """
+        Batch version: find best gradient directions via coarse sweep + iterative
+        narrowing refinement (similar to binary search on the angle).
+
+        Phase 1 — coarse uniform sweep over the full circle to locate the best
+        angular region per point.
+        Phase 2 — repeatedly zoom into a smaller interval around the current best
+        angle and re-evaluate, shrinking the search window each iteration.
+
+        Parameters:
+        x_new (np.ndarray): Shape (batch_size, dimensions) — input points.
+        sdf (np.ndarray): Shape (batch_size,) — signed distance values.
+        num_coarse (int): Directions in the initial coarse sweep. Default 24.
+        refine_steps (int): Number of zoom-in refinement iterations. Default 4.
+        num_refine (int): Directions evaluated per refinement step. Default 12.
+
+        Returns:
+        np.ndarray: Shape (batch_size, dimensions) — best gradient directions (unit vectors).
+        """
+        batch_size = x_new.shape[0]
+        sdf_flat = sdf.ravel()
+        sign = np.where(sdf_flat > 0, 1.0, -1.0)  # (batch,)
+
+        # --- Phase 1: coarse sweep ---
+        angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)  # (C,)
+        dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)       # (C, 2)
+
+        # samples: (batch, C, 2)
+        samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs[None, :, :]
+        preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_coarse)
+        obj = preds * sign[:, None]
+        best_idx = np.argmin(obj, axis=1)           # (batch,)
+        best_angles = angles[best_idx]              # (batch,)
+
+        # --- Phase 2: iterative refinement ---
+        half_range = np.pi / num_coarse  # initial half-width of search window
+
+        for _ in range(refine_steps):
+            offsets = np.linspace(-1.0, 1.0, num_refine)               # (R,)
+            local_angles = best_angles[:, None] + half_range * offsets  # (batch, R)
+
+            cos_a = np.cos(local_angles)  # (batch, R)
+            sin_a = np.sin(local_angles)
+            # samples: (batch, R, 2)
+            samples = x_new[:, None, :] - sdf_flat[:, None, None] * np.stack([cos_a, sin_a], axis=2)
+            preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_refine)
+            obj = preds * sign[:, None]
+            best_local = np.argmin(obj, axis=1)
+            best_angles = local_angles[np.arange(batch_size), best_local]
+
+            # Shrink window: next half_range = one spacing of current grid
+            half_range = 2.0 * half_range / (num_refine - 1)
+
+        best_dirs = np.stack([np.cos(best_angles), np.sin(best_angles)], axis=1)
+        best_dirs /= np.linalg.norm(best_dirs, axis=1, keepdims=True)
+        return best_dirs
+
 class Interpolator:
     """
     A Duchon interpolator to fit and predict values based on input signed distance data.

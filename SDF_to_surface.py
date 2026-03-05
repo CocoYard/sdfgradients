@@ -342,7 +342,9 @@ def yongs_algorithm( points, distances, gradients ):
 
 def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpolator : CurlFree_Interpolator, iters):
     """
-    Estimate gradients by optimizing a curl-free potential function to fit the signed distance data.
+    Estimate gradients by iteratively projecting sample points onto the zero
+    level set of a curl-free interpolant, then re-reading the interpolant's
+    gradient at the sample points.
 
     Parameters:
     -----------
@@ -352,17 +354,21 @@ def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpola
         The signed distance values for each point.
     init_gradients: (N, d) array of initial gradient estimates
         The initial gradient estimates at each point, which can be obtained from a global interpolator or other methods.
+    interpolator: CurlFree_Interpolator
+        Will be replaced by the final fitted interpolator.
+    iters: int
+        Number of projection-refit iterations.
 
     Returns:
     ---------
     gradients: (N, d) array of estimated gradient vectors
         The estimated gradient vectors at each input point.
     """
-    # optimize the gradients to be curl-free
-    gradients = opt.opt(points, distances, init_gradients, num_iter=iters, lr=1e-3)
-    # gradients = opt.opt(points, init_gradients, num_iter=500, lr=1e-2)
+    gradients, fitted_interpolator = opt.iterative_projection(
+        points, distances, init_gradients, num_iter=iters)
     gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
-    interpolator.fit(points, distances, gradients)  # Refit the interpolator with the original points and distances
+    # Copy fitted state into the caller's interpolator
+    interpolator.__dict__.update(fitted_interpolator.__dict__)
     return gradients
 
 
@@ -1968,5 +1974,5 @@ if __name__ == "__main__":
     # test_subdividing(30)
     # test_interpolation_gradients(30, use_sample_gradient=True)
     for n in [30]:
-        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, iters=2000, see_arcs=True, clamp_gradients=False)
+        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, iters=10, see_arcs=True, clamp_gradients=False)
     # test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL, iters=5000, see_arcs=False, clamp_gradients=False)
