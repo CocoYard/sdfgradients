@@ -1,6 +1,221 @@
 import numpy as np
-from interpolation import CurlFree_Interpolator
+from interpolation import CurlFree_Interpolator, Interpolator
 import torch
+from scipy.optimize import minimize
+import visible_arcs as va
+
+def find_angle_point(circle_center, radius, p1, p2, is_max=True):
+    cx, cy = circle_center
+    p1 = np.array(p1)
+    p2 = np.array(p2)
+    
+    def objective(theta_args):
+        theta = theta_args[0] if isinstance(theta_args, np.ndarray) else theta_args
+        
+        # 现在 P 是一个干净的 (2,) 形状的 1D 数组
+        P = np.array([cx + radius * np.cos(theta), cy + radius * np.sin(theta)])
+        
+        v1 = p1 - P
+        v2 = p2 - P
+        
+        norm1 = np.linalg.norm(v1)
+        norm2 = np.linalg.norm(v2)
+        
+        if norm1 == 0 or norm2 == 0:
+            return 1.0  
+            
+        cos_theta = np.dot(v1, v2) / (norm1 * norm2)
+        return np.clip(cos_theta, -1.0, 1.0) if is_max else -np.clip(cos_theta, -1.0, 1.0)
+
+    # 1. 全局粗搜
+    thetas = np.linspace(0, 2 * np.pi, 36)
+    # 注意这里粗搜传入的是标量，所以上面的 isinstance 检查能兼容这两种情况
+    best_initial_theta = thetas[np.argmin([objective(t) for t in thetas])]
+
+    # 2. 局部精搜
+    res = minimize(
+        objective, 
+        x0=[best_initial_theta], 
+        bounds=[(0, 2 * np.pi)],
+        method='L-BFGS-B'
+    )
+    
+    best_theta = res.x[0]
+    best_point = (cx + radius * np.cos(best_theta), cy + radius * np.sin(best_theta))
+    max_angle_rad = np.arccos(objective(best_theta))
+    return best_point, best_theta, max_angle_rad
+    
+def find_neighbors(proj_points, interpolator : Interpolator):
+    """
+    For each projected point, find its neighbors based on 0-level set proximity using
+    the interpolator. Returns a list of neighbor indices for each projected point.
+
+    Strategy:
+      1. Extract the zero level set as a collection of polylines.
+      2. Build a global arc-length parameterisation over all polyline vertices.
+      3. Map each projected point to the arc-length of its nearest contour vertex.
+      4. Sort projected points by arc-length and return the two adjacent ones as neighbors.
+    """
+    zero_level_contours = interpolator.extract_zero_level_set(bounds=((-1, 1), (-1, 1)), resolution=500)
+
+    # Build flat arrays: contour vertices, their polyline id, and local arc-length within that polyline.
+    # Each polyline is treated independently so that different contours are never cross-connected.
+    all_contour_pts = []
+    vert_poly_id = []
+    vert_arc = []
+    poly_closed = []   # whether each polyline is a closed loop
+
+    for pid, poly in enumerate(zero_level_contours):
+        poly = np.asarray(poly)
+        if len(poly) < 2:
+            all_contour_pts.append(poly[0])
+            vert_poly_id.append(pid)
+            vert_arc.append(0.0)
+            poly_closed.append(False)
+            continue
+        seg_lengths = np.linalg.norm(np.diff(poly, axis=0), axis=1)
+        cum = np.concatenate([[0.0], np.cumsum(seg_lengths)])
+        # A contour is closed when its first and last vertices coincide
+        is_closed = np.linalg.norm(poly[0] - poly[-1]) < 1e-6
+        for pt, arc in zip(poly, cum):
+            all_contour_pts.append(pt)
+            vert_poly_id.append(pid)
+            vert_arc.append(arc)
+        poly_closed.append(is_closed)
+
+    if len(all_contour_pts) == 0:
+        return [[] for _ in range(len(proj_points))]
+
+    all_contour_pts = np.array(all_contour_pts)  # (C, 2)
+    vert_poly_id = np.array(vert_poly_id)
+    vert_arc = np.array(vert_arc)
+
+    # Map each projected point to its nearest contour vertex -> polyline id + local arc
+    N = len(proj_points)
+    proj_poly_id = np.empty(N, dtype=int)
+    proj_arc = np.empty(N)
+    chunk = max(1, 50_000 // max(len(all_contour_pts), 1))
+    for i0 in range(0, N, chunk):
+        i1 = min(i0 + chunk, N)
+        dists = np.linalg.norm(proj_points[i0:i1, None, :] - all_contour_pts[None, :, :], axis=2)
+        nearest = np.argmin(dists, axis=1)
+        proj_poly_id[i0:i1] = vert_poly_id[nearest]
+        proj_arc[i0:i1] = vert_arc[nearest]
+
+    # For each projected point find arc-length neighbors *within the same polyline*.
+    # Closed polylines wrap around: first and last entries are each other's neighbors.
+    neighbors_idx = [[] for _ in range(N)]
+
+    for pid in range(len(poly_closed)):
+        members = np.where(proj_poly_id == pid)[0]
+        if len(members) == 0:
+            continue
+        # Sort members by local arc-length
+        sorted_members = members[np.argsort(proj_arc[members])]  # sorted original indices
+        M = len(sorted_members)
+        is_closed = poly_closed[pid]
+        for rank in range(M):
+            i = int(sorted_members[rank])
+            nbrs = []
+            if rank > 0:
+                nbrs.append(int(sorted_members[rank - 1]))
+            elif is_closed and M > 1:
+                nbrs.append(int(sorted_members[M - 1]))   # wrap: first -> last
+            if rank < M - 1:
+                nbrs.append(int(sorted_members[rank + 1]))
+            elif is_closed and M > 1:
+                nbrs.append(int(sorted_members[0]))        # wrap: last -> first
+            neighbors_idx[i] = nbrs
+
+    return neighbors_idx
+
+def iterative_smoothing(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10):
+    """
+    Iteratively smooth SDF gradients by refining them based on projections' neighbors.
+    Algorithm (each iteration):
+      1. Compute 2 neighbors for each projection of sample points onto the zero level set.
+      2. For each projected point, move it on its visible arc to make the angle formed by 
+         its neighbors more obtuse, thus encouraging smoother gradient directions.
+      3. Repeat for num_iter iterations.
+
+    Parameters
+    ----------
+    points : (N, 2) array
+        Sample point coordinates.
+    values : (N,) array
+        Signed distance values at each sample point.
+    init_gradients : (N, 2) array
+        Initial gradient estimates.
+    visible_arcs: a list of lists: point index -> list of visible arcs
+        A collection of visible arcs that can be used to clamp the gradients.
+    short_arc_idx: a set of point indices whose visible arcs are extremely short, so we skip them.
+    num_iter : int
+        Number of smoothing iterations (default 10).
+    
+    Returns
+    -------
+    gradients : (N, 2) array
+        Smoothed gradient vectors after iterative refinement.
+    """
+    points = np.asarray(points, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64).ravel()
+    gradients = np.array(init_gradients, dtype=np.float64, copy=True)
+    proj_points = points - values[:, np.newaxis] * gradients
+    neighbors_idx = find_neighbors(proj_points, interpolator)
+    for it in range(num_iter):
+        # Update projected points to encourage smoother angles between neighbors
+        new_projected_points = proj_points.copy()
+        for i in range(len(points)):
+            if i in short_arc_idx:
+                continue  # Skip points with very short visible arcs
+            if len(neighbors_idx[i]) < 2:
+                continue  # Need at least 2 neighbors to define an angle
+            p_i = proj_points[i]
+            n1, n2 = proj_points[neighbors_idx[i][:2]]  # Take first 2 neighbors
+            _d = n2 - n1
+            if np.linalg.norm(_d) < 1e-6:
+                continue  # Neighbors are too close, skip to avoid instability
+            if np.linalg.norm(n1 - points[i]) < abs(values[i]) or np.linalg.norm(n2 - points[i]) < abs(values[i]):
+                continue  # Neighbors are inside the circle, skip to avoid instability
+            # if the line segment n1-n2 intersects the circle around points[i] with radius abs(values[i]), use min angle
+            _len2 = np.dot(_d, _d)
+            if _len2 > 0:
+                _t = np.clip(np.dot(points[i] - n1, _d) / _len2, 0.0, 1.0)
+            else:
+                _t = 0.0
+            _closest = n1 + _t * _d
+            if np.linalg.norm(_closest - points[i]) < abs(values[i]):
+                # intersection between n1-n2 and circle
+                best_point, best_theta, _ = find_angle_point(p_i, np.linalg.norm(points[i] - p_i), n1, n2, is_max=False)
+                # check the distance between best_point and original projection
+                if np.linalg.norm(best_point - p_i) < np.sqrt(2) * abs(values[i]):
+                    if va.angle_in_arcs(best_theta, visible_arcs[i]):
+                        new_projected_points[i] = best_point
+                else:
+                    if va.angle_in_arcs(best_theta + np.pi, visible_arcs[i]):
+                        new_projected_points[i] = 2 * p_i - best_point
+            else:
+                # no intersection, just move p_i to the point on the line n1-n2 that forms the largest angle
+                best_point, best_theta, max_angle_rad = find_angle_point(p_i, np.linalg.norm(points[i] - p_i), n1, n2, is_max=True)
+                if np.linalg.norm(best_point - p_i) < np.sqrt(2) * abs(values[i]):
+                    if va.angle_in_arcs(best_theta, visible_arcs[i]):
+                        new_projected_points[i] = best_point
+                else:
+                    if va.angle_in_arcs(best_theta + np.pi, visible_arcs[i]):
+                        new_projected_points[i] = 2 * p_i - best_point
+            if i == 762:
+                print(np.linalg.norm(_closest - points[i]) < abs(values[i]))
+                print(f"Iter {it+1}, point {i}: p_i={p_i}, n1={n1}, n2={n2}, best_point={best_point}, max_rad={max_angle_rad}, \
+                      original_theta={np.arccos(np.dot(n1 - p_i, n2 - p_i) / (np.linalg.norm(n1 - p_i) * np.linalg.norm(n2 - p_i)))}, \
+                        new_proj={new_projected_points[i]}")
+        proj_points = new_projected_points
+        print(f"Iter {it+1:3d} completed.")
+    # compute final unit gradients: g = sign(s) * (P - P_proj) / |P - P_proj|
+    direction = points - proj_points
+    norms = np.linalg.norm(direction, axis=1, keepdims=True)
+    s_sign = np.where(values[:, np.newaxis] >= 0, 1.0, -1.0)
+    gradients = s_sign * direction / (norms + 1e-12)
+    return gradients
 
 def iterative_projection(points, values, init_gradients, num_iter=10,
                          num_coarse=24, refine_steps=4, num_refine=12):
@@ -48,6 +263,7 @@ def iterative_projection(points, values, init_gradients, num_iter=10,
     # Normalize initial gradients
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-12)
+    init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
 
     for it in range(num_iter):
         # ----- Step 1: Fit interpolant with current gradients -----
@@ -59,7 +275,9 @@ def iterative_projection(points, values, init_gradients, num_iter=10,
             points, values,
             num_coarse=num_coarse,
             refine_steps=refine_steps,
-            num_refine=num_refine)
+            num_refine=num_refine,
+            initial_guess=init_angles
+        )
 
         # ----- Convergence diagnostic -----
         cos_sim = np.sum(gradients * new_gradients, axis=1)
@@ -76,6 +294,7 @@ def iterative_projection(points, values, init_gradients, num_iter=10,
               f"proj RMSE: {proj_rmse:.6e}")
 
         gradients = new_gradients
+        init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
 
     # Final fit with converged gradients
     interpolator = CurlFree_Interpolator(use_projection=True)

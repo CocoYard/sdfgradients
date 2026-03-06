@@ -9,6 +9,16 @@ def angle_in_arc(angle, start, end):
     else:
         return start <= angle <= end
 
+def angle_in_arcs(angle, arcs):
+    """Check if angle is within any of the arcs in the list."""
+    angle = normalize_angle(angle)
+    for start, end in arcs:
+        if end > start and start <= angle <= end:
+            return True
+        elif end < start and (angle >= start or angle <= end):
+            return True
+    return False
+
 def clamp_angle_to_arcs(angle, arcs):
     clamp_dist = float('inf')
     clamp_angle = None

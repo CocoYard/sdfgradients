@@ -340,7 +340,7 @@ def yongs_algorithm( points, distances, gradients ):
     new_points = points - (distances[:, np.newaxis] * gradients)
     return new_points
 
-def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpolator : CurlFree_Interpolator, iters):
+def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpolator : Interpolator, iters, visible_arcs, short_arc_idx):
     """
     Estimate gradients by iteratively projecting sample points onto the zero
     level set of a curl-free interpolant, then re-reading the interpolant's
@@ -354,10 +354,13 @@ def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpola
         The signed distance values for each point.
     init_gradients: (N, d) array of initial gradient estimates
         The initial gradient estimates at each point, which can be obtained from a global interpolator or other methods.
-    interpolator: CurlFree_Interpolator
+    interpolator: Interpolator
         Will be replaced by the final fitted interpolator.
     iters: int
         Number of projection-refit iterations.
+    visible_arcs: a dictionary: point index -> list of visible arcs
+        A collection of visible arcs that can be used to clamp the gradients.
+    short_arc_idx: a set of point indices whose visible arcs are extremely short, so we skip them.
 
     Returns:
     ---------
@@ -366,10 +369,10 @@ def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpola
     """
 
     # optimize the gradients to be curl-free
-    gradients = opt.opt(points, distances, init_gradients, num_iter=iters, lr=1e-3)
+    gradients = opt.iterative_smoothing(points, distances, init_gradients, interpolator, visible_arcs, short_arc_idx, num_iter=iters)
+    # gradients = opt.opt(points, distances, init_gradients, num_iter=iters, lr=1e-3)
     # gradients = opt.opt(points, init_gradients, num_iter=500, lr=1e-2)
-    gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
-    interpolator.fit(points, distances, gradients)  # Refit the interpolator with the original points and distances
+    # gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
     return gradients
 
     # gradients, fitted_interpolator = opt.iterative_projection(
@@ -1047,6 +1050,7 @@ def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, gradients, n
         click_pt = np.array([event.xdata, event.ydata])
         distances_to_click = np.linalg.norm(sdf_points - click_pt, axis=1)
         idx = np.argmin(distances_to_click)
+        print(f"[click] idx={idx}  pos=({sdf_points[idx, 0]:.4f}, {sdf_points[idx, 1]:.4f})  sdf={sdf_values[idx]:.4f}")
         
         # Compute single-point gradient to get weights and indices
         nbr = neighbors[idx] if neighbors is not None else None
@@ -1256,7 +1260,9 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             # init_gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
             init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors if on_gradient_neighbors else None)
             interpolator = CurlFree_Interpolator(use_projection=True)
-            gradients = estimate_gradients_curlfree_opt(sdf_points, sdf_values, init_gradients, interpolator, iters)
+            interpolator.fit(sdf_points, sdf_values, init_gradients)
+            gradients = estimate_gradients_curlfree_opt(sdf_points, sdf_values, init_gradients, interpolator, iters,  visible_arcs, degenerate_arcs)
+            interpolator.fit(sdf_points, sdf_values, gradients, force_recompute=True)  # Refit the interpolator with the original points and distances
         elif gradient_estimation == GradientEstimation.IRLS:
             gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
         elif gradient_estimation == GradientEstimation.RANSAC:
@@ -1382,7 +1388,16 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     # Interactive click: show neighbors and weights
     if gradient_estimation in (GradientEstimation.RANSAC, GradientEstimation.IRLS):
         setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, gradients, neighbors, gradient_estimation)
-    
+
+    # Click any point to print its index to the console
+    def _on_click_print_idx(event):
+        if event.inaxes != ax:
+            return
+        click_pt = np.array([event.xdata, event.ydata])
+        idx = int(np.argmin(np.linalg.norm(sdf_points - click_pt, axis=1)))
+        print(f"[click] idx={idx}  pos=({sdf_points[idx, 0]:.4f}, {sdf_points[idx, 1]:.4f})  sdf={sdf_values[idx]:.4f}")
+    fig.canvas.mpl_connect('button_press_event', _on_click_print_idx)
+
     grad_diff = gradients_diff_norm(gradients, gradients_gt)
     print(f"{gradient_estimation.value} n={n} Mean L2 norm of gradient difference from ground truth: {grad_diff:.4f}")
     plt.show()
@@ -1814,6 +1829,7 @@ def test_interpolation_gradients(n=4, use_sample_gradient=False):
         click_pt = np.array([event.xdata, event.ydata])
         distances_to_click = np.linalg.norm(sdf_points - click_pt, axis=1)
         idx = np.argmin(distances_to_click)
+        print(f"[click] idx={idx}  pos=({sdf_points[idx, 0]:.4f}, {sdf_points[idx, 1]:.4f})  sdf={sdf_values[idx]:.4f}")
 
         local_interp = state['local_interp']
         pt = sdf_points[idx]
@@ -1985,5 +2001,5 @@ if __name__ == "__main__":
     # test_subdividing(30)
     # test_interpolation_gradients(30, use_sample_gradient=True)
     for n in [30]:
-        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, iters=0, see_arcs=True, clamp_gradients=False)
+        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, iters=1, see_arcs=True, clamp_gradients=False)
     # test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL, iters=5000, see_arcs=False, clamp_gradients=False)
