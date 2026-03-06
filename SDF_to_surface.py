@@ -1317,6 +1317,9 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     contour_levels = np.linspace(-.5, .5, 21)
     ax.contour(grid_x, grid_y, grid_values, levels=contour_levels, colors='yellow', linewidths=0.5, alpha=0.5)
     contour_segments_interpolation = marching_cubes_2D(grid_values.ravel())
+    # contour_segments_interpolation = interpolator.extract_zero_level_set(
+    # bounds=((-1, 1), (-1, 1)),  # ((xmin, xmax), (ymin, ymax))
+    # resolution=500)
     print_shape_distances('Interp', contour_segments_interpolation, points)
 
     # visualize results in 2D
