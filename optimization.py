@@ -325,22 +325,30 @@ def evaluate_full_field_with_projection(target_points, base_points, c_grad, p_gr
 def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_every=1, hard_eikonal=False,
         w_proj=1.0, w_smooth=1, w_init=0.01, w_eikonal=0.1, k_neighbors=6):
     """
-    Optimize the SDF gradient field to be consistent with the given SDF values.
+    Optimize projected point positions to derive SDF gradients.
+    
+    Instead of optimizing gradient vectors directly, optimize the projected point
+    positions P_proj (where P_proj = P - s*g). Gradients are then derived as:
+      g = sign(s) * (P - P_proj) / |P - P_proj|
+    
+    This parameterization tends to produce smoother surfaces because neighboring
+    projected points on the zero level set are directly regularized.
     
     Loss function design:
-      1. Bilateral projection loss: f(P - s*g)^2 -> 0
-         Projected points should lie on the zero level set; minimize f^2 directly.
+      1. Projection loss: f(P_proj)^2 -> 0
+         Projected points should lie on the zero level set.
       2. Gradient smoothness loss (k-NN): sum w_ij (1 - g_i . g_j)^2
-         Penalize inconsistent gradient directions between neighbors to prevent winding.
-      3. Initial gradient anchor: ||g - g_init||^2
-         Mild regularization to prevent gradients from drifting far from the initial estimate.
-      4. Eikonal constraint (soft mode): (|g| - 1)^2
+         Penalize inconsistent gradient directions derived from projected points.
+      3. Initial position anchor: ||P_proj - P_proj_init||^2
+         Prevent projected points from drifting far from initial estimate.
+      4. Distance constraint: (|P - P_proj| - |s|)^2
+         Projected distance should match the SDF value (eikonal consistency).
     
     Parameters:
         w_proj:      Projection loss weight (default 1.0)
-        w_smooth:    Smoothness loss weight (default 0.1)
-        w_init:      Initial gradient anchor weight (default 0.01)
-        w_eikonal:   Eikonal constraint weight (default 0.1, soft mode only)
+        w_smooth:    Smoothness loss weight (default 1)
+        w_init:      Initial position anchor weight (default 0.01)
+        w_eikonal:   Distance constraint weight (default 0.1)
         k_neighbors: Number of k-NN neighbors for smoothness loss (default 6)
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -351,35 +359,48 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
     values = torch.tensor(values_np, dtype=dtype, device=device).squeeze()
     N = points.shape[0]
     
-    # Normalized initial gradients (for anchor loss)
+    # Normalized initial gradients -> compute initial projected points
     init_grads_tensor = torch.tensor(init_grads_np, dtype=dtype, device=device)
     init_grads_tensor = init_grads_tensor / (torch.norm(init_grads_tensor, dim=1, keepdim=True) + 1e-12)
+    init_proj_points = points - values.unsqueeze(1) * init_grads_tensor
     
-    # ==========================================
-    # Precompute k-NN graph (static, computed once)
-    # ==========================================
-    with torch.no_grad():
-        k = min(k_neighbors, N - 1)
-        dists_matrix = torch.cdist(points, points)  # (N, N)
-        _, knn_idx = torch.topk(dists_matrix, k + 1, largest=False)
-        knn_idx = knn_idx[:, 1:]  # Exclude self -> (N, k)
+    # sign(s) for gradient direction recovery; for s=0 use +1 as placeholder
+    s_sign = torch.sign(values)
+    s_sign[s_sign == 0] = 1.0
+    s_sign = s_sign.unsqueeze(1)  # (N, 1)
+    
+    k = min(k_neighbors, N - 1)
+    
+    def rebuild_knn(p_proj_detached):
+        """Rebuild k-NN graph based on projected point positions (on the zero level set)."""
+        dists_matrix = torch.cdist(p_proj_detached, p_proj_detached)  # (N, N)
+        _, idx = torch.topk(dists_matrix, k + 1, largest=False)
+        idx = idx[:, 1:]  # Exclude self -> (N, k)
         # Inverse distance weights: closer neighbors have more influence
-        knn_dists = torch.gather(dists_matrix, 1, knn_idx)  # (N, k)
-        knn_weights = 1.0 / (knn_dists + 1e-10)
-        knn_weights = knn_weights / knn_weights.sum(dim=1, keepdim=True)  # Normalize
+        dists = torch.gather(dists_matrix, 1, idx)  # (N, k)
+        weights = 1.0 / (dists + 1e-10)
+        weights = weights / weights.sum(dim=1, keepdim=True)  # Normalize
+        return idx, weights
     
-    if hard_eikonal:
-        # Eikonal hard constraint: optimize theta only, gradients automatically satisfy |g|=1
-        init_angles = np.arctan2(init_grads_np[:, 1], init_grads_np[:, 0])
-        theta = torch.tensor(init_angles, dtype=dtype, device=device, requires_grad=True)
-        opt_params = [theta]
-    else:
-        # Soft constraint: optimize gradient vectors directly, penalize deviation from unit length
-        grads_param = torch.tensor(init_grads_np, dtype=dtype, device=device, requires_grad=True)
-        opt_params = [grads_param]
+    # ==========================================
+    # Optimization variable: projected point positions
+    # ==========================================
+    proj_points = init_proj_points.detach().clone().requires_grad_(True)
+    opt_params = [proj_points]
     
-    # Gentle decay weights: unlike exp(-|s|*10), does not aggressively ignore far-from-surface points
+    # Store initial projected positions for anchor loss
+    init_proj_detached = init_proj_points.detach().clone()
+    
+    # Gentle decay weights: points closer to surface get more weight
     surface_weights = 1.0 / (1.0 + torch.abs(values))
+    
+    def derive_gradients(p_proj):
+        """Derive unit gradient vectors from projected point positions.
+        g = sign(s) * (P - P_proj) / |P - P_proj|"""
+        direction = points - p_proj  # (N, 2), equals s * g
+        dist = torch.norm(direction, dim=1, keepdim=True)  # |s| ideally
+        grads_normed = s_sign * direction / (dist + 1e-12)
+        return grads_normed, dist.squeeze()
     
     def rebuild_matrices(current_grads_detached):
         """Recompute projected points and factorize matrices using current (detached) gradients."""
@@ -392,54 +413,40 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
     # Initial construction
     print("Building two-step matrices with projection (initial)...")
     with torch.no_grad():
-        if hard_eikonal:
-            cur_grads = torch.stack([torch.cos(theta), torch.sin(theta)], dim=1)
-        else:
-            cur_grads = grads_param.detach().clone()
+        cur_grads, _ = derive_gradients(proj_points)
+        knn_idx, knn_weights = rebuild_knn(proj_points.detach())
     A_grad, A_scalar, all_base_points, valid_mask, LU_grad, pivots_grad, LU_scal, pivots_scal = \
-        rebuild_matrices(cur_grads)
+        rebuild_matrices(cur_grads.detach())
     N_cf = all_base_points.shape[0]
     
     optimizer = torch.optim.Adam(opt_params, lr=lr)
     
-    print(f"Starting optimization (rebuild every {rebuild_every} steps, "
-          f"hard_eikonal={hard_eikonal}, k={k})...")
-    print(f"Weights: proj={w_proj}, smooth={w_smooth}, init={w_init}, eikonal={w_eikonal}")
+    print(f"Starting optimization (rebuild every {rebuild_every} steps, k={k})...")
+    print(f"Weights: proj={w_proj}, smooth={w_smooth}, init={w_init}, dist={w_eikonal}")
     
     for i in range(num_iter):
         # Recompute projected points and matrix factorization every rebuild_every steps
         if i > 0 and i % rebuild_every == 0:
             with torch.no_grad():
-                if hard_eikonal:
-                    cur_grads = torch.stack([torch.cos(theta), torch.sin(theta)], dim=1)
-                else:
-                    cur_grads = grads_param.detach().clone()
+                cur_grads, _ = derive_gradients(proj_points)
+                knn_idx, knn_weights = rebuild_knn(proj_points.detach())
             A_grad, A_scalar, all_base_points, valid_mask, LU_grad, pivots_grad, LU_scal, pivots_scal = \
-                rebuild_matrices(cur_grads)
+                rebuild_matrices(cur_grads.detach())
             N_cf = all_base_points.shape[0]
         
         optimizer.zero_grad()
         
-        if hard_eikonal:
-            grads_x = torch.cos(theta)
-            grads_y = torch.sin(theta)
-            grads = torch.stack([grads_x, grads_y], dim=1)
-        else:
-            grads = grads_param
-            grads_x = grads[:, 0]
-            grads_y = grads[:, 1]
-        
-        # Normalize gradient directions (for smoothness and anchor losses)
-        grad_norms = torch.norm(grads, dim=1, keepdim=True)
-        grads_normalized = grads / (grad_norms + 1e-12)
+        # Derive gradients from current projected point positions
+        grads_normalized, proj_dists = derive_gradients(proj_points)
         
         # =========================================
-        # Loss 1: Eikonal constraint (|g| - 1)^2
+        # Loss 1: Distance constraint (|P - P_proj| - |s|)^2
+        # Ensures the projected distance matches the SDF value (eikonal consistency)
         # =========================================
-        loss_eikonal = torch.mean((grad_norms.squeeze() - 1.0)**2)
+        loss_dist = torch.mean((proj_dists - torch.abs(values))**2)
         
         # Constrain gradients on all base points (projected point gradients = corresponding original gradients)
-        all_grads = torch.cat([grads, grads[valid_mask]], dim=0)  # (N_cf, 2)
+        all_grads = torch.cat([grads_normalized, grads_normalized[valid_mask]], dim=0)  # (N_cf, 2)
         
         # --- Two-step solve for interpolation coefficients ---
         # Step 1: Solve curl-free gradient coefficients
@@ -461,65 +468,53 @@ def opt(points_np, values_np, init_grads_np, num_iter=500, lr=1e-2, rebuild_ever
         p_scal = coeffs_scal_all[N:]
         
         # =========================================
-        # Loss 2: Bilateral projection loss f(P - s*g)^2 -> 0
-        # Projected points should lie near the zero level set; minimize f^2 directly.
-        # Stronger than one-sided ReLU: requires both correct sign and near-zero value.
+        # Loss 2: Projection loss f(P_proj)^2 -> 0
+        # Projected points should lie on the zero level set
         # =========================================
-        p_proj = points - values.unsqueeze(1) * grads
         projected_values = evaluate_full_field_with_projection(
-            p_proj, all_base_points, c_grad, p_grad, w_scal, p_scal)
+            proj_points, all_base_points, c_grad, p_grad, w_scal, p_scal)
         loss_proj = torch.mean(surface_weights * projected_values**2)
         
         # =========================================
-        # Loss 3: Gradient field smoothness loss (k-NN Dirichlet energy)
-        # Penalize inconsistent gradient directions between neighbors -> prevent winding and jumps
-        # Uses (1 - cos theta) as angular deviation measure
+        # Loss 3: Laplacian smoothness on projected points
+        # Each projected point should be close to the centroid of its neighbors
+        # on the zero level set -> directly reduces jaggedness/sawteeth
         # =========================================
-        neighbor_grads = grads_normalized[knn_idx]  # (N, k, 2)
-        dot_products = torch.sum(
-            grads_normalized.unsqueeze(1) * neighbor_grads, dim=-1)  # (N, k)
-        # Clamp to prevent numerical errors exceeding 1
-        dot_products = torch.clamp(dot_products, -1.0, 1.0)
-        angular_diff = 1.0 - dot_products  # 0=fully aligned, 2=fully opposite
-        loss_smooth = torch.mean(knn_weights * angular_diff**2)
+        neighbor_proj = proj_points[knn_idx]  # (N, k, 2)
+        centroid = torch.sum(knn_weights.unsqueeze(-1) * neighbor_proj, dim=1)  # (N, 2)
+        laplacian = proj_points - centroid  # deviation from local centroid
+        loss_smooth = torch.mean(torch.sum(laplacian**2, dim=1))
         
         # =========================================
-        # Loss 4: Initial gradient anchor (mild regularization)
-        # Prevent gradients from drifting far from initial estimate
+        # Loss 4: Initial position anchor (mild regularization)
+        # Prevent projected points from drifting far from initial estimate
         # =========================================
         loss_init = torch.mean(torch.sum(
-            (grads_normalized - init_grads_tensor)**2, dim=1))
+            (proj_points - init_proj_detached)**2, dim=1))
         
         # =========================================
         # Total loss
         # =========================================
-        if hard_eikonal:
-            loss = w_proj * loss_proj + w_smooth * loss_smooth + w_init * loss_init
-        else:
-            loss = ( w_smooth * loss_smooth +
-                    w_init * loss_init + w_eikonal * loss_eikonal)
+        loss = (w_proj * loss_proj + w_smooth * loss_smooth +
+                w_init * loss_init + w_eikonal * loss_dist)
         
         loss.backward()
         
         # NaN detection & gradient clipping
-        param = theta if hard_eikonal else grads_param
-        if torch.isnan(param.grad).any():
+        if torch.isnan(proj_points.grad).any():
             print(f"  !! NaN gradient detected at step {i+1}, skipping update")
-            param.grad.zero_()
+            proj_points.grad.zero_()
             continue
-        torch.nn.utils.clip_grad_norm_([param], max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_([proj_points], max_norm=1.0)
         optimizer.step()
         
         if (i+1) % 100 == 0 or i == 0:
             print(f"Step {i+1:3d} | Proj: {loss_proj.item():.6e}  "
                   f"Smooth: {loss_smooth.item():.6e}  "
                   f"Init: {loss_init.item():.6e}  "
-                  f"Eikonal: {loss_eikonal.item():.6e}  "
+                  f"Dist: {loss_dist.item():.6e}  "
                   f"Total: {loss.item():.6e}")
-            
-    if hard_eikonal:
-        final_grads_x = torch.cos(theta)
-        final_grads_y = torch.sin(theta)
-        return torch.stack([final_grads_x, final_grads_y], dim=1).detach().cpu().numpy()
-    else:
-        return grads_param.detach().cpu().numpy()
+    
+    # Convert optimized projected points to unit gradients
+    final_grads, _ = derive_gradients(proj_points)
+    return final_grads.detach().cpu().numpy()

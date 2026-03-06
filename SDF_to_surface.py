@@ -364,12 +364,20 @@ def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpola
     gradients: (N, d) array of estimated gradient vectors
         The estimated gradient vectors at each input point.
     """
-    gradients, fitted_interpolator = opt.iterative_projection(
-        points, distances, init_gradients, num_iter=iters)
+
+    # optimize the gradients to be curl-free
+    gradients = opt.opt(points, distances, init_gradients, num_iter=iters, lr=1e-3)
+    # gradients = opt.opt(points, init_gradients, num_iter=500, lr=1e-2)
     gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
-    # Copy fitted state into the caller's interpolator
-    interpolator.__dict__.update(fitted_interpolator.__dict__)
+    interpolator.fit(points, distances, gradients)  # Refit the interpolator with the original points and distances
     return gradients
+
+    # gradients, fitted_interpolator = opt.iterative_projection(
+    #     points, distances, init_gradients, num_iter=iters)
+    # gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
+    # # Copy fitted state into the caller's interpolator
+    # interpolator.__dict__.update(fitted_interpolator.__dict__)
+    # return gradients
 
 
 def estimate_gradients_interp_global(sdf_points, sdf_values, interpolator : Interpolator, visible_arcs, degenerate_arcs, colinear_neighbors=None, clamp=True):
@@ -1974,5 +1982,5 @@ if __name__ == "__main__":
     # test_subdividing(30)
     # test_interpolation_gradients(30, use_sample_gradient=True)
     for n in [30]:
-        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, iters=10, see_arcs=True, clamp_gradients=False)
+        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.CurlFree_OPT, iters=0, see_arcs=True, clamp_gradients=False)
     # test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL, iters=5000, see_arcs=False, clamp_gradients=False)
