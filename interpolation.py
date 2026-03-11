@@ -23,8 +23,6 @@ class Interpolator:
         self.q = None
         self.kernel_type = kernel
         self.trained = False
-        self.zero_contours = None
-        self.contour_resolution = None
         if kernel == 'thin_plate':
             self.kernel = lambda r: r**2 * np.log(r + 1e-10)
         else:
@@ -176,7 +174,7 @@ class Interpolator:
 
         return result
     
-    def extract_zero_level_set(self, bounds, resolution=256, force_recompute=False):
+    def extract_zero_level_set(self, bounds, resolution=256, force_recompute=True):
         """
         Extract zero level set contours via Marching Squares on a regular grid.
         
@@ -193,8 +191,6 @@ class Interpolator:
             Each element is an (M, 2) array of vertices forming a closed or open polyline
             on the zero level set. Closed contours have first == last vertex.
         """
-        if self.zero_contours is not None and not force_recompute:
-            return self.zero_contours
         (xmin, xmax), (ymin, ymax) = bounds
         xs = np.linspace(xmin, xmax, resolution)
         ys = np.linspace(ymin, ymax, resolution)
