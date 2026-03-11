@@ -2264,7 +2264,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             circle = plt.Circle(center, radius, color=color, fill=False, alpha=1, linewidth=.3)
             ax.add_patch(circle)
     
-    if gradient_estimation in (GradientEstimation.INTERP_GLOBAL_OPT):
+    if gradient_estimation in [GradientEstimation.INTERP_GLOBAL_OPT]:
         # draw the gradients as arrows for each projected point on surface
         gradients = interpolator.predict_gradient(good_points_on_surface)
         plt.quiver(good_points_on_surface[:, 0], good_points_on_surface[:, 1], gradients[:, 0], gradients[:, 1], color='cyan', scale=50, width=0.001, label='Estimated Gradients')
@@ -2335,6 +2335,6 @@ if __name__ == "__main__":
     # test_subdividing(30)
     # test_interpolation_gradients(30, use_sample_gradient=True)
     for n in [30]:
-        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.ORACLE_CURLFREE, iters=0, see_arcs=True, clamp_gradients=False, resolution=400, path_to_image='examples/archer.png')
+        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=0, see_arcs=True, clamp_gradients=False, resolution=400, path_to_image='examples/horse.png')
     # test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=5000, see_arcs=False, clamp_gradients=False)
     # test_find_neighbors(30, path_to_image='examples/eiffel.png')

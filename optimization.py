@@ -42,8 +42,12 @@ def find_angle_point(circle_center, radius, p1, p2, is_max=True):
     
     best_theta = res.x[0]
     best_point = (cx + radius * np.cos(best_theta), cy + radius * np.sin(best_theta))
-    max_angle_rad = np.arccos(objective(best_theta))
-    return best_point, best_theta, max_angle_rad
+    # objective returns cos(angle) when is_max, -cos(angle) when not is_max
+    # so we need to undo the negation to get the actual cos(angle)
+    raw = objective(best_theta)
+    actual_cos = raw if is_max else -raw
+    best_angle_rad = np.arccos(np.clip(actual_cos, -1.0, 1.0))
+    return best_point, best_theta, best_angle_rad
     
 def find_neighbors(proj_points, interpolator : Interpolator):
     """
@@ -56,7 +60,7 @@ def find_neighbors(proj_points, interpolator : Interpolator):
       3. Map each projected point to the arc-length of its nearest contour vertex.
       4. Sort projected points by arc-length and return the two adjacent ones as neighbors.
     """
-    zero_level_contours = interpolator.extract_zero_level_set(bounds=((-1, 1), (-1, 1)), resolution=500)
+    zero_level_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400)
 
     # Build flat arrays: contour vertices, their polyline id, and local arc-length within that polyline.
     # Each polyline is treated independently so that different contours are never cross-connected.
@@ -64,6 +68,11 @@ def find_neighbors(proj_points, interpolator : Interpolator):
     vert_poly_id = []
     vert_arc = []
     poly_closed = []   # whether each polyline is a closed loop
+    all_seg_starts = []    # edge segment start points
+    all_seg_ends = []      # edge segment end points
+    seg_poly_ids = []      # polyline id for each segment
+    seg_arc_starts = []    # arc-length at segment start
+    seg_arc_ends = []      # arc-length at segment end
 
     for pid, poly in enumerate(zero_level_contours):
         poly = np.asarray(poly)
@@ -82,25 +91,51 @@ def find_neighbors(proj_points, interpolator : Interpolator):
             vert_poly_id.append(pid)
             vert_arc.append(arc)
         poly_closed.append(is_closed)
+        for j in range(len(poly) - 1):
+            all_seg_starts.append(poly[j])
+            all_seg_ends.append(poly[j + 1])
+            seg_poly_ids.append(pid)
+            seg_arc_starts.append(cum[j])
+            seg_arc_ends.append(cum[j + 1])
 
     if len(all_contour_pts) == 0:
         return [[] for _ in range(len(proj_points))]
 
-    all_contour_pts = np.array(all_contour_pts)  # (C, 2)
-    vert_poly_id = np.array(vert_poly_id)
-    vert_arc = np.array(vert_arc)
-
-    # Map each projected point to its nearest contour vertex -> polyline id + local arc
     N = len(proj_points)
+
+    if len(all_seg_starts) == 0:
+        # All polylines are single points — no meaningful neighbors
+        return [[] for _ in range(N)]
+
+    # Convert edge arrays for vectorized nearest-segment projection
+    all_seg_starts = np.array(all_seg_starts)    # (E, 2)
+    all_seg_ends = np.array(all_seg_ends)        # (E, 2)
+    seg_poly_ids = np.array(seg_poly_ids)        # (E,)
+    seg_arc_starts = np.array(seg_arc_starts)    # (E,)
+    seg_arc_ends = np.array(seg_arc_ends)        # (E,)
+
+    # Map each projected point to its nearest contour SEGMENT and compute
+    # an interpolated arc-length.  This yields a continuous parameterisation
+    # so that sorting by arc-length reliably gives true left / right neighbors.
     proj_poly_id = np.empty(N, dtype=int)
     proj_arc = np.empty(N)
-    chunk = max(1, 50_000 // max(len(all_contour_pts), 1))
+    E = len(all_seg_starts)
+    AB = all_seg_ends - all_seg_starts           # (E, 2)
+    AB_len2 = np.sum(AB**2, axis=1)              # (E,)
+    chunk = max(1, 50_000 // max(E, 1))
     for i0 in range(0, N, chunk):
         i1 = min(i0 + chunk, N)
-        dists = np.linalg.norm(proj_points[i0:i1, None, :] - all_contour_pts[None, :, :], axis=2)
-        nearest = np.argmin(dists, axis=1)
-        proj_poly_id[i0:i1] = vert_poly_id[nearest]
-        proj_arc[i0:i1] = vert_arc[nearest]
+        batch = proj_points[i0:i1]               # (B, 2)
+        B = batch.shape[0]
+        AP = batch[:, None, :] - all_seg_starts[None, :, :]        # (B, E, 2)
+        t = np.sum(AP * AB[None, :, :], axis=2) / np.maximum(AB_len2[None, :], 1e-20)
+        t = np.clip(t, 0.0, 1.0)                                   # (B, E)
+        closest = all_seg_starts[None, :, :] + t[:, :, None] * AB[None, :, :]  # (B, E, 2)
+        dists = np.linalg.norm(batch[:, None, :] - closest, axis=2) # (B, E)
+        nearest_seg = np.argmin(dists, axis=1)                       # (B,)
+        nearest_t = t[np.arange(B), nearest_seg]                     # (B,)
+        proj_poly_id[i0:i1] = seg_poly_ids[nearest_seg]
+        proj_arc[i0:i1] = seg_arc_starts[nearest_seg] + nearest_t * (seg_arc_ends[nearest_seg] - seg_arc_starts[nearest_seg])
 
     # For each projected point find arc-length neighbors *within the same polyline*.
     # Closed polylines wrap around: first and last entries are each other's neighbors.
@@ -186,28 +221,29 @@ def iterative_smoothing(points, values, init_gradients, interpolator : Interpola
             _closest = n1 + _t * _d
             if np.linalg.norm(_closest - points[i]) < abs(values[i]):
                 # intersection between n1-n2 and circle
-                best_point, best_theta, _ = find_angle_point(p_i, np.linalg.norm(points[i] - p_i), n1, n2, is_max=False)
+                best_point, best_theta, _ = find_angle_point(points[i], np.linalg.norm(points[i] - p_i), n1, n2, is_max=True)
                 # check the distance between best_point and original projection
                 if np.linalg.norm(best_point - p_i) < np.sqrt(2) * abs(values[i]):
                     if va.angle_in_arcs(best_theta, visible_arcs[i]):
                         new_projected_points[i] = best_point
                 else:
                     if va.angle_in_arcs(best_theta + np.pi, visible_arcs[i]):
-                        new_projected_points[i] = 2 * p_i - best_point
+                        new_projected_points[i] = 2 * points[i] - best_point
             else:
                 # no intersection, just move p_i to the point on the line n1-n2 that forms the largest angle
-                best_point, best_theta, max_angle_rad = find_angle_point(p_i, np.linalg.norm(points[i] - p_i), n1, n2, is_max=True)
+                best_point, best_theta, max_angle_rad = find_angle_point(points[i], np.linalg.norm(points[i] - p_i), n1, n2, is_max=True)
                 if np.linalg.norm(best_point - p_i) < np.sqrt(2) * abs(values[i]):
                     if va.angle_in_arcs(best_theta, visible_arcs[i]):
                         new_projected_points[i] = best_point
                 else:
                     if va.angle_in_arcs(best_theta + np.pi, visible_arcs[i]):
-                        new_projected_points[i] = 2 * p_i - best_point
-            if i == 762:
-                print(np.linalg.norm(_closest - points[i]) < abs(values[i]))
-                print(f"Iter {it+1}, point {i}: p_i={p_i}, n1={n1}, n2={n2}, best_point={best_point}, max_rad={max_angle_rad}, \
-                      original_theta={np.arccos(np.dot(n1 - p_i, n2 - p_i) / (np.linalg.norm(n1 - p_i) * np.linalg.norm(n2 - p_i)))}, \
-                        new_proj={new_projected_points[i]}")
+                        new_projected_points[i] = 2 * points[i] - best_point
+            # if i == 429:
+            #     print(np.linalg.norm(_closest - points[i]) < abs(values[i])) # intersection happens
+            #     print(np.linalg.norm(best_point - points[i]), 2*abs(values[i]))
+            #     print(f"Iter {it+1}, point {i}: center={points[i]} p_i={p_i}, n1={n1}, n2={n2}, best_point={best_point}, max_rad={max_angle_rad}, \
+            #           original_theta={np.arccos(np.dot(n1 - p_i, n2 - p_i) / (np.linalg.norm(n1 - p_i) * np.linalg.norm(n2 - p_i)))}, \
+            #             new_proj={new_projected_points[i]}")
         proj_points = new_projected_points
         print(f"Iter {it+1:3d} completed.")
     # compute final unit gradients: g = sign(s) * (P - P_proj) / |P - P_proj|
