@@ -181,7 +181,7 @@ def iterative_smoothing(points, values, init_gradients, interpolator : Interpola
         Signed distance values at each sample point.
     init_gradients : (N, 2) array
         Initial gradient estimates.
-    visible_arcs: a list of lists: point index -> list of visible arcs
+    visible_arcs: a list of lists of tuples: point index -> list of visible arcs
         A collection of visible arcs that can be used to clamp the gradients.
     short_arc_idx: a set of point indices whose visible arcs are extremely short, so we skip them.
     num_iter : int
@@ -253,7 +253,42 @@ def iterative_smoothing(points, values, init_gradients, interpolator : Interpola
     gradients = s_sign * direction / (norms + 1e-12)
     return gradients
 
-def iterative_projection(points, values, init_gradients, num_iter=10,
+def _point_to_polylines_min_dist(points, polylines):
+    """Min distance from each query point to the *segments* of polylines."""
+    min_dists = np.full(len(points), np.inf)
+    nearest_points = np.zeros_like(points)
+    for poly in polylines:
+        if len(poly) < 2:
+            dists = np.linalg.norm(points - poly[0], axis=1)
+            better = dists < min_dists
+            min_dists[better] = dists[better]
+            nearest_points[better] = poly[0]
+            continue
+        a = poly[:-1]
+        b = poly[1:]
+        ab = b - a
+        ab_sq = np.sum(ab ** 2, axis=1)
+        chunk = max(1, 50_000 // max(len(a), 1))
+        for i0 in range(0, len(points), chunk):
+            i1 = min(i0 + chunk, len(points))
+            pts = points[i0:i1]
+            ap = pts[:, None, :] - a[None, :, :]
+            t = np.sum(ap * ab[None, :, :], axis=2) / np.maximum(ab_sq[None, :], 1e-30)
+            t = np.clip(t, 0.0, 1.0)
+            closest = a[None, :, :] + t[:, :, None] * ab[None, :, :]
+            dists = np.linalg.norm(pts[:, None, :] - closest, axis=2)
+            best_idx = np.argmin(dists, axis=1)
+            best_dists = dists[np.arange(i1 - i0), best_idx]
+            best_points = closest[np.arange(i1 - i0), best_idx]
+
+            better = best_dists < min_dists[i0:i1]
+            if np.any(better):
+                global_idx = np.where(better)[0] + i0
+                min_dists[global_idx] = best_dists[better]
+                nearest_points[global_idx] = best_points[better]
+    return min_dists, nearest_points
+
+def iterative_projection(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10,
                          num_coarse=24, refine_steps=4, num_refine=12):
     """
     Iteratively refine SDF gradients by projecting sample points onto the zero
@@ -276,6 +311,9 @@ def iterative_projection(points, values, init_gradients, num_iter=10,
         Signed distance values at each sample point.
     init_gradients : (N, 2) array
         Initial unit gradient estimates.
+    visible_arcs: a list of lists of tuples: point index -> list of visible arcs
+        A collection of visible arcs that can be used to clamp the gradients.
+    short_arc_idx: a set of point indices whose visible arcs are extremely short, so we skip them.
     num_iter : int
         Number of projection-refit iterations (default 10).
     num_coarse : int
@@ -300,20 +338,30 @@ def iterative_projection(points, values, init_gradients, num_iter=10,
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-12)
     init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
-
     for it in range(num_iter):
         # ----- Step 1: Fit interpolant with current gradients -----
-        interpolator = CurlFree_Interpolator(use_projection=True)
-        interpolator.fit(points, values, gradients)
+        interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
 
         # ----- Step 2: Find best gradient via angular search on the interpolant -----
-        new_gradients = interpolator.sample_best_gradients(
-            points, values,
-            num_coarse=num_coarse,
-            refine_steps=refine_steps,
-            num_refine=num_refine,
-            initial_guess=init_angles
-        )
+        # new_gradients = interpolator.sample_best_gradients(
+        #     points, values,
+        #     num_coarse=num_coarse,
+        #     refine_steps=refine_steps,
+        #     num_refine=num_refine,
+        #     initial_guess=init_angles
+        # )
+        zero_level_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=600)
+        _, nearest_pts = _point_to_polylines_min_dist(points, zero_level_contours)
+        dir = nearest_pts - points
+        dir = dir / np.linalg.norm(dir, axis=1, keepdims=True)
+        angle = np.arctan2(dir[:, 1], dir[:, 0])
+        new_gradients = dir * np.where(values[:, np.newaxis] >= 0, -1.0, 1.0)  # Ensure correct sign based on SDF value
+        # skip points with short visible arcs or the dir is not in visible arcs, keep original gradients for them
+        skip_mask = np.zeros(len(points), dtype=bool)
+        for i in range(len(points)):
+            if i in short_arc_idx or not va.angle_in_arcs(angle[i], visible_arcs[i]):
+                skip_mask[i] = True
+        new_gradients[skip_mask] = gradients[skip_mask]
 
         # ----- Convergence diagnostic -----
         cos_sim = np.sum(gradients * new_gradients, axis=1)
@@ -333,8 +381,7 @@ def iterative_projection(points, values, init_gradients, num_iter=10,
         init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
 
     # Final fit with converged gradients
-    interpolator = CurlFree_Interpolator(use_projection=True)
-    interpolator.fit(points, values, gradients)
+    interpolator.fit(points, values, gradients, use_projection=True, force_recompute=True)
 
     return gradients, interpolator
 

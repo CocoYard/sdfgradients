@@ -5,7 +5,7 @@ class Interpolator:
     """
     A Duchon interpolator to fit and predict values based on input signed distance data.
     """
-    def __init__(self, kernel='thin_plate'):
+    def __init__(self, kernel='thin_plate', use_projection=False):
         """
         Initialize the Duchon interpolation object with a specified radial basis function kernel.
         Parameters
@@ -28,7 +28,7 @@ class Interpolator:
         else:
             self.kernel = lambda r: r**3
 
-    def fit(self, points, values, gradients=None, force_recompute=False):
+    def fit(self, points, values, gradients=None, force_recompute=False, use_projection=True):
         """
         Fit the interpolator with given points and their corresponding values.
 
@@ -41,11 +41,18 @@ class Interpolator:
         if self.trained and not force_recompute:
             print(f"Interpolator is already trained. Use force_recompute=True to refit {points.shape[0]} points.")
             return
-        self.points = points
-        self.values = values
-        if gradients is not None:
+        if gradients is not None and use_projection:
+            projections = points - values[:, np.newaxis] * gradients
+            self.points = np.vstack([points, projections])
+            self.values = np.concatenate([values, np.zeros(len(projections))])
+            self.alpha, self.p, self.q = self._compute_coefficients(self.points, self.values)
+        elif gradients is not None:
+            self.points = points
+            self.values = values
             self.alpha, self.beta, self.p, self.q = self._compute_coefficients_with_gradients(points, values, gradients)
         else:
+            self.points = points
+            self.values = values
             self.alpha, self.p, self.q = self._compute_coefficients(points, values)
         self.trained = True
     
@@ -496,11 +503,10 @@ class CurlFree_Interpolator(Interpolator):
     当 use_projection=True 时，会将原始采样点沿梯度方向投影到表面附近，
     作为额外的梯度约束点，增强插值精度。
     """
-    def __init__(self, use_projection=False, min_proj_distance=1e-8):
+    def __init__(self, min_proj_distance=1e-8):
         super().__init__(kernel='thin_plate')
         self.X_train = None
         self.N = 0
-        self.use_projection = use_projection
         self.min_proj_distance = min_proj_distance
         
         self.X_cf_base = None
@@ -538,7 +544,7 @@ class CurlFree_Interpolator(Interpolator):
         
         return valid_mask
 
-    def fit(self, sdf_points, sdf_values, sdf_gradients, force_recompute=False):
+    def fit(self, sdf_points, sdf_values, sdf_gradients, force_recompute=False, use_projection=True):
         """
         根据给定的 SDF 点集、距离值和梯度进行插值拟合。
         """
@@ -550,7 +556,7 @@ class CurlFree_Interpolator(Interpolator):
         sdf_gradients = np.asarray(sdf_gradients)
         self.N = self.X_train.shape[0]
 
-        if self.use_projection:
+        if use_projection:
             projected_points = self.X_train - sdf_values[:, np.newaxis] * sdf_gradients
             valid_mask = self._filter_projected_points(self.X_train, projected_points, sdf_gradients)
             valid_proj = projected_points[valid_mask]
@@ -583,7 +589,7 @@ class CurlFree_Interpolator(Interpolator):
         self.c_cf = sol_cf[:2 * self.N_cf].reshape((self.N_cf, 2))
         self.b_cf = sol_cf[2 * self.N_cf:]
 
-        if self.use_projection:
+        if use_projection:
             self.X_sc_base = np.vstack([self.X_train, valid_proj])
             self.N_sc = self.X_sc_base.shape[0]
             all_sdf_for_sc = np.concatenate([sdf_values, np.zeros(len(valid_proj))])

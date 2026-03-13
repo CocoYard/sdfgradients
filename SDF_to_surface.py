@@ -389,8 +389,8 @@ def estimate_gradients_basicInterp_opt(points, distances, init_gradients, interp
     """
 
     # optimize the gradients to be curl-free
-    gradients = opt.iterative_smoothing(points, distances, init_gradients, interpolator, visible_arcs, short_arc_idx, num_iter=iters)
-    # gradients, _ = opt.iterative_projection(points, distances, init_gradients, num_iter=iters)
+    # gradients = opt.iterative_gradient_alignment(points, distances, init_gradients, interpolator, visible_arcs, short_arc_idx, num_iter=iters)
+    gradients, _ = opt.iterative_projection(points, distances, init_gradients, interpolator=interpolator, visible_arcs=visible_arcs, short_arc_idx=short_arc_idx, num_iter=iters)
     return gradients
 
 def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpolator : Interpolator, iters, visible_arcs, short_arc_idx):
@@ -423,7 +423,7 @@ def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpola
 
     # optimize the gradients to be curl-free
     # gradients = opt.iterative_smoothing(points, distances, init_gradients, interpolator, visible_arcs, short_arc_idx, num_iter=iters)
-    gradients, _ = opt.iterative_projection(points, distances, init_gradients, num_iter=iters)
+    gradients, _ = opt.iterative_projection(points, distances, init_gradients, interpolator=interpolator, visible_arcs=visible_arcs, short_arc_idx=short_arc_idx, num_iter=iters)
     # gradients = opt.opt(points, init_gradients, num_iter=500, lr=1e-2)
     # gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
     return gradients
@@ -1094,6 +1094,8 @@ def obj_to_points(V, E):
             if not found or next_vertex == start_vertex:
                 break
         if len(contour_indices) >= 2:
+            if contour_indices[0] != contour_indices[-1]:
+                contour_indices.append(contour_indices[0])  # Close the loop if not already
             contours.append(V[contour_indices])
     return contours
 
@@ -2125,18 +2127,13 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         print(f"Number of colinear neighbors: {len(colinear_neighbors)}")
     if gradient_estimation == GradientEstimation.INTERP_GLOBAL_OPT:
         init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors if on_gradient_neighbors else None)
-        
         init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
-        to_fit_points = np.vstack([sdf_points, init_projections])
-        to_fit_values = np.concatenate([sdf_values, np.zeros(len(init_projections))])
-        interpolator.fit(to_fit_points, to_fit_values, force_recompute=True)
+        interpolator.fit(sdf_points, sdf_values, init_gradients, force_recompute=True, use_projection=True)
 
         init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
         gradients = estimate_gradients_basicInterp_opt(sdf_points, sdf_values, init_gradients, interpolator, iters,  visible_arcs, degenerate_arcs)
-        projections = sdf_points - sdf_values[:, np.newaxis] * gradients
-        to_fit_points = np.vstack([sdf_points, projections])
-        to_fit_values = np.concatenate([sdf_values, np.zeros(len(projections))])
-        interpolator.fit(to_fit_points, to_fit_values, force_recompute=True)
+
+        interpolator.fit(sdf_points, sdf_values, gradients, force_recompute=True, use_projection=True)
     elif gradient_estimation == GradientEstimation.INTERP_LOCAL:
         pass
     else:
@@ -2153,12 +2150,12 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         if gradient_estimation == GradientEstimation.CurlFree_OPT:
             # init_gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
             init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors if on_gradient_neighbors else None)
-            interpolator = CurlFree_Interpolator(use_projection=True)
-            interpolator.fit(sdf_points, sdf_values, init_gradients)
+            interpolator = CurlFree_Interpolator()
+            interpolator.fit(sdf_points, sdf_values, init_gradients, use_projection=True)
             init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
             init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
             gradients = estimate_gradients_curlfree_opt(sdf_points, sdf_values, init_gradients, interpolator, iters,  visible_arcs, degenerate_arcs)
-            interpolator.fit(sdf_points, sdf_values, gradients, force_recompute=True)  # Refit the interpolator with the original points and distances
+            interpolator.fit(sdf_points, sdf_values, gradients, use_projection=True, force_recompute=True)  # Refit the interpolator with the original points and distances
         elif gradient_estimation == GradientEstimation.IRLS:
             gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
         elif gradient_estimation == GradientEstimation.RANSAC:
@@ -2170,9 +2167,8 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             gradients, grad_errors = estimate_gradients_lstsq(sdf_points, sdf_values, neighbors)
         elif gradient_estimation == GradientEstimation.ORACLE_CURLFREE:
             gradients = gradients_gt
-            interpolator = CurlFree_Interpolator(use_projection=True)
-            interpolator.fit(sdf_points, sdf_values, gradients)
-            # interpolator.fit(np.append(sdf_points, new_points, axis=0), np.append(sdf_values, np.zeros(len(new_points)), axis=0))
+            interpolator = CurlFree_Interpolator()
+            interpolator.fit(sdf_points, sdf_values, gradients, use_projection=True, force_recompute=True)  # Refit the interpolator with the original points and distances
     if clamp_gradients:
         va.clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values)
     if gradient_estimation != GradientEstimation.CurlFree_OPT and  gradient_estimation != GradientEstimation.INTERP_GLOBAL_OPT:
@@ -2266,7 +2262,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     
     if gradient_estimation in [GradientEstimation.INTERP_GLOBAL_OPT]:
         # draw the gradients as arrows for each projected point on surface
-        gradients = interpolator.predict_gradient(good_points_on_surface)
+        gradients = interpolator.predict_gradient(good_points_on_surface) / np.linalg.norm(interpolator.predict_gradient(good_points_on_surface), axis=1, keepdims=True)
         plt.quiver(good_points_on_surface[:, 0], good_points_on_surface[:, 1], gradients[:, 0], gradients[:, 1], color='cyan', scale=50, width=0.001, label='Estimated Gradients')
         # Draw zero-level contours
         for poly in init_zero_contours:
@@ -2335,6 +2331,6 @@ if __name__ == "__main__":
     # test_subdividing(30)
     # test_interpolation_gradients(30, use_sample_gradient=True)
     for n in [30]:
-        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=0, see_arcs=True, clamp_gradients=False, resolution=400, path_to_image='examples/horse.png')
+        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=15, see_arcs=True, clamp_gradients=False, resolution=400, path_to_image='examples/denker.png')
     # test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=5000, see_arcs=False, clamp_gradients=False)
     # test_find_neighbors(30, path_to_image='examples/eiffel.png')
