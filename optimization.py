@@ -4,6 +4,55 @@ import torch
 from scipy.optimize import minimize
 import visible_arcs as va
 
+def iterative_gradient_alignment(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10):
+    """
+    Iteratively refine SDF gradients by finding the best gradient direction where 
+    the interpolant gradient direction is the closest to the direction between the
+    projected point and its center.
+
+    Algorithm (each iteration):
+      1. Fit a Interpolator with current gradients (use_projection=True).
+      2. For each sample point, search over directions to find the one whose
+         projection P - s*g lands closest to the zero level set of the
+         interpolant (via sample_best_gradient).
+    """
+    points = np.asarray(points, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64).ravel()
+    gradients = np.array(init_gradients, dtype=np.float64, copy=True)
+    proj_points = points - values[:, np.newaxis] * gradients
+    for it in range(num_iter):
+        new_gradients = np.zeros_like(gradients)
+        for i in range(len(points)):
+            if i in short_arc_idx:
+                new_gradients[i] = gradients[i]  # Skip points with very short visible arcs
+                continue
+            # ----- Find best gradient via angular search on the interpolant -----
+            init_guess_angle = np.arctan2(gradients[i, 1], gradients[i, 0]) if values[i] < 0 else np.arctan2(-gradients[i, 1], -gradients[i, 0])
+            grad = interpolator.sample_gradient_by_alignment(
+                points[i], values[i], visible_arcs=visible_arcs[i], num_coarse=15, initial_guess=init_guess_angle
+            )
+            angle = np.arctan2(grad[1], grad[0]) if values[i] < 0 else np.arctan2(-grad[1], -grad[0])
+            if va.angle_in_arcs(angle, visible_arcs[i]):
+                new_gradients[i] = grad
+            else:
+                new_gradients[i] = gradients[i]  # Keep original if new grad is not in visible arcs
+        # ----- Convergence diagnostic -----
+        cos_sim = np.sum(gradients * new_gradients, axis=1)
+        mean_cos = np.mean(cos_sim)
+        max_angle_deg = np.degrees(np.arccos(np.clip(np.min(cos_sim), -1, 1)))
+
+        # Projection error: f(P - s*g) should be ~0
+        proj_pts = points - values[:, np.newaxis] * new_gradients
+        proj_vals = interpolator.predict(proj_pts)
+        proj_rmse = np.sqrt(np.mean(proj_vals**2))
+
+        print(f"Iter {it+1:3d} | mean cos_sim: {mean_cos:.6f}  "
+              f"max angle change: {max_angle_deg:.2f}\u00b0  "
+              f"proj RMSE: {proj_rmse:.6e}")
+        gradients = new_gradients
+        interpolator.fit(points, values, gradients, use_projection=True, force_recompute=True)
+    return gradients
+
 def find_angle_point(circle_center, radius, p1, p2, is_max=True):
     cx, cy = circle_center
     p1 = np.array(p1)
@@ -343,20 +392,20 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
         interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
 
         # ----- Step 2: Find best gradient via angular search on the interpolant -----
-        # new_gradients = interpolator.sample_best_gradients(
-        #     points, values,
-        #     num_coarse=num_coarse,
-        #     refine_steps=refine_steps,
-        #     num_refine=num_refine,
-        #     initial_guess=init_angles
-        # )
-        zero_level_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=600)
-        _, nearest_pts = _point_to_polylines_min_dist(points, zero_level_contours)
-        dir = nearest_pts - points
-        dir = dir / np.linalg.norm(dir, axis=1, keepdims=True)
-        angle = np.arctan2(dir[:, 1], dir[:, 0])
-        new_gradients = dir * np.where(values[:, np.newaxis] >= 0, -1.0, 1.0)  # Ensure correct sign based on SDF value
+        new_gradients = interpolator.sample_best_gradients(
+            points, values,
+            num_coarse=num_coarse,
+            refine_steps=refine_steps,
+            num_refine=num_refine,
+            initial_guess=init_angles
+        )
+        # zero_level_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=600)
+        # _, nearest_pts = _point_to_polylines_min_dist(points, zero_level_contours)
+        # dir = np.where(values[:, np.newaxis] < 0, nearest_pts - points, points - nearest_pts)
+        # new_gradients = dir / np.linalg.norm(dir, axis=1, keepdims=True)
+
         # skip points with short visible arcs or the dir is not in visible arcs, keep original gradients for them
+        angle = np.where(values < 0, np.arctan2(new_gradients[:, 1], new_gradients[:, 0]), np.arctan2(-new_gradients[:, 1], -new_gradients[:, 0]))
         skip_mask = np.zeros(len(points), dtype=bool)
         for i in range(len(points)):
             if i in short_arc_idx or not va.angle_in_arcs(angle[i], visible_arcs[i]):

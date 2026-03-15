@@ -381,6 +381,65 @@ class Interpolator:
 
         return gradients
     
+    def sample_gradient_by_alignment(self, x_new, sdf, num_coarse=24, tol=1e-6, visible_arcs=None, initial_guess=None):
+        """
+        Find the best gradient direction by coarse sweep + bounded scalar optimization.
+
+        First performs a coarse uniform sweep over the unit circle to locate a
+        promising angular region, then refines with scipy.optimize.minimize_scalar
+        for high precision.
+
+        Parameters:
+        x_new (np.ndarray): Shape (dimensions,) — the query point.
+        sdf (float): The signed distance value at the query point.
+        num_coarse (int): Number of uniformly spaced directions in the coarse sweep. Default 24.
+        tol (float): Absolute tolerance for the angular refinement. Default 1e-6.
+        visible_arcs (list of tuples): Optional list of (start_angle, end_angle) arcs in radians that are visible.
+        initial_guess (float): Initial guess for the optimal angle. Default None. If provided, the coarse sweep will skip.
+        The bounded scalar optimization will be centered around this angle.
+
+        Returns:
+        np.ndarray: Shape (dimensions,) — the best gradient direction (unit vector).
+        """
+        from scipy.optimize import minimize_scalar
+        sign = 1.0 if sdf > 0 else -1.0
+        def objective(angle):
+            direction = np.array([np.cos(angle), np.sin(angle)])
+            sample = (x_new + np.abs(sdf) * direction).reshape(1, -1)
+            pred_grad = self.predict_gradient(sample)[0]
+            pred_grad /= np.linalg.norm(pred_grad) + 1e-10
+            return sign * direction @ pred_grad
+        if initial_guess is not None:
+            best_angle = initial_guess
+        else:
+            # Coarse sweep (uniform angles)
+            if visible_arcs is not None:
+                angles = []
+                for arc in visible_arcs:
+                    num_cuts = (arc[1] - arc[0]) / (2 * np.pi) * num_coarse if arc[1] > arc[0] else (arc[1] - arc[0] + 2 * np.pi) / (2 * np.pi) * num_coarse
+                    arc_angles = np.linspace(arc[0], arc[1], int(np.ceil(num_cuts)), endpoint=False)
+                    angles.extend(arc_angles)
+                angles = np.array(angles)
+            else:
+                angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)
+
+            all_dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+            samples = x_new + np.abs(sdf) * all_dirs
+            pred_grads = self.predict_gradient(samples)
+            pred_grads = pred_grads / np.linalg.norm(pred_grads, axis=1, keepdims=True)
+            best_idx = np.argmin(np.sum(sign * all_dirs * pred_grads, axis=1))
+            best_angle = angles[best_idx]
+        # Refine with bounded scalar optimization around the best coarse angle
+        delta = np.pi / num_coarse
+        bounds = [best_angle - delta, best_angle + delta]
+        result = minimize_scalar(objective,
+                                 bounds=bounds,
+                                 method='bounded',
+                                 options={'xatol': tol})
+        best_angle = result.x
+        direction = np.array([np.cos(best_angle), np.sin(best_angle)])
+        return -direction * sign
+    
     def sample_best_gradient(self, x_new, sdf, num_coarse=24, tol=1e-6, initial_guess=None):
         """
         Find the best gradient direction by coarse sweep + bounded scalar optimization.
