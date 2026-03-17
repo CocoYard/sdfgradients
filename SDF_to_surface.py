@@ -12,6 +12,7 @@ from interpolation import Interpolator, CurlFree_Interpolator
 from enum import Enum
 import time
 import optimization as opt
+from util import print_shape_distances
 
 class NeighborEstimation(Enum):
     VISIBLE_CONNECTIVITY = 'visible_connectivity'
@@ -360,7 +361,7 @@ def yongs_algorithm( points, distances, gradients ):
     new_points = points - (distances[:, np.newaxis] * gradients)
     return new_points
 
-def estimate_gradients_basicInterp_opt(points, distances, init_gradients, interpolator : Interpolator, iters, visible_arcs, short_arc_idx):
+def estimate_gradients_basicInterp_opt(points, distances, init_gradients, interpolator : Interpolator, iters, visible_arcs, short_arc_idx, gt=None):
     """
     Estimate gradients by iteratively projecting sample points onto the zero
     level set of an interpolant, then re-reading the interpolant's
@@ -389,8 +390,8 @@ def estimate_gradients_basicInterp_opt(points, distances, init_gradients, interp
     """
 
     # optimize the gradients to be curl-free
-    # gradients = opt.iterative_gradient_alignment(points, distances, init_gradients, interpolator, visible_arcs, short_arc_idx, num_iter=iters)
-    gradients, _ = opt.iterative_projection(points, distances, init_gradients, interpolator=interpolator, visible_arcs=visible_arcs, short_arc_idx=short_arc_idx, num_iter=iters)
+    gradients = opt.iterative_gradient_alignment(points, distances, init_gradients, interpolator, visible_arcs, short_arc_idx, num_iter=iters, gt=gt)
+    # gradients, _ = opt.iterative_projection(points, distances, init_gradients, interpolator=interpolator, visible_arcs=visible_arcs, short_arc_idx=short_arc_idx, num_iter=iters, gt=gt)
     return gradients
 
 def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpolator : Interpolator, iters, visible_arcs, short_arc_idx):
@@ -1196,49 +1197,6 @@ def gradients_diff_norm(gradients1, gradients2):
     """ Compute the mean L2 norm of the difference between two sets of gradients."""
     return np.mean(np.linalg.norm(gradients1 - gradients2, axis=1))
 
-def _point_to_polylines_min_dist(points, polylines):
-    """Min distance from each query point to the *segments* of polylines."""
-    min_dists = np.full(len(points), np.inf)
-    for poly in polylines:
-        if len(poly) < 2:
-            dists = np.linalg.norm(points - poly[0], axis=1)
-            min_dists = np.minimum(min_dists, dists)
-            continue
-        a = poly[:-1]
-        b = poly[1:]
-        ab = b - a
-        ab_sq = np.sum(ab ** 2, axis=1)
-        chunk = max(1, 50_000 // max(len(a), 1))
-        for i0 in range(0, len(points), chunk):
-            i1 = min(i0 + chunk, len(points))
-            pts = points[i0:i1]
-            ap = pts[:, None, :] - a[None, :, :]
-            t = np.sum(ap * ab[None, :, :], axis=2) / np.maximum(ab_sq[None, :], 1e-30)
-            t = np.clip(t, 0.0, 1.0)
-            closest = a[None, :, :] + t[:, :, None] * ab[None, :, :]
-            dists = np.linalg.norm(pts[:, None, :] - closest, axis=2)
-            min_dists[i0:i1] = np.minimum(min_dists[i0:i1], np.min(dists, axis=1))
-    return min_dists
-
-def _normalise_to_polyline_list(shape):
-    """Convert shape to list-of-polylines.
-    If shape is an ndarray with NaN separator rows, splits into separate polylines."""
-    if isinstance(shape, np.ndarray):
-        nan_mask = np.any(np.isnan(shape), axis=1)
-        if np.any(nan_mask):
-            polylines = []
-            start = 0
-            for i in range(len(shape)):
-                if nan_mask[i]:
-                    if i > start:
-                        polylines.append(shape[start:i])
-                    start = i + 1
-            if start < len(shape):
-                polylines.append(shape[start:])
-            return polylines
-        return [shape]
-    return list(shape)
-
 def _polygon_area_signed(poly):
     """Signed area of a simple polygon using the shoelace formula."""
     x, y = poly[:, 0], poly[:, 1]
@@ -1247,84 +1205,6 @@ def _polygon_area_signed(poly):
 def Haussdorff_distances(shape, original_shape):
     """Backward-compatible wrapper — returns only the Hausdorff distance (float)."""
     return shape_distances(shape, original_shape)['hausdorff']
-
-def shape_distances(shape, original_shape):
-    """Compute multiple shape-difference metrics between two sets of polylines.
-
-    Parameters
-    ----------
-    shape : list of (N_i, 2) arrays, or a single (N, 2) array
-        One or more polylines (e.g. from marching cubes).
-    original_shape : (M, 2) array or list of (M_j, 2) arrays
-        The reference polyline(s).
-
-    Returns
-    -------
-    dict with keys:
-        hausdorff : float — max of directed Hausdorff distances (worst-case)
-        hausdorff_95 : float — 95-th percentile Hausdorff (robust worst-case)
-        chamfer : float — symmetric mean point-to-segment distance
-        rms : float — symmetric root-mean-square point-to-segment distance
-        iou : float — intersection-over-union of enclosed areas (0–1, higher=better)
-    """
-    shape_list = _normalise_to_polyline_list(shape)
-    orig_list  = _normalise_to_polyline_list(original_shape)
-
-    shape_verts = np.concatenate(shape_list, axis=0)
-    orig_verts  = np.concatenate(orig_list, axis=0)
-
-    # directed distances
-    d_s2o = _point_to_polylines_min_dist(shape_verts, orig_list)
-    d_o2s = _point_to_polylines_min_dist(orig_verts, shape_list)
-
-    # Hausdorff
-    hausdorff = float(max(np.max(d_s2o), np.max(d_o2s)))
-    hausdorff_95 = float(max(np.percentile(d_s2o, 95), np.percentile(d_o2s, 95)))
-
-    # Chamfer (symmetric mean)
-    chamfer = float(np.mean(d_s2o) + np.mean(d_o2s)) / 2.0
-
-    # RMS (symmetric root-mean-square)
-    rms = float(np.sqrt((np.mean(d_s2o ** 2) + np.mean(d_o2s ** 2)) / 2.0))
-
-    # IoU via rasterisation on a 500×500 grid in [0,1]²
-    from matplotlib.path import Path
-    res = 500
-    xs = np.linspace(0, 1, res)
-    ys = np.linspace(0, 1, res)
-    grid = np.array(np.meshgrid(xs, ys)).T.reshape(-1, 2)
-
-    def _raster(polylines):
-        mask = np.zeros(len(grid), dtype=bool)
-        for poly in polylines:
-            if len(poly) < 3:
-                continue
-            # close the polygon if not already closed
-            if not np.allclose(poly[0], poly[-1]):
-                poly = np.vstack([poly, poly[:1]])
-            path = Path(poly)
-            mask |= path.contains_points(grid)
-        return mask
-
-    mask_s = _raster(shape_list)
-    mask_o = _raster(orig_list)
-    intersection = np.sum(mask_s & mask_o)
-    union = np.sum(mask_s | mask_o)
-    iou = float(intersection / max(union, 1))
-
-    return {
-        'hausdorff': hausdorff,
-        'hausdorff_95': hausdorff_95,
-        'chamfer': chamfer,
-        'rms': rms,
-        'iou': iou,
-    }
-
-def print_shape_distances(label, shape, original_shape):
-    """Compute and pretty-print all shape distance metrics."""
-    d = shape_distances(shape, original_shape)
-    print(f"  {label}:  Hausdorff={d['hausdorff']:.4f}  H95={d['hausdorff_95']:.4f}  "
-          f"Chamfer={d['chamfer']:.4f}  RMS={d['rms']:.4f}  IoU={d['iou']:.3f}")
 
 def test_visible_neighbors(n=4, show_all=False):
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
@@ -2118,8 +1998,11 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         # interpolator.fit(sdf_points, sdf_values)
 
     visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
+    # for i, arcs in enumerate(visible_arcs):
+    #     visible_arcs[i] = [(0, 2 * np.pi)]
     radii = np.abs(sdf_values)
     degenerate_arcs = va.get_short_arcs(visible_arcs, tol=1e-8)
+    # degenerate_arcs = {}
     gradients_gt, new_points = estimate_gradients_oracle(sdf_points, sdf_values, points)
 
     if on_gradient_neighbors:
@@ -2128,10 +2011,11 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     if gradient_estimation == GradientEstimation.INTERP_GLOBAL_OPT:
         init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors if on_gradient_neighbors else None)
         init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
+        # interpolator = CurlFree_Interpolator()
         interpolator.fit(sdf_points, sdf_values, init_gradients, force_recompute=True, use_projection=True)
 
         init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
-        gradients = estimate_gradients_basicInterp_opt(sdf_points, sdf_values, init_gradients, interpolator, iters,  visible_arcs, degenerate_arcs)
+        gradients = estimate_gradients_basicInterp_opt(sdf_points, sdf_values, init_gradients, interpolator, iters,  visible_arcs, degenerate_arcs, points)
 
         interpolator.fit(sdf_points, sdf_values, gradients, force_recompute=True, use_projection=True)
     elif gradient_estimation == GradientEstimation.INTERP_LOCAL:
@@ -2331,6 +2215,6 @@ if __name__ == "__main__":
     # test_subdividing(30)
     # test_interpolation_gradients(30, use_sample_gradient=True)
     for n in [30]:
-        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=15, see_arcs=True, clamp_gradients=False, resolution=400, path_to_image='examples/denker.png')
+        test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=10, see_arcs=True, clamp_gradients=False, resolution=400, path_to_image='examples/archer.png')
     # test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=5000, see_arcs=False, clamp_gradients=False)
     # test_find_neighbors(30, path_to_image='examples/eiffel.png')

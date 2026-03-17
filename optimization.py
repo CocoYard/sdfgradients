@@ -3,8 +3,9 @@ from interpolation import CurlFree_Interpolator, Interpolator
 import torch
 from scipy.optimize import minimize
 import visible_arcs as va
+from util import print_shape_distances
 
-def iterative_gradient_alignment(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10):
+def iterative_gradient_alignment(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10, gt=None):
     """
     Iteratively refine SDF gradients by finding the best gradient direction where 
     the interpolant gradient direction is the closest to the direction between the
@@ -19,7 +20,9 @@ def iterative_gradient_alignment(points, values, init_gradients, interpolator : 
     points = np.asarray(points, dtype=np.float64)
     values = np.asarray(values, dtype=np.float64).ravel()
     gradients = np.array(init_gradients, dtype=np.float64, copy=True)
-    proj_points = points - values[:, np.newaxis] * gradients
+    interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
+    if gt is not None:
+            print_shape_distances("Before refinement", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     for it in range(num_iter):
         new_gradients = np.zeros_like(gradients)
         for i in range(len(points)):
@@ -51,8 +54,12 @@ def iterative_gradient_alignment(points, values, init_gradients, interpolator : 
               f"proj RMSE: {proj_rmse:.6e}")
         gradients = new_gradients
         interpolator.fit(points, values, gradients, use_projection=True, force_recompute=True)
+        if gt is not None:
+            print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     return gradients
 
+'''
+    Compute various shape distance metrics between two shapes represented as lists of polylines.
 def find_angle_point(circle_center, radius, p1, p2, is_max=True):
     cx, cy = circle_center
     p1 = np.array(p1)
@@ -301,6 +308,7 @@ def iterative_smoothing(points, values, init_gradients, interpolator : Interpola
     s_sign = np.where(values[:, np.newaxis] >= 0, 1.0, -1.0)
     gradients = s_sign * direction / (norms + 1e-12)
     return gradients
+'''
 
 def _point_to_polylines_min_dist(points, polylines):
     """Min distance from each query point to the *segments* of polylines."""
@@ -338,7 +346,7 @@ def _point_to_polylines_min_dist(points, polylines):
     return min_dists, nearest_points
 
 def iterative_projection(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10,
-                         num_coarse=24, refine_steps=4, num_refine=12):
+                         num_coarse=24, refine_steps=4, num_refine=12, gt=None):
     """
     Iteratively refine SDF gradients by projecting sample points onto the zero
     level set of a curl-free interpolant, then finding the best gradient
@@ -387,11 +395,11 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-12)
     init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
+    interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
+    if gt is not None:
+        print_shape_distances("Before refinement", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     for it in range(num_iter):
-        # ----- Step 1: Fit interpolant with current gradients -----
-        interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
-
-        # ----- Step 2: Find best gradient via angular search on the interpolant -----
+        # ----- Step 1: Find best gradient via angular search on the interpolant -----
         new_gradients = interpolator.sample_best_gradients(
             points, values,
             num_coarse=num_coarse,
@@ -428,9 +436,10 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
 
         gradients = new_gradients
         init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
-
-    # Final fit with converged gradients
-    interpolator.fit(points, values, gradients, use_projection=True, force_recompute=True)
+        # ----- Step 2: Fit interpolant with current gradients -----
+        interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
+        if gt is not None:
+            print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=500), gt)
 
     return gradients, interpolator
 

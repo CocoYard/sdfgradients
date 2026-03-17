@@ -568,17 +568,19 @@ class CurlFree_Interpolator(Interpolator):
         self.N = 0
         self.min_proj_distance = min_proj_distance
         
-        self.X_cf_base = None
-        self.N_cf = 0
+        # --- 无旋/梯度场 (Curl-Free) 相关的插值变量 ---
+        self.X_cf_base = None  # 梯度插值的基点坐标 (原始点 + 筛选后的投影点)
+        self.N_cf = 0          # 梯度插值基点的总数 (N_cf)
 
-        self.c_cf = None 
-        self.b_cf = None
+        self.c_cf = None       # 无旋 RBF (径向基函数) 对应的权重系数 (shape: N_cf x 2)
+        self.b_cf = None       # 无旋势场的多项式部分系数 (shape: 5)
 
-        self.c_sc = None
-        self.b_sc = None
+        # --- 标量/残差场 (Scalar) 相关的插值变量 ---
+        self.X_sc_base = None  # 标量残差插值的基点坐标
+        self.N_sc = 0          # 标量残差插值基点的总数 (N_sc)
 
-        self.X_sc_base = None
-        self.N_sc = 0
+        self.c_sc = None       # 标量 RBF (薄板样条) 对应的权重系数 (shape: N_sc)
+        self.b_sc = None       # 标量势场的多项式部分系数 (shape: 3)
 
         self.trained = False
 
@@ -683,6 +685,27 @@ class CurlFree_Interpolator(Interpolator):
         V_correction = self._eval_scalar_potential(query_points)
         return V_base + V_correction
 
+    def predict_gradient(self, x_new, use_gradient_field=False):
+        """
+        计算给定新位置点集的预测梯度。
+        """
+        if use_gradient_field:
+            return self._eval_cf_flow(x_new)
+        else:
+            # # 数值梯度近似
+            # eps = 1e-5
+            # grad = np.zeros_like(x_new)
+            # for k in range(2):
+            #     shift = np.zeros(2)
+            #     shift[k] = eps
+            #     grad[:, k] = (self.predict(x_new + shift) - self.predict(x_new - shift)) / (2 * eps)
+            # return grad / np.linalg.norm(grad, axis=1, keepdims=True)
+
+            term1 = self._eval_cf_flow(x_new)
+            term2 = self._eval_scalar_gradient(x_new)
+            total_grad = term1 + term2
+            return total_grad / np.linalg.norm(total_grad, axis=1, keepdims=True)
+
     # =========================================================
     # 内部向量化数学计算方法
     # =========================================================
@@ -743,6 +766,113 @@ class CurlFree_Interpolator(Interpolator):
         P[:, 1] = X[:, 0]
         P[:, 2] = X[:, 1]
         return A, P
+    
+    def _eval_cf_flow(self, X_query):
+        """
+        计算无旋向量场在查询点处的值。
+        
+        向量场 = RBF Hessian 矩阵对应分量点乘权重系数向量 + 多项式梯度
+        
+        Parameters
+        ----------
+        X_query : (M, 2) array
+            查询点坐标
+        
+        Returns
+        -------
+        flow : (M, 2) array
+            每个查询点处的无旋向量场值（梯度向量）
+        """
+        base = self.X_cf_base
+        dx = X_query[:, 0:1] - base[:, 0]  # (M, N_cf)
+        dy = X_query[:, 1:2] - base[:, 1]  # (M, N_cf)
+        r2 = dx**2 + dy**2
+        r = np.sqrt(r2)
+        
+        with np.errstate(divide='ignore', invalid='ignore'):
+            log_r = np.log(r)
+            log_r[r == 0] = 0.0
+        
+        # --- RBF Hessian 矩阵分量 ---
+        # H = r^2(4*log_r + 1)*I + (8*log_r + 6)*(dx*dx, dx*dy; dy*dx, dy*dy)
+        term1 = 8 * log_r + 6
+        term2 = r2 * (4 * log_r + 1)
+        
+        # H_xx = (8*log_r + 6)*dx^2 + r^2(4*log_r + 1)
+        # H_yy = (8*log_r + 6)*dy^2 + r^2(4*log_r + 1)
+        # H_xy = (8*log_r + 6)*dx*dy
+        H_xx = term1 * dx**2 + term2  # (M, N_cf)
+        H_yy = term1 * dy**2 + term2  # (M, N_cf)
+        H_xy = term1 * dx * dy        # (M, N_cf)
+        
+        H_xx[r == 0] = 0
+        H_yy[r == 0] = 0
+        H_xy[r == 0] = 0
+        
+        # --- 权重系数向量 c_cf 的形状为 (N_cf, 2) ---
+        # 流场的 x 分量 = sum_j (H_xx[j] * c_cf[j, 0] + H_xy[j] * c_cf[j, 1])
+        # 流场的 y 分量 = sum_j (H_xy[j] * c_cf[j, 0] + H_yy[j] * c_cf[j, 1])
+        flow_x = np.sum(H_xx * self.c_cf[:, 0] + H_xy * self.c_cf[:, 1], axis=1)  # (M,)
+        flow_y = np.sum(H_xy * self.c_cf[:, 0] + H_yy * self.c_cf[:, 1], axis=1)  # (M,)
+        
+        # --- 多项式梯度贡献 ---
+        # P(x, y) = b[0]*x + b[1]*y + b[2]*x*y + 0.5*b[3]*x^2 + 0.5*b[4]*y^2
+        # dP/dx = b[0] + b[2]*y + b[3]*x
+        # dP/dy = b[1] + b[2]*x + b[4]*y
+        x = X_query[:, 0]
+        y = X_query[:, 1]
+        b = self.b_cf
+        
+        flow_x += b[0] + b[2]*y + b[3]*x
+        flow_y += b[1] + b[2]*x + b[4]*y
+        
+        return np.column_stack([flow_x, flow_y])  # (M, 2)
+
+    def _eval_scalar_gradient(self, X_query):
+        """
+        计算标量势场（薄板样条）在查询点处的梯度。
+        
+        标量势场梯度 = TPS RBF 梯度点乘权重系数 + 多项式梯度
+        
+        Parameters
+        ----------
+        X_query : (M, 2) array
+            查询点坐标
+        
+        Returns
+        -------
+        grad : (M, 2) array
+            每个查询点处的标量势场梯度向量
+        """
+        base = self.X_sc_base
+        dx = X_query[:, 0:1] - base[:, 0]  # (M, N_sc)
+        dy = X_query[:, 1:2] - base[:, 1]  # (M, N_sc)
+        r2 = dx**2 + dy**2
+        r = np.sqrt(r2)
+        
+        with np.errstate(divide='ignore', invalid='ignore'):
+            log_r = np.log(r)
+            log_r[r == 0] = 0.0
+        
+        # --- TPS RBF 梯度分量 ---
+        # φ(r) = r^2 * log(r)
+        # ∇φ = 2(2*log(r) + 1) * (Δx, Δy)
+        coef = 2 * (2 * log_r + 1)  # (M, N_sc)
+        coef[r == 0] = 0.0
+        
+        # 梯度 x 分量 = sum_j (2(2*log_r + 1) * Δx[j] * c_sc[j])
+        # 梯度 y 分量 = sum_j (2(2*log_r + 1) * Δy[j] * c_sc[j])
+        grad_x = np.sum(coef * dx * self.c_sc, axis=1)  # (M,)
+        grad_y = np.sum(coef * dy * self.c_sc, axis=1)  # (M,)
+        
+        # --- 多项式梯度贡献 ---
+        # P(x, y) = b_sc[0] + b_sc[1]*x + b_sc[2]*y
+        # dP/dx = b_sc[1]
+        # dP/dy = b_sc[2]
+        grad_x += self.b_sc[1]
+        grad_y += self.b_sc[2]
+        
+        return np.column_stack([grad_x, grad_y])  # (M, 2)
 
     def _eval_cf_potential(self, X_query):
         base = self.X_cf_base
