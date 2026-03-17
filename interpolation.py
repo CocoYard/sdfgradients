@@ -183,20 +183,36 @@ class Interpolator:
     
     def extract_zero_level_set(self, bounds, resolution=256, force_recompute=True):
         """
-        Extract zero level set contours via Marching Squares on a regular grid.
+        Extract zero level set contours (Marching Squares for 2D / Marching Cubes for 3D)
         
         Parameters
         ----------
-        bounds : ((xmin, xmax), (ymin, ymax))
-            Axis-aligned bounding box for the evaluation grid.
+        bounds : tuple
+            2D: ((xmin, xmax), (ymin, ymax))
+            3D: ((xmin, xmax), (ymin, ymax), (zmin, zmax))
         resolution : int
-            Grid resolution per axis (default 256).
+            Grid resolution per axis (default 256)
+        force_recompute : bool
+            Whether to force recomputation (default True)
         
         Returns
         -------
-        list of np.ndarray
-            Each element is an (M, 2) array of vertices forming a closed or open polyline
-            on the zero level set. Closed contours have first == last vertex.
+        2D: list of np.ndarray
+            List of polyline vertex arrays, each with shape (M, 2)
+        3D: tuple (vertices, faces)
+            Vertex array (N, 3) and triangle face index array (M, 3)
+        """
+        # Detect dimensionality
+        is_3d = len(bounds) == 3
+        
+        if is_3d:
+            return self._extract_zero_level_set_3d(bounds, resolution)
+        else:
+            return self._extract_zero_level_set_2d(bounds, resolution)
+    
+    def _extract_zero_level_set_2d(self, bounds, resolution=256):
+        """
+        2D Marching Squares algorithm for extracting iso-contours.
         """
         (xmin, xmax), (ymin, ymax) = bounds
         xs = np.linspace(xmin, xmax, resolution)
@@ -335,6 +351,61 @@ class Interpolator:
         self.contour_resolution = resolution
         self.zero_contours = contours
         return contours
+    
+    def _extract_zero_level_set_3d(self, bounds, resolution=64):
+        """
+        3D Marching Cubes algorithm for extracting zero level set (triangle mesh).
+        
+        Uses scikit-image's built-in implementation.
+        
+        Parameters
+        ----------
+        bounds : ((xmin, xmax), (ymin, ymax), (zmin, zmax))
+            3D bounding box
+        resolution : int
+            Grid resolution per axis (default 64 for 3D to avoid memory explosion)
+        
+        Returns
+        -------
+        vertices : (N, 3) ndarray
+            Triangle mesh vertex coordinates
+        faces : (M, 3) ndarray
+            Triangle face vertex indices (0-indexed)
+        """
+        try:
+            from skimage.measure import marching_cubes
+        except ImportError:
+            raise ImportError("scikit-image required for 3D Marching Cubes support: pip install scikit-image")
+        
+        (xmin, xmax), (ymin, ymax), (zmin, zmax) = bounds
+        
+        # Build 3D grid
+        xs = np.linspace(xmin, xmax, resolution)
+        ys = np.linspace(ymin, ymax, resolution)
+        zs = np.linspace(zmin, zmax, resolution)
+        X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
+        
+        # Evaluate function values on the grid
+        grid_pts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()])
+        values = self.predict(grid_pts).reshape(X.shape)
+        
+        # Extract zero level set using Marching Cubes
+        # level=0 means extracting the contour where values equal 0
+        vertices, faces = marching_cubes(values, level=0)
+        
+        # Map vertices from grid coordinates back to physical coordinates
+        dx = (xmax - xmin) / (resolution - 1)
+        dy = (ymax - ymin) / (resolution - 1)
+        dz = (zmax - zmin) / (resolution - 1)
+        
+        vertices[:, 0] = xmin + vertices[:, 0] * dx
+        vertices[:, 1] = ymin + vertices[:, 1] * dy
+        vertices[:, 2] = zmin + vertices[:, 2] * dz
+        
+        self.contour_resolution = resolution
+        self.zero_contours = (vertices, faces)
+        
+        return vertices, faces
 
     def predict_gradient(self, x_new):
         """
@@ -556,11 +627,12 @@ class Interpolator:
 
 class CurlFree_Interpolator(Interpolator):
     """
-    基于无旋 RBF (Curl-Free RBF) 和标量薄板样条 (Thin-Plate Spline) 
-    的 SDF 全局插值器。继承自 Interpolator。
+    A global SDF interpolator based on Curl-Free RBF and Thin-Plate Spline (TPS).
+    Inherits from Interpolator.
     
-    当 use_projection=True 时，会将原始采样点沿梯度方向投影到表面附近，
-    作为额外的梯度约束点，增强插值精度。
+    When use_projection=True, projects original sample points along gradient directions
+    to the surface vicinity, using them as additional gradient constraint points
+    to enhance interpolation accuracy.
     """
     def __init__(self, min_proj_distance=1e-8):
         super().__init__(kernel='thin_plate')
@@ -568,25 +640,26 @@ class CurlFree_Interpolator(Interpolator):
         self.N = 0
         self.min_proj_distance = min_proj_distance
         
-        # --- 无旋/梯度场 (Curl-Free) 相关的插值变量 ---
-        self.X_cf_base = None  # 梯度插值的基点坐标 (原始点 + 筛选后的投影点)
-        self.N_cf = 0          # 梯度插值基点的总数 (N_cf)
+        # --- Curl-Free (gradient field) related interpolation variables ---
+        self.X_cf_base = None  # Base points for gradient interpolation (original + filtered projected points)
+        self.N_cf = 0          # Total number of CF base points (N_cf)
 
-        self.c_cf = None       # 无旋 RBF (径向基函数) 对应的权重系数 (shape: N_cf x 2)
-        self.b_cf = None       # 无旋势场的多项式部分系数 (shape: 5)
+        self.c_cf = None       # RBF weight coefficients for curl-free field (shape: N_cf x 2)
+        self.b_cf = None       # Polynomial coefficients for curl-free potential (shape: 5)
 
-        # --- 标量/残差场 (Scalar) 相关的插值变量 ---
-        self.X_sc_base = None  # 标量残差插值的基点坐标
-        self.N_sc = 0          # 标量残差插值基点的总数 (N_sc)
+        # --- Scalar/residual field related interpolation variables ---
+        self.X_sc_base = None  # Base points for scalar residual interpolation
+        self.N_sc = 0          # Total number of scalar base points (N_sc)
 
-        self.c_sc = None       # 标量 RBF (薄板样条) 对应的权重系数 (shape: N_sc)
-        self.b_sc = None       # 标量势场的多项式部分系数 (shape: 3)
+        self.c_sc = None       # RBF weight coefficients for scalar field (shape: N_sc)
+        self.b_sc = None       # Polynomial coefficients for scalar potential (shape: 3)
 
         self.trained = False
 
     def _filter_projected_points(self, original_points, projected_points, gradients):
         """
-        过滤投影点：只保留与所有已有点（原始+已接受的投影点）距离足够远的投影点。
+        Filter projected points: keep only those far enough from all existing points
+        (original + already accepted projected points).
         """
         N = original_points.shape[0]
         valid_mask = np.ones(N, dtype=bool)
@@ -607,7 +680,7 @@ class CurlFree_Interpolator(Interpolator):
 
     def fit(self, sdf_points, sdf_values, sdf_gradients, force_recompute=False, use_projection=True):
         """
-        根据给定的 SDF 点集、距离值和梯度进行插值拟合。
+        Fit the interpolator with given SDF points, distance values, and gradients.
         """
         if self.trained and not force_recompute:
             print(f"Interpolator is already trained. Use force_recompute=True to refit {sdf_points.shape[0]} points.")
@@ -678,7 +751,7 @@ class CurlFree_Interpolator(Interpolator):
 
     def predict(self, query_points):
         """
-        对给定的新位置点集计算预测的 SDF 值。
+        Predict SDF values at given query point locations.
         """
         query_points = np.asarray(query_points)
         V_base = self._eval_cf_potential(query_points)
@@ -687,12 +760,12 @@ class CurlFree_Interpolator(Interpolator):
 
     def predict_gradient(self, x_new, use_gradient_field=False):
         """
-        计算给定新位置点集的预测梯度。
+        Compute predicted gradients at given query point locations.
         """
         if use_gradient_field:
             return self._eval_cf_flow(x_new)
         else:
-            # # 数值梯度近似
+            # # Numerical gradient approximation
             # eps = 1e-5
             # grad = np.zeros_like(x_new)
             # for k in range(2):
@@ -707,7 +780,7 @@ class CurlFree_Interpolator(Interpolator):
             return total_grad / np.linalg.norm(total_grad, axis=1, keepdims=True)
 
     # =========================================================
-    # 内部向量化数学计算方法
+    # Internal vectorized mathematical computation methods
     # =========================================================
     def _build_cf_matrix_general(self, X):
         N_pts = X.shape[0]
@@ -769,19 +842,19 @@ class CurlFree_Interpolator(Interpolator):
     
     def _eval_cf_flow(self, X_query):
         """
-        计算无旋向量场在查询点处的值。
+        Compute curl-free vector field values at query points.
         
-        向量场 = RBF Hessian 矩阵对应分量点乘权重系数向量 + 多项式梯度
+        Vector field = RBF Hessian matrix components dot-product with weight coefficients + polynomial gradient
         
         Parameters
         ----------
         X_query : (M, 2) array
-            查询点坐标
+            Query point coordinates
         
         Returns
         -------
         flow : (M, 2) array
-            每个查询点处的无旋向量场值（梯度向量）
+            Curl-free vector field values (gradient vectors) at each query point
         """
         base = self.X_cf_base
         dx = X_query[:, 0:1] - base[:, 0]  # (M, N_cf)
@@ -793,7 +866,7 @@ class CurlFree_Interpolator(Interpolator):
             log_r = np.log(r)
             log_r[r == 0] = 0.0
         
-        # --- RBF Hessian 矩阵分量 ---
+        # --- RBF Hessian matrix components ---
         # H = r^2(4*log_r + 1)*I + (8*log_r + 6)*(dx*dx, dx*dy; dy*dx, dy*dy)
         term1 = 8 * log_r + 6
         term2 = r2 * (4 * log_r + 1)
@@ -809,13 +882,13 @@ class CurlFree_Interpolator(Interpolator):
         H_yy[r == 0] = 0
         H_xy[r == 0] = 0
         
-        # --- 权重系数向量 c_cf 的形状为 (N_cf, 2) ---
-        # 流场的 x 分量 = sum_j (H_xx[j] * c_cf[j, 0] + H_xy[j] * c_cf[j, 1])
-        # 流场的 y 分量 = sum_j (H_xy[j] * c_cf[j, 0] + H_yy[j] * c_cf[j, 1])
+        # --- Weight coefficient vector c_cf has shape (N_cf, 2) ---
+        # Flow x-component = sum_j (H_xx[j] * c_cf[j, 0] + H_xy[j] * c_cf[j, 1])
+        # Flow y-component = sum_j (H_xy[j] * c_cf[j, 0] + H_yy[j] * c_cf[j, 1])
         flow_x = np.sum(H_xx * self.c_cf[:, 0] + H_xy * self.c_cf[:, 1], axis=1)  # (M,)
         flow_y = np.sum(H_xy * self.c_cf[:, 0] + H_yy * self.c_cf[:, 1], axis=1)  # (M,)
         
-        # --- 多项式梯度贡献 ---
+        # --- Polynomial gradient contribution ---
         # P(x, y) = b[0]*x + b[1]*y + b[2]*x*y + 0.5*b[3]*x^2 + 0.5*b[4]*y^2
         # dP/dx = b[0] + b[2]*y + b[3]*x
         # dP/dy = b[1] + b[2]*x + b[4]*y
@@ -830,19 +903,19 @@ class CurlFree_Interpolator(Interpolator):
 
     def _eval_scalar_gradient(self, X_query):
         """
-        计算标量势场（薄板样条）在查询点处的梯度。
+        Compute scalar potential field (TPS) gradient at query points.
         
-        标量势场梯度 = TPS RBF 梯度点乘权重系数 + 多项式梯度
+        Scalar field gradient = TPS RBF gradient dot-product with weight coefficients + polynomial gradient
         
         Parameters
         ----------
         X_query : (M, 2) array
-            查询点坐标
+            Query point coordinates
         
         Returns
         -------
         grad : (M, 2) array
-            每个查询点处的标量势场梯度向量
+            Scalar potential field gradient vectors at each query point
         """
         base = self.X_sc_base
         dx = X_query[:, 0:1] - base[:, 0]  # (M, N_sc)
@@ -854,18 +927,18 @@ class CurlFree_Interpolator(Interpolator):
             log_r = np.log(r)
             log_r[r == 0] = 0.0
         
-        # --- TPS RBF 梯度分量 ---
+        # --- TPS RBF gradient components ---
         # φ(r) = r^2 * log(r)
         # ∇φ = 2(2*log(r) + 1) * (Δx, Δy)
         coef = 2 * (2 * log_r + 1)  # (M, N_sc)
         coef[r == 0] = 0.0
         
-        # 梯度 x 分量 = sum_j (2(2*log_r + 1) * Δx[j] * c_sc[j])
-        # 梯度 y 分量 = sum_j (2(2*log_r + 1) * Δy[j] * c_sc[j])
+        # Gradient x-component = sum_j (2(2*log_r + 1) * Δx[j] * c_sc[j])
+        # Gradient y-component = sum_j (2(2*log_r + 1) * Δy[j] * c_sc[j])
         grad_x = np.sum(coef * dx * self.c_sc, axis=1)  # (M,)
         grad_y = np.sum(coef * dy * self.c_sc, axis=1)  # (M,)
         
-        # --- 多项式梯度贡献 ---
+        # --- Polynomial gradient contribution ---
         # P(x, y) = b_sc[0] + b_sc[1]*x + b_sc[2]*y
         # dP/dx = b_sc[1]
         # dP/dy = b_sc[2]
