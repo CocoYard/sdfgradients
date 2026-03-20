@@ -395,7 +395,7 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-12)
     init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
-    interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
+    interpolator.fit(points, values, gradients, force_recompute=False, use_projection=True)
     if gt is not None:
         print_shape_distances("Before refinement", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     for it in range(num_iter):

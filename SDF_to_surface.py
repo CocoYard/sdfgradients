@@ -361,82 +361,6 @@ def yongs_algorithm( points, distances, gradients ):
     new_points = points - (distances[:, np.newaxis] * gradients)
     return new_points
 
-def estimate_gradients_basicInterp_opt(points, distances, init_gradients, interpolator : Interpolator, iters, visible_arcs, short_arc_idx, gt=None):
-    """
-    Estimate gradients by iteratively projecting sample points onto the zero
-    level set of an interpolant, then re-reading the interpolant's
-    gradient at the sample points.
-
-    Parameters:
-    -----------
-    points: (N, d) array of point coordinates
-        The input points in d-dimensional space.
-    distances: (N,) array of signed distance values
-        The signed distance values for each point.
-    init_gradients: (N, d) array of initial gradient estimates
-        The initial gradient estimates at each point, which can be obtained from a global interpolator or other methods.
-    interpolator: Interpolator
-        Will be replaced by the final fitted interpolator.
-    iters: int
-        Number of projection-refit iterations.
-    visible_arcs: a dictionary: point index -> list of visible arcs
-        A collection of visible arcs that can be used to clamp the gradients.
-    short_arc_idx: a set of point indices whose visible arcs are extremely short, so we skip them.
-
-    Returns:
-    ---------
-    gradients: (N, d) array of estimated gradient vectors
-        The estimated gradient vectors at each input point.
-    """
-
-    # optimize the gradients to be curl-free
-    gradients = opt.iterative_gradient_alignment(points, distances, init_gradients, interpolator, visible_arcs, short_arc_idx, num_iter=iters, gt=gt)
-    # gradients, _ = opt.iterative_projection(points, distances, init_gradients, interpolator=interpolator, visible_arcs=visible_arcs, short_arc_idx=short_arc_idx, num_iter=iters, gt=gt)
-    return gradients
-
-def estimate_gradients_curlfree_opt(points, distances, init_gradients, interpolator : Interpolator, iters, visible_arcs, short_arc_idx):
-    """
-    Estimate gradients by iteratively projecting sample points onto the zero
-    level set of a curl-free interpolant, then re-reading the interpolant's
-    gradient at the sample points.
-
-    Parameters:
-    -----------
-    points: (N, d) array of point coordinates
-        The input points in d-dimensional space.
-    distances: (N,) array of signed distance values
-        The signed distance values for each point.
-    init_gradients: (N, d) array of initial gradient estimates
-        The initial gradient estimates at each point, which can be obtained from a global interpolator or other methods.
-    interpolator: Interpolator
-        Will be replaced by the final fitted interpolator.
-    iters: int
-        Number of projection-refit iterations.
-    visible_arcs: a dictionary: point index -> list of visible arcs
-        A collection of visible arcs that can be used to clamp the gradients.
-    short_arc_idx: a set of point indices whose visible arcs are extremely short, so we skip them.
-
-    Returns:
-    ---------
-    gradients: (N, d) array of estimated gradient vectors
-        The estimated gradient vectors at each input point.
-    """
-
-    # optimize the gradients to be curl-free
-    # gradients = opt.iterative_smoothing(points, distances, init_gradients, interpolator, visible_arcs, short_arc_idx, num_iter=iters)
-    gradients, _ = opt.iterative_projection(points, distances, init_gradients, interpolator=interpolator, visible_arcs=visible_arcs, short_arc_idx=short_arc_idx, num_iter=iters)
-    # gradients = opt.opt(points, init_gradients, num_iter=500, lr=1e-2)
-    # gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
-    return gradients
-
-    # gradients, fitted_interpolator = opt.iterative_projection(
-    #     points, distances, init_gradients, num_iter=iters)
-    # gradients /= np.linalg.norm(gradients, axis=1, keepdims=True)  # Normalize to unit vectors
-    # # Copy fitted state into the caller's interpolator
-    # interpolator.__dict__.update(fitted_interpolator.__dict__)
-    # return gradients
-
-
 def estimate_gradients_interp_global(sdf_points, sdf_values, interpolator : Interpolator, visible_arcs, degenerate_arcs, colinear_neighbors=None, clamp=True):
     '''
     Estimate gradients by fitting a global Duchon interpolator to the signed distance data and evaluating its gradient.
@@ -1990,7 +1914,7 @@ def test_find_neighbors(n, path_to_image='examples/horse.png'):
 
 def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradient_estimation: GradientEstimation, interpolator=None, on_gradient_neighbors=True, see_arcs=False, 
                              show_errors=False, clamp_gradients=False, iters=1000, resolution=500, path_to_image='examples/eiffel.png'):
-    print(f"Testing Gradient Estimation with n={n}, neighbor_estimation={neighbor_estimation}, gradient_estimation={gradient_estimation}, on_gradient_neighbors={on_gradient_neighbors}\n")
+    print(f"Testing Gradient Estimation with n={n}, neighbor_estimation={neighbor_estimation}, gradient_estimation={gradient_estimation}, on_gradient_neighbors={on_gradient_neighbors}, iters={iters}\n")
     points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image=path_to_image)
     if interpolator is None:
         # Create and fit the interpolator
@@ -2015,7 +1939,9 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         interpolator.fit(sdf_points, sdf_values, init_gradients, force_recompute=True, use_projection=True)
 
         init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
-        gradients = estimate_gradients_basicInterp_opt(sdf_points, sdf_values, init_gradients, interpolator, iters,  visible_arcs, degenerate_arcs, points)
+
+        # gradients = opt.iterative_gradient_alignment(sdf_points, sdf_values, init_gradients, interpolator, visible_arcs, degenerate_arcs, num_iter=iters, gt=points)
+        gradients, _ = opt.iterative_projection(sdf_points, sdf_values, init_gradients, interpolator=interpolator, visible_arcs=visible_arcs, short_arc_idx=degenerate_arcs, num_iter=iters, gt=points)
 
         interpolator.fit(sdf_points, sdf_values, gradients, force_recompute=True, use_projection=True)
     elif gradient_estimation == GradientEstimation.INTERP_LOCAL:
@@ -2034,11 +1960,15 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         if gradient_estimation == GradientEstimation.CurlFree_OPT:
             # init_gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
             init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors if on_gradient_neighbors else None)
+            init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
             interpolator = CurlFree_Interpolator()
             interpolator.fit(sdf_points, sdf_values, init_gradients, use_projection=True)
+            
             init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
-            init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
-            gradients = estimate_gradients_curlfree_opt(sdf_points, sdf_values, init_gradients, interpolator, iters,  visible_arcs, degenerate_arcs)
+            
+            # gradients = opt.iterative_gradient_alignment(sdf_points, sdf_values, init_gradients, interpolator, visible_arcs, degenerate_arcs, num_iter=iters, gt=points)
+            gradients, _ = opt.iterative_projection(sdf_points, sdf_values, init_gradients, interpolator=interpolator, visible_arcs=visible_arcs, short_arc_idx=degenerate_arcs, num_iter=iters, gt=points)
+            
             interpolator.fit(sdf_points, sdf_values, gradients, use_projection=True, force_recompute=True)  # Refit the interpolator with the original points and distances
         elif gradient_estimation == GradientEstimation.IRLS:
             gradients, grad_errors = estimate_gradients_irls(sdf_points, sdf_values, neighbors, interpolator)
