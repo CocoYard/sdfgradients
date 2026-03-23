@@ -75,7 +75,7 @@ def clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values
             clamp_indices.add(i)
     return clamp_indices
 
-def clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values, clamp_indices):
+def clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values, clamp_indices=None):
     """
     Use the colinear neighbors to estimate the gradient. For points inside clamp_indices, we will use that estimated gradient to clamp into visible arcs.
     """
@@ -84,7 +84,7 @@ def clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenera
             continue
         if i in degenerate_arcs:
             continue    # skip clamping for points with degenerate arcs, since we will set their gradients directly toward the angle later
-        if i not in clamp_indices:
+        if clamp_indices is not None and i not in clamp_indices:
             continue    # only clamp points that are outside visible arcs, for other points we keep their original gradients since they are already within visible arcs
         neighbor_points = sdf_points[neighbors]
         neighbor_sdf = sdf_values[neighbors]

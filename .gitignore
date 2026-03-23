@@ -6,5 +6,6 @@ __pycache__/
 *.pyd
 gpytoolbox_env/
 out/*
+out.bak
 test.py
 .DS_Store

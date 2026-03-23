@@ -54,8 +54,8 @@ def iterative_gradient_alignment(points, values, init_gradients, interpolator : 
               f"proj RMSE: {proj_rmse:.6e}")
         gradients = new_gradients
         interpolator.fit(points, values, gradients, use_projection=True, force_recompute=True)
-        if gt is not None:
-            print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
+        # if gt is not None:
+        #     print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     return gradients
 
 '''
@@ -346,7 +346,7 @@ def _point_to_polylines_min_dist(points, polylines):
     return min_dists, nearest_points
 
 def iterative_projection(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10,
-                         num_coarse=24, refine_steps=4, num_refine=12, gt=None):
+                         num_coarse=24, refine_steps=4, num_refine=12, gt=None, colinear_neighbors=None):
     """
     Iteratively refine SDF gradients by projecting sample points onto the zero
     level set of a curl-free interpolant, then finding the best gradient
@@ -416,7 +416,7 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
         angle = np.where(values < 0, np.arctan2(new_gradients[:, 1], new_gradients[:, 0]), np.arctan2(-new_gradients[:, 1], -new_gradients[:, 0]))
         skip_mask = np.zeros(len(points), dtype=bool)
         for i in range(len(points)):
-            if i in short_arc_idx or not va.angle_in_arcs(angle[i], visible_arcs[i]):
+            if i in short_arc_idx or not va.angle_in_arcs(angle[i], visible_arcs[i]) or colinear_neighbors is not None and i in colinear_neighbors:
                 skip_mask[i] = True
         new_gradients[skip_mask] = gradients[skip_mask]
 
@@ -438,8 +438,8 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
         init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
         # ----- Step 2: Fit interpolant with current gradients -----
         interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
-        if gt is not None:
-            print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=500), gt)
+        # if gt is not None:
+        #     print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=500), gt)
 
     return gradients, interpolator
 
