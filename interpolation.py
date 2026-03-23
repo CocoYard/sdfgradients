@@ -163,8 +163,9 @@ class Interpolator:
         """
         distances = cdist(x_new, self.points, metric='euclidean')
         r = self.kernel(distances)
-        result = r @ self.alpha + x_new @ self.p + self.q
-
+        with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+            result = r @ self.alpha + x_new @ self.p + self.q
+        assert not np.any(np.isinf(result)), "predict: result contains inf"
         if self.beta is not None:
             diff = x_new[:, np.newaxis, :] - self.points[np.newaxis, :, :]
             with np.errstate(divide='ignore', invalid='ignore'):
@@ -181,7 +182,7 @@ class Interpolator:
 
         return result
     
-    def extract_zero_level_set(self, bounds, resolution=256, force_recompute=True):
+    def extract_zero_level_set(self, bounds, resolution=256):
         """
         Extract zero level set contours (Marching Squares for 2D / Marching Cubes for 3D)
         
@@ -192,8 +193,6 @@ class Interpolator:
             3D: ((xmin, xmax), (ymin, ymax), (zmin, zmax))
         resolution : int
             Grid resolution per axis (default 256)
-        force_recompute : bool
-            Whether to force recomputation (default True)
         
         Returns
         -------
@@ -352,7 +351,7 @@ class Interpolator:
         self.zero_contours = contours
         return contours
     
-    def _extract_zero_level_set_3d(self, bounds, resolution=64):
+    def _extract_zero_level_set_3d(self, bounds, grid_resolution=64):
         """
         3D Marching Cubes algorithm for extracting zero level set (triangle mesh).
         
@@ -362,7 +361,7 @@ class Interpolator:
         ----------
         bounds : ((xmin, xmax), (ymin, ymax), (zmin, zmax))
             3D bounding box
-        resolution : int
+        grid_resolution : int
             Grid resolution per axis (default 64 for 3D to avoid memory explosion)
         
         Returns
@@ -376,36 +375,23 @@ class Interpolator:
             from skimage.measure import marching_cubes
         except ImportError:
             raise ImportError("scikit-image required for 3D Marching Cubes support: pip install scikit-image")
+        lx = np.linspace(bounds[0][0], bounds[0][1], grid_resolution)
+        ly = np.linspace(bounds[1][0], bounds[1][1], grid_resolution)
+        lz = np.linspace(bounds[2][0], bounds[2][1], grid_resolution)
+        slice_batch = 2  # number of x-slices per batch
+        grid_values = np.empty((grid_resolution, grid_resolution, grid_resolution))
+        for i in range(0, grid_resolution, slice_batch):
+            xs = lx[i:i + slice_batch]
+            xx, yy, zz = np.meshgrid(xs, ly, lz, indexing='ij')
+            pts = np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
+            grid_values[i:i + slice_batch] = self.predict(pts).reshape(len(xs), grid_resolution, grid_resolution)
+        # Extract isosurface at value 0 using marching cubes
+        from skimage import measure
+        sp = ((lx[-1]-lx[0])/(grid_resolution-1), (ly[-1]-ly[0])/(grid_resolution-1), (lz[-1]-lz[0])/(grid_resolution-1))
+        verts, faces, normals, values = measure.marching_cubes(grid_values, level=0.0, spacing=sp)
+        verts += np.array([lx[0], ly[0], lz[0]])
         
-        (xmin, xmax), (ymin, ymax), (zmin, zmax) = bounds
-        
-        # Build 3D grid
-        xs = np.linspace(xmin, xmax, resolution)
-        ys = np.linspace(ymin, ymax, resolution)
-        zs = np.linspace(zmin, zmax, resolution)
-        X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
-        
-        # Evaluate function values on the grid
-        grid_pts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()])
-        values = self.predict(grid_pts).reshape(X.shape)
-        
-        # Extract zero level set using Marching Cubes
-        # level=0 means extracting the contour where values equal 0
-        vertices, faces = marching_cubes(values, level=0)
-        
-        # Map vertices from grid coordinates back to physical coordinates
-        dx = (xmax - xmin) / (resolution - 1)
-        dy = (ymax - ymin) / (resolution - 1)
-        dz = (zmax - zmin) / (resolution - 1)
-        
-        vertices[:, 0] = xmin + vertices[:, 0] * dx
-        vertices[:, 1] = ymin + vertices[:, 1] * dy
-        vertices[:, 2] = zmin + vertices[:, 2] * dz
-        
-        self.contour_resolution = resolution
-        self.zero_contours = (vertices, faces)
-        
-        return vertices, faces
+        return verts, faces
 
     def predict_gradient(self, x_new):
         """
