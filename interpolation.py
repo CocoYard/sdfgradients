@@ -28,7 +28,7 @@ class Interpolator:
         else:
             self.kernel = lambda r: r**3
 
-    def fit(self, points, values, gradients=None, force_recompute=False, use_projection=True):
+    def fit(self, points, values, gradients=None, mask=None, force_recompute=False, use_projection=True):
         """
         Fit the interpolator with given points and their corresponding values.
 
@@ -42,7 +42,10 @@ class Interpolator:
             print(f"Interpolator is already trained. Use force_recompute=True to refit {points.shape[0]} points.")
             return
         if gradients is not None and use_projection:
-            projections = points - values[:, np.newaxis] * gradients
+            if mask is None:
+                projections = points - values[:, np.newaxis] * gradients
+            else:
+                projections = points[mask] - values[mask, np.newaxis] * gradients[mask]
             self.points = np.vstack([points, projections])
             self.values = np.concatenate([values, np.zeros(len(projections))])
             self.alpha, self.p, self.q = self._compute_coefficients(self.points, self.values)
@@ -157,10 +160,14 @@ class Interpolator:
         coefficients, _, _, _ = np.linalg.lstsq(K, y, rcond=None)
         return coefficients[:n_samples], coefficients[n_samples:-1], coefficients[-1]
 
-    def predict(self, x_new : np.ndarray):
+    def predict(self, x_new: np.ndarray, chunk_size: int = 500):
         """
         Predict values at new input points using the fitted interpolator.
+        chunk_size controls how many query points are processed at once to limit memory usage.
         """
+        if len(x_new) > chunk_size:
+            return np.concatenate([self.predict(x_new[s:s + chunk_size], chunk_size)
+                                   for s in range(0, len(x_new), chunk_size)])
         distances = cdist(x_new, self.points, metric='euclidean')
         r = self.kernel(distances)
         with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
@@ -378,13 +385,9 @@ class Interpolator:
         lx = np.linspace(bounds[0][0], bounds[0][1], grid_resolution)
         ly = np.linspace(bounds[1][0], bounds[1][1], grid_resolution)
         lz = np.linspace(bounds[2][0], bounds[2][1], grid_resolution)
-        slice_batch = 2  # number of x-slices per batch
-        grid_values = np.empty((grid_resolution, grid_resolution, grid_resolution))
-        for i in range(0, grid_resolution, slice_batch):
-            xs = lx[i:i + slice_batch]
-            xx, yy, zz = np.meshgrid(xs, ly, lz, indexing='ij')
-            pts = np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
-            grid_values[i:i + slice_batch] = self.predict(pts).reshape(len(xs), grid_resolution, grid_resolution)
+        xx, yy, zz = np.meshgrid(lx, ly, lz, indexing='ij')
+        pts = np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
+        grid_values = self.predict(pts).reshape(grid_resolution, grid_resolution, grid_resolution)
         # Extract isosurface at value 0 using marching cubes
         from skimage import measure
         sp = ((lx[-1]-lx[0])/(grid_resolution-1), (ly[-1]-ly[0])/(grid_resolution-1), (lz[-1]-lz[0])/(grid_resolution-1))
@@ -547,7 +550,38 @@ class Interpolator:
         return direction
 
     def sample_best_gradients(self, x_new, sdf, num_coarse=24,
-                              refine_steps=4, num_refine=12, initial_guess=None):
+                              refine_steps=4, num_refine=12, initial_guess=None, chunk_size=200):
+        """
+        Batch version: find best gradient directions via coarse sweep + iterative
+        narrowing refinement (similar to binary search on the angle).
+        Phase 1 — coarse uniform sweep over the full circle to locate the best
+        angular region per point.
+        Phase 2 — repeatedly zoom into a smaller interval around the current best
+        angle and re-evaluate, shrinking the search window each iteration.
+        
+        Parameters:
+        -----------
+        x_new (np.ndarray): Shape (batch_size, dimensions) — input points.
+        sdf (np.ndarray): Shape (batch_size,) — signed distance values.
+        num_coarse (int): Directions in the initial coarse sweep. Default 24.
+        refine_steps (int): Number of zoom-in refinement iterations. Default 4.
+        num_refine (int): Directions evaluated per refinement step. Default 12.
+        initial_guess (np.ndarray): Initial guesses for the optimal angles. Default None. If provided, the coarse sweep will skip and the first refinement will 
+        be centered around these angles.
+
+        Returns:
+        --------
+        np.ndarray: Shape (batch_size, dimensions) — best gradient directions (unit vectors).
+        """
+        if x_new.shape[1] == 3:
+            return self._sample_best_gradients_3d(x_new, sdf, num_coarse,
+                                                 refine_steps, num_refine, initial_guess, chunk_size)
+        else:
+            return self._sample_best_gradients_2d(x_new, sdf, num_coarse,
+                                                 refine_steps, num_refine, initial_guess, chunk_size)
+        
+    def _sample_best_gradients_2d(self, x_new, sdf, num_coarse=24,
+                                  refine_steps=4, num_refine=12, initial_guess=None, chunk_size=200):
         """
         Batch version: find best gradient directions via coarse sweep + iterative
         narrowing refinement (similar to binary search on the angle).
@@ -609,6 +643,91 @@ class Interpolator:
 
         best_dirs = np.stack([np.cos(best_angles), np.sin(best_angles)], axis=1)
         best_dirs /= np.linalg.norm(best_dirs, axis=1, keepdims=True)
+        return best_dirs
+    
+
+    def _sample_best_gradients_3d(self, x_new, sdf, num_coarse=64,
+                                  refine_steps=4, num_refine=16, initial_guess=None,
+                                  chunk_size=200):
+        """
+        3D version: find best gradient directions via coarse sphere sweep + iterative
+        cone refinement.
+
+        Phase 1 — coarse uniform sweep over the full sphere using Fibonacci sampling.
+        Phase 2 — repeatedly zoom into a cone around the current best direction,
+                   sampling a Fibonacci disk within the cone.
+
+        Parameters:
+        x_new (np.ndarray): Shape (batch_size, 3) — input points.
+        sdf (np.ndarray): Shape (batch_size,) — signed distance values.
+        num_coarse (int): Directions in the initial coarse sweep. Default 64.
+        refine_steps (int): Number of cone-narrowing refinement iterations. Default 4.
+        num_refine (int): Directions evaluated per refinement step. Default 16.
+        initial_guess (np.ndarray): Initial guesses (batch_size, 3) unit vectors. Default None.
+
+        Returns:
+        np.ndarray: Shape (batch_size, 3) — best gradient directions (unit vectors).
+        """
+        batch_size = x_new.shape[0]
+        sdf_flat = sdf.ravel()
+        sign = np.where(sdf_flat > 0, 1.0, -1.0)  # (batch,)
+
+        def fibonacci_sphere(n):
+            """Uniformly distributed directions on unit sphere."""
+            golden = (1 + np.sqrt(5)) / 2
+            i = np.arange(n, dtype=float)
+            theta = 2 * np.pi * i / golden
+            phi = np.arccos(1 - 2 * (i + 0.5) / n)
+            return np.stack([np.sin(phi)*np.cos(theta),
+                             np.sin(phi)*np.sin(theta),
+                             np.cos(phi)], axis=1)  # (n, 3)
+
+        def tangent_frame(d):
+            """Build orthonormal tangent vectors t1, t2 perpendicular to d (batch, 3)."""
+            ref = np.where(np.abs(d[:, 0:1]) < 0.9,
+                           np.broadcast_to([1., 0., 0.], d.shape).copy(),
+                           np.broadcast_to([0., 1., 0.], d.shape).copy())
+            t1 = np.cross(d, ref)
+            t1 /= np.linalg.norm(t1, axis=1, keepdims=True)
+            t2 = np.cross(d, t1)
+            return t1, t2  # each (batch, 3)
+
+        def cone_dirs(best_dirs, half_angle, n):
+            """Sample n directions in a cone of half_angle around each best_dir."""
+            golden = (1 + np.sqrt(5)) / 2
+            i = np.arange(n, dtype=float)
+            r = half_angle * np.sqrt((i + 0.5) / n)   # radial angle within cone (n,)
+            alpha = 2 * np.pi * i / golden             # azimuth within cone (n,)
+            t1, t2 = tangent_frame(best_dirs)          # (batch, 3)
+            # world_dirs: (batch, n, 3)
+            dirs = (np.cos(r)[None, :, None] * best_dirs[:, None, :]
+                    + np.sin(r)[None, :, None] * (np.cos(alpha)[None, :, None] * t1[:, None, :]
+                                                  + np.sin(alpha)[None, :, None] * t2[:, None, :]))
+            return dirs  # (batch, n, 3)
+
+        # --- Phase 1: coarse sweep ---
+        if initial_guess is not None:
+            best_dirs = initial_guess / np.linalg.norm(initial_guess, axis=1, keepdims=True)
+        else:
+            dirs = fibonacci_sphere(num_coarse)  # (C, 3)
+            samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs[None, :, :]
+            preds = self.predict(samples.reshape(-1, 3), chunk_size).reshape(batch_size, num_coarse)
+            obj = preds * sign[:, None]
+            best_idx = np.argmin(obj, axis=1)
+            best_dirs = dirs[best_idx]  # (batch, 3)
+
+        # --- Phase 2: iterative cone refinement ---
+        half_angle = np.pi / np.sqrt(num_coarse)
+
+        for _ in range(refine_steps):
+            dirs_r = cone_dirs(best_dirs, half_angle, num_refine)  # (batch, R, 3)
+            samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs_r
+            preds = self.predict(samples.reshape(-1, 3), chunk_size).reshape(batch_size, num_refine)
+            obj = preds * sign[:, None]
+            best_local = np.argmin(obj, axis=1)
+            best_dirs = dirs_r[np.arange(batch_size), best_local]
+            best_dirs /= np.linalg.norm(best_dirs, axis=1, keepdims=True)
+            half_angle /= np.sqrt(num_refine)
         return best_dirs
 
 class CurlFree_Interpolator(Interpolator):

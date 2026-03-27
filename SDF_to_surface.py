@@ -1984,6 +1984,8 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, 
                                                           colinear_neighbors if on_gradient_neighbors else None)
         init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
+        mask = rate_gradient_estimation(sdf_points, init_projections, sdf_values) == 0
+        print(f"Initial projection error count: {np.sum(mask)} out of {len(sdf_points)}. percent correct: {np.mean(mask) * 100:.2f}%")
         # interpolator = CurlFree_Interpolator()
         interpolator.fit(sdf_points, sdf_values, init_gradients, force_recompute=True, use_projection=True)
 

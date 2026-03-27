@@ -1,4 +1,51 @@
 import numpy as np
+from scipy.spatial.distance import cdist
+import trimesh
+
+def are_points_visible(points, sdf_points, sdf_values, epsilon=1e-8):
+    """
+    Check if query points are visible from the SDF points, i.e. not occluded by any other SDF point's sphere.
+    This is a simple visibility test based on the SDF values, which represent the radius of the sphere around each SDF point.
+    A point is considered visible if it is outside the sphere of every SDF point, with a small epsilon tolerance to avoid numerical issues.
+    Parameters
+    ----------
+    points : (N, d) array of query points to test for visibility.
+    sdf_points : (M, d) array of SDF points, each with an associated SDF value.
+    sdf_values : (M,) array of SDF values at the SDF points, representing the radius of the sphere around each SDF point.
+    epsilon : float, optional, default=1e-8 A small margin to ensure points on the boundary are considered visible.
+    Returns
+    -------
+    visible : (N,) boolean array, True if the corresponding point is visible, False if it is occluded by any SDF point's sphere.
+    """
+    # check if points are not inside any other sdf_point's sphere
+    dists = cdist(points, sdf_points, 'euclidean')
+    radii = np.abs(sdf_values)
+    inside = dists < (radii[np.newaxis, :] - epsilon)
+    return ~np.any(inside, axis=1)
+
+def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=False):
+    """
+    Compute and print Hausdorff and Chamfer distances between two meshes.
+    Parameters
+    ----------
+    recon : trimesh.Trimesh
+        The reconstructed mesh.
+    gt_mesh : trimesh.Trimesh
+        The ground truth mesh.
+    Returns
+    -------
+    hausdorff : float
+        The Hausdorff distance between the two meshes.
+    chamfer : float
+        The Chamfer distance between the two meshes.
+    """
+    _, d_r2g, _ = trimesh.proximity.closest_point(gt_mesh, recon.vertices)
+    _, d_g2r, _ = trimesh.proximity.closest_point(recon, gt_mesh.vertices)
+    hausdorff = max(d_r2g.max(), d_g2r.max())
+    chamfer = (d_r2g.mean() + d_g2r.mean()) / 2
+    if verbose:
+        print(f"  Hausdorff: {hausdorff:.6f}  Chamfer: {chamfer:.6f}")
+    return hausdorff, chamfer
 
 def _point_to_polylines_min_dist(points, polylines):
     """Min distance from each query point to the *segments* of polylines."""

@@ -4,6 +4,7 @@ import torch
 from scipy.optimize import minimize
 import visible_arcs as va
 from util import print_shape_distances
+from util import are_points_visible
 
 def iterative_gradient_alignment(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10, gt=None):
     """
@@ -349,11 +350,11 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
                          num_coarse=24, refine_steps=4, num_refine=12, gt=None, colinear_neighbors=None):
     """
     Iteratively refine SDF gradients by projecting sample points onto the zero
-    level set of a curl-free interpolant, then finding the best gradient
+    level set of an interpolant, then finding the best gradient
     direction via sample_best_gradients (coarse sweep + angular refinement).
 
     Algorithm (each iteration):
-      1. Fit a CurlFree_Interpolator with current gradients (use_projection=True).
+      1. Fit an Interpolator with current gradients (use_projection=True).
       2. For each sample point, search over directions to find the one whose
          projection P - s*g lands closest to the zero level set of the
          interpolant (via sample_best_gradients).
@@ -440,6 +441,103 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
         interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
         # if gt is not None:
         #     print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=500), gt)
+
+    return gradients, interpolator
+
+
+def iterative_projection_3d(points, values, init_gradients, interpolator : Interpolator, num_iter=10,
+                         num_coarse=24, refine_steps=4, num_refine=5, gt_gradients=None):
+    """
+    Iteratively refine SDF gradients by projecting sample points onto the zero
+    level set of an interpolant, then finding the best gradient
+    direction via sample_best_gradients (coarse sweep + angular refinement).
+
+    Algorithm (each iteration):
+      1. Fit an Interpolator with current gradients (use_projection=True).
+      2. For each sample point, search over directions to find the one whose
+         projection P - s*g lands closest to the zero level set of the
+         interpolant (via sample_best_gradients).
+      3. Update gradients := best directions found.
+      4. Repeat.
+
+    Parameters
+    ----------
+    points : (N, 3) array
+        Sample point coordinates.
+    values : (N,) array
+        Signed distance values at each sample point.
+    init_gradients : (N, 3) array
+        Initial unit gradient estimates.
+    visible_arcs: a list of lists of tuples: point index -> list of visible arcs
+        A collection of visible arcs that can be used to clamp the gradients.
+    short_arc_idx: a set of point indices whose visible arcs are extremely short, so we skip them.
+    num_iter : int
+        Number of projection-refit iterations (default 10).
+    num_coarse : int
+        Number of uniformly spaced directions in the coarse sweep (default 24).
+    refine_steps : int
+        Number of zoom-in refinement iterations (default 4).
+    num_refine : int
+        Directions evaluated per refinement step (default 12).
+
+    Returns
+    -------
+    gradients : (N, 2) array
+        Refined unit gradient vectors.
+    interpolator : CurlFree_Interpolator
+        The final fitted interpolator (ready for predict / marching cubes).
+    """
+    points = np.asarray(points, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64).ravel()
+    gradients = np.array(init_gradients, dtype=np.float64, copy=True)
+
+    # Normalize initial gradients
+    norms = np.linalg.norm(gradients, axis=1, keepdims=True)
+    gradients /= np.maximum(norms, 1e-12)
+    interpolator.fit(points, values, gradients, force_recompute=False, use_projection=True)
+    if gt_gradients is not None:
+            print(f"cos_sim mean to the ground truth gradients: {np.mean(np.sum(gt_gradients * gradients, axis=1)):.6f}")
+
+    for it in range(num_iter):
+        # ----- Step 1: Find best gradient via angular search on the interpolant -----
+        new_gradients = interpolator.sample_best_gradients(
+            points, values,
+            num_coarse=num_coarse,
+            refine_steps=refine_steps,
+            num_refine=num_refine,
+            initial_guess=gradients
+        )
+        # zero_level_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=600)
+        # _, nearest_pts = _point_to_polylines_min_dist(points, zero_level_contours)
+        # dir = np.where(values[:, np.newaxis] < 0, nearest_pts - points, points - nearest_pts)
+        # new_gradients = dir / np.linalg.norm(dir, axis=1, keepdims=True)
+
+        # skip points with short visible arcs or the dir is not in visible arcs, keep original gradients for them
+        projections_new = points - values[:, np.newaxis] * new_gradients
+        projections_old = points - values[:, np.newaxis] * gradients
+
+        visible_mask_new = are_points_visible(projections_new, points, values)
+        visible_mask_old = are_points_visible(projections_old, points, values)
+        # Don't update gradients to make visible gradients invisible
+        skip_mask = visible_mask_old & ~visible_mask_new
+        new_gradients[skip_mask] = gradients[skip_mask]
+
+        # ----- Convergence diagnostic -----
+        cos_sim = np.sum(gradients * new_gradients, axis=1)
+        mean_cos = np.mean(cos_sim)
+        max_angle_deg = np.degrees(np.arccos(np.clip(np.min(cos_sim), -1, 1)))
+
+        print(f"Iter {it+1:3d} | mean cos_sim: {mean_cos:.6f}  "
+              f"max angle change: {max_angle_deg:.2f}\u00b0  ")
+        visible_mask = visible_mask_new | visible_mask_old
+        visible_num = visible_mask.sum()
+        print(f"Number of visible projected points: {visible_num} out of {len(points)}. Percentage: {visible_num / len(points) * 100:.2f}%")
+
+        gradients = new_gradients
+        # ----- Step 2: Fit interpolant with current gradients -----
+        interpolator.fit(points, values, gradients, mask=visible_mask, force_recompute=True, use_projection=True)
+        if gt_gradients is not None:
+            print(f"cos_sim mean to the ground truth gradients: {np.mean(np.sum(gt_gradients * new_gradients, axis=1)):.6f}")
 
     return gradients, interpolator
 
