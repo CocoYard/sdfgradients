@@ -673,38 +673,35 @@ def bvh_method(centers, radii, leaf_size=16):
 # Main: benchmark all methods
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    mesh, points, sdf_values, gradients = generate_test_mesh_data("examples/bunny.obj", grid_len=40)
+    mesh, points, sdf_values, gradients = generate_test_mesh_data("examples/bunny.obj", grid_len=50)
     centers = points
     radii = np.abs(sdf_values)
     N = len(centers)
     radii_max = np.max(radii)
-    
-    # print a message every 20 seconds to show progress
-    import threading
-    def keep_alive():
-        start_time = time.time()
-        while True:
-            time.sleep(20)
-            elapsed = int(time.time() - start_time)
-            print(f"[{elapsed}s elapsed] Still computing... Please wait.")
-    
-    progress_thread = threading.Thread(target=keep_alive, daemon=True)
-    progress_thread.start()
 
+    # ── C++ wrappers: return list of numpy arrays (fast, no dict overhead) ──
+    def _csr_to_list(csr_func, centers, radii, **kwargs):
+        """Wrap a C++ CSR function → list[np.array]."""
+        off, nbr = csr_func(centers, radii, **kwargs)
+        off = np.asarray(off)
+        nbr = np.asarray(nbr)
+        return [nbr[off[i]:off[i+1]] for i in range(len(off) - 1)]
+
+    try:
+        import sphere_intersect as si
+        cpp_available = True
+    except ImportError:
+        cpp_available = False
+        print("WARNING: sphere_intersect C++ module not found, skipping C++ methods.")
+
+    if not cpp_available:
+        print("ERROR: sphere_intersect C++ module not found. Please compile it first.")
+        exit(1)
     methods = [
-        ("Serial (loop)",                serial),
-        ("Serial2 (loop)",               serial2),
-        ("3-Axis Sweep & Prune",         sweep_and_prune_3axis),
-        ("Uniform Grid + Mailbox",       uniform_grid_mailbox),
-        ("BVH (median split)",           bvh_method),
-        # ("KD-Tree",                      kd_tree_method),
-        # ("Chunked GEMM",                 chunked_gemm_fast),
-        # ("Chunked vectorized numpy",     chunked_vectorized),
-        # ("Chunked parallel",             chunked_parallel),
-        # ("multiprocessing.Pool + shm",  parallel_pool),
-        # ("concurrent.futures + shm",    parallel_futures),
-        # ("joblib",                       parallel_joblib),
-        # ("Fully vectorized numpy",       fully_vectorized),
+        ("C++: Uniform Grid+Mailbox", lambda c, r: _csr_to_list(si.find_intersections_grid, c, r)),
+        ("C++: 3-Axis SAP",           lambda c, r: _csr_to_list(si.find_intersections_sap, c, r)),
+        ("C++: BVH (median split)",   lambda c, r: _csr_to_list(si.find_intersections_bvh, c, r)),
+        ("C++: Multi-level Hash",     lambda c, r: _csr_to_list(si.find_intersections, c, r)),
     ]
 
     results = {}
@@ -715,16 +712,17 @@ if __name__ == "__main__":
         t0 = time.perf_counter()
         res = func(centers, radii)
         elapsed = time.perf_counter() - t0
-        total_pairs = sum(len(v) for v in res.values()) // 2
+        total_pairs = sum(len(v) for v in res) // 2
         print(f"{name:<35} {elapsed:>8.3f}s   ({total_pairs} pairs)")
         results[name] = res
 
-    # Verify correctness: all methods should agree
-    ref_name = "Serial (loop)"
+    # Verify correctness: use Uniform Grid as reference (simplest, least likely to have bugs)
+    ref_name = "C++: Uniform Grid+Mailbox"
     ref = results[ref_name]
+    print("\nCorrectness check (ref = C++: Uniform Grid+Mailbox):")
     for name, res in results.items():
         if name == ref_name:
             continue
-        match = all(sorted(res.get(i, [])) == sorted(ref[i]) for i in range(N))
+        match = all(np.array_equal(np.sort(res[i]), np.sort(ref[i])) for i in range(N))
         status = "✓ PASS" if match else "✗ FAIL"
-        print(f"  {status}  {name} vs {ref_name}")
+        print(f"  {status}  {name}")
