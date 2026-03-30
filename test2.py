@@ -712,8 +712,11 @@ if __name__ == "__main__":
         t0 = time.perf_counter()
         res = func(centers, radii)
         elapsed = time.perf_counter() - t0
-        total_pairs = sum(len(v) for v in res) // 2
-        print(f"{name:<35} {elapsed:>8.3f}s   ({total_pairs} pairs)")
+        lengths = [len(v) for v in res]
+        total_pairs = sum(lengths) // 2
+        max_neighbors = max(lengths) if lengths else 0
+        median_neighbors = np.median(lengths) if lengths else 0
+        print(f"{name:<35} {elapsed:>8.3f}s   ({total_pairs} pairs, max: {max_neighbors}, median: {median_neighbors:.1f})")
         results[name] = res
 
     # Verify correctness: use Uniform Grid as reference (simplest, least likely to have bugs)

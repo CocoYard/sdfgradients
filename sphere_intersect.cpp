@@ -249,25 +249,8 @@ py::tuple find_intersections_sap(
         sorted_x_hi[si] = x_hi[order[si]];
     }
 
-    /* Build reverse mapping: for each original index, its position in sorted order */
-    std::vector<int> rank(n);
-    for (int si = 0; si < n; si++)
-        rank[order[si]] = si;
-
-    /* Parallel sweep: each sphere i scans forward from its sorted position.
-     * To find ALL neighbors (not just j with higher x_lo), we also need
-     * to be found by spheres with lower x_lo.  Instead, each sphere i
-     * scans forward (sj = rank[i]+1 ...) while x_lo[sj] < x_hi[i].
-     * This only finds j whose x_lo > x_lo[i].  For j whose x_lo <= x_lo[i],
-     * sphere j's forward scan will find i.  So each pair is found by
-     * exactly one side — but we need both directions in result.
-     *
-     * Strategy: scan forward, collect pairs into thread-local buffers,
-     * then scatter both directions. */
-
-    /* Phase 1: collect all pairs (single-threaded forward sweep is fast in C++) */
-    std::vector<std::pair<int,int>> all_pairs;
-    all_pairs.reserve(n);  /* will grow */
+    /* Sweep — single-threaded because forward scan is sequential */
+    std::vector<std::vector<int>> result(n);
 
     for (int si = 0; si < n; si++) {
         int i = order[si];
@@ -279,24 +262,25 @@ py::tuple find_intersections_sap(
 
         for (int sj = si + 1; sj < n && sorted_x_lo[sj] < xi_hi_val; sj++) {
             int j = order[sj];
+
+            /* Y-interval overlap */
             if (y_lo[j] >= yi_hi_val || y_hi[j] <= yi_lo_val) continue;
+            /* Z-interval overlap */
             if (z_lo[j] >= zi_hi_val || z_hi[j] <= zi_lo_val) continue;
+
+            /* Exact distance² check */
             float dx = cxi - cx[j];
             float dy = cyi - cy[j];
             float dz = czi - cz[j];
             float sr = ri + ra[j];
-            if (dx * dx + dy * dy + dz * dz < sr * sr)
-                all_pairs.push_back({i, j});
+            if (dx * dx + dy * dy + dz * dz < sr * sr) {
+                result[i].push_back(j);
+                result[j].push_back(i);
+            }
         }
     }
 
-    /* Phase 2: scatter pairs into per-sphere result lists (parallelizable) */
-    std::vector<std::vector<int>> result(n);
-    for (const auto &p : all_pairs) {
-        result[p.first].push_back(p.second);
-        result[p.second].push_back(p.first);
-    }
-
+    /* Sort each neighbor list */
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; i++)
         std::sort(result[i].begin(), result[i].end());

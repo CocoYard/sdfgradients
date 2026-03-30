@@ -1,3 +1,4 @@
+all parallel
 (.venv) (base) yongcheng@Mac sdfgradients % python test2.py
 Sphere intersection detection benchmark  (n = 125000), radii in [0, 0.6891])
 ============================================================
@@ -11,3 +12,17 @@ Correctness check (ref = C++: Uniform Grid+Mailbox):
   ✓ PASS  C++: BVH (median split)
   ✗ FAIL  C++: Multi-level Hash
 
+
+restore the SAP to original implementation
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py
+Sphere intersection detection benchmark  (n = 125000), radii in [0, 0.6891])
+============================================================
+C++: Uniform Grid+Mailbox              9.592s   (652048568 pairs)
+C++: 3-Axis SAP                       38.705s   (652048568 pairs)
+C++: BVH (median split)                3.781s   (652048568 pairs)
+C++: Multi-level Hash                  7.634s   (537678663 pairs)
+
+Correctness check (ref = C++: Uniform Grid+Mailbox):
+  ✓ PASS  C++: 3-Axis SAP
+  ✓ PASS  C++: BVH (median split)
+  ✗ FAIL  C++: Multi-level Hash
