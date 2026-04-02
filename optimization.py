@@ -21,7 +21,7 @@ def iterative_gradient_alignment(points, values, init_gradients, interpolator : 
     points = np.asarray(points, dtype=np.float64)
     values = np.asarray(values, dtype=np.float64).ravel()
     gradients = np.array(init_gradients, dtype=np.float64, copy=True)
-    interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
+    interpolator.fit(points, values, gradients, force_recompute=True)
     if gt is not None:
             print_shape_distances("Before refinement", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     for it in range(num_iter):
@@ -54,7 +54,7 @@ def iterative_gradient_alignment(points, values, init_gradients, interpolator : 
               f"max angle change: {max_angle_deg:.2f}\u00b0  "
               f"proj RMSE: {proj_rmse:.6e}")
         gradients = new_gradients
-        interpolator.fit(points, values, gradients, use_projection=True, force_recompute=True)
+        interpolator.fit(points, values, gradients, force_recompute=True)
         # if gt is not None:
         #     print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     return gradients
@@ -396,7 +396,7 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-12)
     init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
-    interpolator.fit(points, values, gradients, force_recompute=False, use_projection=True)
+    interpolator.fit(points, values, gradients, force_recompute=False)
     if gt is not None:
         print_shape_distances("Before refinement", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     for it in range(num_iter):
@@ -438,7 +438,7 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
         gradients = new_gradients
         init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
         # ----- Step 2: Fit interpolant with current gradients -----
-        interpolator.fit(points, values, gradients, force_recompute=True, use_projection=True)
+        interpolator.fit(points, values, gradients, force_recompute=True)
         # if gt is not None:
         #     print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=500), gt)
 
@@ -494,7 +494,7 @@ def iterative_projection_3d(points, values, init_gradients, interpolator : Inter
     # Normalize initial gradients
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-12)
-    interpolator.fit(points, values, gradients, force_recompute=False, use_projection=True)
+    interpolator.fit(points, values, gradients, force_recompute=False)
     if gt_gradients is not None:
             print(f"cos_sim mean to the ground truth gradients: {np.mean(np.sum(gt_gradients * gradients, axis=1)):.6f}")
 
@@ -535,7 +535,7 @@ def iterative_projection_3d(points, values, init_gradients, interpolator : Inter
 
         gradients = new_gradients
         # ----- Step 2: Fit interpolant with current gradients -----
-        interpolator.fit(points, values, gradients, mask=visible_mask, force_recompute=True, use_projection=True)
+        interpolator.fit(points, values, gradients, mask=visible_mask, force_recompute=True)
         if gt_gradients is not None:
             print(f"cos_sim mean to the ground truth gradients: {np.mean(np.sum(gt_gradients * new_gradients, axis=1)):.6f}")
 

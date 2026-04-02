@@ -28,7 +28,7 @@ class Interpolator:
         else:
             self.kernel = lambda r: r**3
 
-    def fit(self, points, values, gradients=None, mask=None, force_recompute=False, use_projection=True):
+    def fit(self, points, values, gradients=None, mask=None, force_recompute=False, hermite_interp=False, distance_threshold=0.2):
         """
         Fit the interpolator with given points and their corresponding values.
 
@@ -36,27 +36,40 @@ class Interpolator:
         points (np.ndarray): An array of shape (n_samples, m_dimensions) representing the input points.
         values (np.ndarray): An array of shape (n_samples,) representing the values at the input points.
         gradients (np.ndarray, optional): An array of shape (n_samples, m_dimensions) representing the gradients at 
-            the input points. If they are provided, the interpolator will be of Hermite form. Default is None.
+            the input points. If they are provided and hermite_interp is True, the interpolator will be of Hermite form. Otherwise,
+            also use projections based on gradients to do interpolation. Default is None.
+        mask (np.ndarray, optional): A boolean array of shape (n_samples,) indicating which points to use for fitting. Because
+            some projection points are in the invisible region.
+        force_recompute (bool, optional): If True, forces the interpolator to refit even if it has already been trained. Default is False.
+        hermite_interp (bool, optional): If True and gradients are provided, uses Hermite interpolation. Default is False.
+        distance_threshold (float, optional): If the number of points exceeds 5000, only keep points with absolute values less than this
+            threshold to reduce time and memory usage. Default is 0.2.
         """
         if self.trained and not force_recompute:
             print(f"Interpolator is already trained. Use force_recompute=True to refit {points.shape[0]} points.")
             return
-        if gradients is not None and use_projection:
+        if gradients is not None and not hermite_interp:
             if mask is None:
                 projections = points - values[:, np.newaxis] * gradients
             else:
                 projections = points[mask] - values[mask, np.newaxis] * gradients[mask]
             self.points = np.vstack([points, projections])
             self.values = np.concatenate([values, np.zeros(len(projections))])
-            self.alpha, self.p, self.q = self._compute_coefficients(self.points, self.values)
-        elif gradients is not None:
+        elif hermite_interp:
+            assert gradients is not None, "Hermite interpolation requires gradients to be provided."
             self.points = points
             self.values = values
             self.alpha, self.beta, self.p, self.q = self._compute_coefficients_with_gradients(points, values, gradients)
         else:
             self.points = points
             self.values = values
-            self.alpha, self.p, self.q = self._compute_coefficients(points, values)
+        if len(self.values) > 5000:
+            close_mask = np.abs(self.values) < distance_threshold
+            self.points = self.points[close_mask]
+            self.values = self.values[close_mask]
+            print(f"Warning: too many points, only keeping {len(self.values)} points with abs(value) < {distance_threshold} for fitting.")
+        if not hermite_interp:
+            self.alpha, self.p, self.q = self._compute_coefficients(self.points, self.values)
         self.trained = True
     
     def _compute_coefficients_with_gradients(self, points, values, gradients):

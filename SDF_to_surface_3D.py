@@ -152,6 +152,31 @@ def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_npz=False):
     mesh_distances(recon, mesh, verbose=True)
     return plt
 
+def test_rfta(grid_len=20, path_to_sdf=None, path_to_obj=None, save_npz=False):
+    """
+    Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
+    e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
+    """
+    if path_to_sdf is not None:
+        # read sdf data from file
+        data = np.load(path_to_sdf)
+        points = data['points']
+        distances = data['sdf_values']
+    else:
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_npz)  # Generate new data with 4096 points
+    # Export meshes to out/
+    import trimesh, os
+    out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
+    os.makedirs(out_dir, exist_ok=True)
+    Vr, Fr = gpy.reach_for_the_arcs(points, distances)
+    rfta = trimesh.Trimesh(vertices=Vr, faces=Fr)
+    # only keep the largest connected component
+    components = rfta.split(only_watertight=False)
+    largest = max(components, key=lambda m: len(m.faces))
+    largest.export(f'{out_dir}/rfta_{grid_len}.obj')
+    print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept largest component: {len(largest.faces)} faces out of {len(Fr)})")
+
 def clamp_gradients_to_arcs(points, values, gradients, degenerate_arcs):
     pass
 
@@ -207,20 +232,10 @@ def estimate_gradients_interp(sdf_points, sdf_values, interpolator : Interpolato
 
     to_train_points = sdf_points.copy()
     to_train_sdf = sdf_values.copy()
-    for i, angle in degenerate_arcs.items():
-        # For points with degenerate arcs, set gradient directly toward the angle
-        grad = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
-        # Add a new point on the surface along this gradient direction
-        new_point = sdf_points[i] - sdf_values[i] * grad
-        to_train_points = np.vstack([to_train_points, new_point])
-        to_train_sdf = np.append(to_train_sdf, 0)  # The SDF value at the projected point should be 0
+    # TODO: Add points for degenerate arcs.
     print(f"After adding points for degenerate arcs, total points: {len(to_train_points)}")
-    if to_train_points.shape[0] > 10000:
-        mask = np.abs(sdf_values) < 0.1
-        to_train_points = to_train_points[mask]
-        to_train_sdf = to_train_sdf[mask]
     interpolator.fit(to_train_points, to_train_sdf)
-    print(f"first fit done with {len(to_train_points)} points")
+    print(f"first fit done with input {len(to_train_points)} points")
     gradients = interpolator.sample_best_gradients(sdf_points, sdf_values)
     # verts, faces = interpolator.extract_zero_level_set(bounds=((sdf_points[:, 0].min(), sdf_points[:, 0].max()), 
     #                                             (sdf_points[:, 1].min(), sdf_points[:, 1].max()), 
@@ -255,22 +270,17 @@ def yongs_algorithm(sdf_points, sdf_values, gt_gradients=None, max_iters=100):
     init_gradients = estimate_gradients_interp(sdf_points, sdf_values, interpolator, degenerate_arcs)
     # init_gradients = gt_gradients if gt_gradients is not None else init_gradients
     
-    """ step 2: project onto surface, then filter visible points """
+    """ step 2: project onto surface, then filter invisible points """
     init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
     mask = are_points_visible(init_projections, sdf_points, sdf_values)
     # mask = np.ones(len(sdf_points), dtype=bool)
     num_visible_points = np.sum(mask)
     print(f"Number of visible projected points: {num_visible_points} out of {len(sdf_points)}. percent: {np.mean(mask) * 100:.2f}%")
-    new_points = init_projections[mask]
-    
+    new_points = np.vstack([sdf_points, init_projections[mask]])
+    new_values = np.concatenate([sdf_values, np.zeros(num_visible_points)])
+
     """ step 3: refit the interpolator with the original points + projected points """
-    mask2 = np.abs(sdf_values) < 0.1 if sdf_points.shape[0] > 10000 else np.ones(len(sdf_points), dtype=bool)
-    to_train_points = sdf_points[mask2]
-    to_train_sdf = sdf_values[mask2]
-    to_train_points = np.vstack([to_train_points, new_points])
-    to_train_sdf = np.append(to_train_sdf, np.zeros(len(new_points)))  # The SDF value at the projected point should be 0
-    
-    interpolator.fit(to_train_points, to_train_sdf, force_recompute=True, use_projection=False)
+    interpolator.fit(new_points, new_values, force_recompute=True) # it is the same as interpolator.fit(sdf_points, sdf_values, init_gradients, mask, force_recompute=True)
 
     # init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
 
@@ -357,9 +367,12 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
+    name = 'eiffel'
     # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
-    # plt = test_our_method(grid_len=10, path_to_obj='examples/archer.obj', iters=0)
-    check_mesh_error('out/archer', 'examples/archer.obj')
+    plt = test_our_method(grid_len=20, path_to_obj=f'examples/{name}.obj', iters=0)
+    # check_mesh_error('out/bunny', 'examples/bunny.obj')
+    # test_rfta(grid_len=20, path_to_obj=f'examples/{name}.obj')
+    check_mesh_error(f'out/{name}', f'examples/{name}.obj')
 
     elapsed = time.perf_counter() - t0
     print(f"  ⏱  {'Total execution time':<30} {elapsed:>7.2f} s")

@@ -1987,7 +1987,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         mask = rate_gradient_estimation(sdf_points, init_projections, sdf_values) == 0
         print(f"Initial projection error count: {np.sum(mask)} out of {len(sdf_points)}. percent correct: {np.mean(mask) * 100:.2f}%")
         # interpolator = CurlFree_Interpolator()
-        interpolator.fit(sdf_points, sdf_values, init_gradients, force_recompute=True, use_projection=True)
+        interpolator.fit(sdf_points, sdf_values, init_gradients, force_recompute=True)
 
         init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
 
@@ -1996,7 +1996,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
                                                 visible_arcs=visible_arcs, short_arc_idx=degenerate_arcs, num_iter=iters, gt=points, 
                                                 colinear_neighbors=colinear_neighbors if on_gradient_neighbors else None)
 
-        interpolator.fit(sdf_points, sdf_values, gradients, force_recompute=True, use_projection=True)
+        interpolator.fit(sdf_points, sdf_values, gradients, force_recompute=True)
     elif gradient_estimation == GradientEstimation.INTERP_LOCAL:
         pass
     else:
@@ -2167,7 +2167,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
 
     grad_diff = gradients_diff_norm(gradients, gradients_gt)
     print(f"{gradient_estimation.value} n={n} Mean L2 norm of gradient difference from ground truth: {grad_diff:.4f}")
-    if False:
+    if True:
         Vr, Er = gpy.reach_for_the_arcs(sdf_points, sdf_values, fine_tune_iters=100, batch_size=1000)
         rfta_contours = obj_to_points(Vr, Er)  # list of contour arrays
         # Build NaN-separated array for plotting and distance computation
