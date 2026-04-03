@@ -24,15 +24,15 @@ import sphere_intersect
 
 # Try to import C extension; fall back to Python
 try:
-    import sphere_exposed_ext as ext
+    import sphere_exposed_cpp as ext
     _HAS_C_EXT = True
     print("Using C extension for exposed arc computation")
 except ImportError:
     _HAS_C_EXT = False
     print("C extension not found, using pure Python (slower)")
 
-from robust_exposed import (
-    Sphere, compute_all_caps, compute_exposed_arcs_robust,
+from exposed_region_clip import (
+    Sphere, compute_all_caps, compute_exposed_region,
 )
 
 
@@ -179,6 +179,9 @@ def benchmark(path_to_mesh=None, grid_len=20):
     # ── Compute exposed arcs ──
     t0 = time.perf_counter()
 
+    # Initialize pts_arr for both paths
+    pts_arr = [None] * n_spheres
+    
     if _HAS_C_EXT:
         # ── C extension batch (v3 CSR API) ──
         # Convert neighbor list to CSR format
@@ -193,11 +196,21 @@ def benchmark(path_to_mesh=None, grid_len=20):
         results = ext.compute_exposed_batch(centers, radii, indices, offsets)
         t_compute = time.perf_counter() - t0
 
-        # v3 returns a dict of numpy arrays, not a list of dicts
+        # v3 returns a dict of numpy arrays, including degenerate points
         n_caps_arr = results['n_caps']
         n_arcs_arr = results['n_arcs']
         n_pts_arr  = results['n_points']
         arc_deg_arr = np.degrees(results['total_arc'])
+        
+        # Extract degenerate points and organize by sphere
+        if 'point_positions' in results:
+            pt_positions = results['point_positions']  # shape: [total_pts, 3]
+            pt_sphere_idx = results['point_sphere_idx']  # shape: [total_pts]
+            for i in range(n_spheres):
+                mask = pt_sphere_idx == i
+                if np.any(mask):
+                    pts_arr[i] = pt_positions[mask]
+                    n_pts_arr[i] = np.sum(mask)
 
     else:
         # ── Pure Python ──
@@ -219,15 +232,16 @@ def benchmark(path_to_mesh=None, grid_len=20):
             main = Sphere(centers[i], radii[i])
             others = [Sphere(centers[j], radii[j]) for j in nbr]
             caps = compute_all_caps(main, others)
-            arcs_by_cap, exposed_points = compute_exposed_arcs_robust(main, caps)
+            arcs_by_cap, exposed_points = compute_exposed_region(main, caps)
 
-            total_arc = sum(sum(te - ts_ for ts_, te in arcs)
+            total_arc = sum(sum(arc.length() for arc in arcs)
                             for arcs in arcs_by_cap.values())
             n_arcs = sum(len(arcs) for arcs in arcs_by_cap.values())
 
             n_caps_arr[i] = len(caps)
             n_arcs_arr[i] = n_arcs
             n_pts_arr[i] = len(exposed_points)
+            pts_arr[i] = exposed_points
             arc_deg_arr[i] = np.degrees(total_arc)
             timings[i] = time.perf_counter() - ts
 
@@ -239,6 +253,55 @@ def benchmark(path_to_mesh=None, grid_len=20):
                       f"{rate:.0f} sph/s  ETA {eta:.1f}s")
 
         t_compute = time.perf_counter() - t0
+
+    # ── Export GLTF scene (works for both C extension and pure Python) ──
+    if path_to_mesh:  # Only export if we have a mesh (not synthetic data)
+        import trimesh
+        from trimesh.visual.material import PBRMaterial
+        import os
+        
+        scene = trimesh.Scene()
+        
+        # Add the original mesh for reference (light gray, opaque)
+        ref_mesh = mesh.copy()
+        ref_mesh.visual.material = PBRMaterial(baseColorFactor=[200, 200, 200, 255], alphaMode='OPAQUE')
+        scene.add_geometry(ref_mesh)
+        
+        print("\nBuilding GLTF scene with spheres and exposed points...")
+        for i in range(n_spheres):
+            # Only draw exposed points if they exist (pure Python path)
+            if n_pts_arr[i] > 0 and pts_arr[i] is not None:
+            
+                center = centers[i]
+                radius = radii[i]
+                
+                # Reference sphere (properly semi-transparent for GLTF)
+                # sphere_geom = trimesh.primitives.Sphere(radius=radius, center=center)
+                # sphere_geom.visual.material = PBRMaterial(baseColorFactor=[150, 150, 150, 20], alphaMode='BLEND')
+                # scene.add_geometry(sphere_geom)
+                for j in range(n_pts_arr[i]):
+                    point = pts_arr[i][j]
+                    
+                    # Blue point as a tiny sphere (solid & glowing)
+                    pt_geom = trimesh.primitives.Sphere(radius=0.001, center=point)
+                    pt_geom.visual.material = PBRMaterial(
+                        baseColorFactor=[0, 0, 255, 255],
+                        emissiveFactor=[0.0, 0.0, 1.0],
+                        alphaMode='OPAQUE'
+                    )
+                    scene.add_geometry(pt_geom)
+                    
+                    # Red line connecting center and exposed point
+                    line_geom = trimesh.load_path([center, point])
+                    for e in line_geom.entities:
+                        e.color = [255, 0, 0, 255]
+                    scene.add_geometry(line_geom)
+        
+        name = os.path.splitext(os.path.basename(path_to_mesh))[0]
+        export_path = f'a_{name}_{grid_len}.glb'
+        scene.export(export_path)
+        print(f"\nExported smooth 3D visualization to {export_path}")
+        print("View with macOS Quick Look (Spacebar), Windows 3D Viewer, or https://gltf-viewer.donmccurdy.com/")
 
     # ── Stats ──
     fully_covered = int(np.sum((n_arcs_arr == 0) & (n_pts_arr == 0)

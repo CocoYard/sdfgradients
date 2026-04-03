@@ -9,3 +9,5 @@ out/*
 out.bak
 test.py
 .DS_Store
+bench/*.glb
+*.so
