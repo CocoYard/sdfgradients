@@ -291,7 +291,7 @@ static int intersect_intervals(const Interval *a, int na,
             if (hi - lo > -skip_tol && cnt < max_out) {
                 if (hi < lo) {
                     double mid = (lo + hi) / 2.0;
-                    out[cnt++] = {mid - skip_tol/2, mid + skip_tol/2};
+                    out[cnt++] = {mid - 1e-15, mid + 1e-15};
                 } else {
                     out[cnt++] = {lo, hi};
                 }

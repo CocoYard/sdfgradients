@@ -199,7 +199,7 @@ def _intersect_interval_lists(list_a, list_b, skip_tol=1e-8, merge_tol=1e-12):
             if hi - lo > -skip_tol:
                 if hi < lo:
                     mid = (lo + hi) / 2
-                    result.append((mid - skip_tol/2, mid + skip_tol/2))
+                    result.append((mid - 1e-15, mid + 1e-15))
                 else:
                     result.append((lo, hi))
     result.sort()

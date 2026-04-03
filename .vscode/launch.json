@@ -2,10 +2,28 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: interpolation.py",
+            "name": "Python: SDF_to_surface.py",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/interpolation.py",
+            "program": "${workspaceFolder}/SDF_to_surface.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: bench_mesh.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/bench/bench_mesh.py",
+            "args": ["examples/bunny.obj", "10"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: test_visible.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/bench/test_visible.py",
+            "args": ["examples/bunny.obj", "10"],
             "console": "integratedTerminal",
             "justMyCode": true
         }
