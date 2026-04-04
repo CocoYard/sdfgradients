@@ -1,7 +1,53 @@
 import numpy as np
 from scipy.spatial.distance import cdist
 import trimesh
+import sphere_exposed_pybind as sep
 
+def get_sphere_data(batch, i):
+    """从 batch 结果里切出第 i 个球的数据"""
+    arc_mask = batch['arc_sphere_idx'] == i
+    cap_mask = batch['cap_sphere_idx'] == i
+    pt_mask  = batch['point_sphere_idx'] == i
+    return {
+        'n_caps'        : int(batch['n_caps'][i]),
+        'total_arc'     : float(batch['total_arc'][i]),
+        'arc_cap_idx'   : batch['arc_cap_idx'][arc_mask],
+        'arc_start'     : batch['arc_start'][arc_mask],
+        'arc_end'       : batch['arc_end'][arc_mask],
+        'cap_normals'   : batch['cap_normals'][cap_mask],   # (K,3) 法向量
+        'cap_d'         : batch['cap_d'][cap_mask],         # (K,)  平面偏移
+        'cap_centers'   : batch['cap_centers'][cap_mask],   # (K,3) 边界圆心
+        'cap_radii'     : batch['cap_radii'][cap_mask],     # (K,)  边界圆半径
+        'cap_u'         : batch['cap_u'][cap_mask],         # (K,3) 边界圆 u 轴
+        'cap_v'         : batch['cap_v'][cap_mask],         # (K,3) 边界圆 v 轴
+        'exposed_points': batch['point_positions'][pt_mask],# (P,3) 退化点
+    }
+
+def sample_arcs(i, batch, num_points=100):
+    sp = get_sphere_data(batch, i)
+    points, _ = sep.sample_arcs(
+        sp['cap_centers'],
+        sp['cap_radii'],
+        sp['cap_u'],
+        sp['cap_v'],
+        sp['arc_cap_idx'],
+        sp['arc_start'],
+        sp['arc_end'],
+        num_points
+    )
+    return points
+
+def query_closest_on_arcs(query_pts, i, batch):
+    sp = get_sphere_data(batch, i)
+    closest, distances, _ = sep.query_closest_on_arcs(
+        query_pts,
+        sp['cap_centers'], sp['cap_radii'],
+        sp['cap_u'],       sp['cap_v'],
+        sp['arc_cap_idx'], sp['arc_start'], sp['arc_end']
+    )
+    return closest, distances
+
+    
 def are_points_visible(points, sdf_points, sdf_values, epsilon=1e-8):
     """
     Check if query points are visible from the SDF points, i.e. not occluded by any other SDF point's sphere.

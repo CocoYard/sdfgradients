@@ -854,12 +854,13 @@ py::dict compute_exposed_batch(
  * query_inside
  *
  * Python signature:
- *   query_inside(points(N,3), all_cap_normals(M,3), all_cap_d(M,)) -> bool(N,)
+ *   query_inside(points(N,3), all_cap_normals(M,3), all_cap_d(M,), tol=1e-8) -> bool(N,)
  * ═══════════════════════════════════════════════════════════════════ */
 py::array_t<bool> query_inside(
     py::array_t<double> py_pts,
     py::array_t<double> py_cn,
-    py::array_t<double> py_cd)
+    py::array_t<double> py_cd,
+    double tol = 1e-8)
 {
     auto pts_r = py_pts.unchecked<2>();
     auto cn_r  = py_cn.unchecked<2>();
@@ -875,7 +876,7 @@ py::array_t<bool> query_inside(
         double px = pts_r(i,0), py_ = pts_r(i,1), pz = pts_r(i,2);
         bool exposed = true;
         for (int j = 0; j < n_caps; j++) {
-            if (cn_r(j,0)*px + cn_r(j,1)*py_ + cn_r(j,2)*pz - cd_r(j) > EPS12) {
+            if (cn_r(j,0)*px + cn_r(j,1)*py_ + cn_r(j,2)*pz - cd_r(j) > tol) {
                 exposed = false; break;
             }
         }
@@ -1139,8 +1140,9 @@ Returns dict with keys:
         py::arg("points"),
         py::arg("all_cap_normals"),
         py::arg("all_cap_d"),
+        py::arg("tol") = 1e-8,
         R"doc(
-query_inside(points(N,3), all_cap_normals(M,3), all_cap_d(M,)) -> bool(N,)
+query_inside(points(N,3), all_cap_normals(M,3), all_cap_d(M,), tol=1e-8) -> bool(N,)
 
 Test whether each point is in the exposed region (not inside any cap).
 )doc");
