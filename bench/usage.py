@@ -1,401 +1,243 @@
 """
-sphere_exposed_pybind — Python 端用法示例
-==========================================
-
-模块共4个函数：
-  1. compute_exposed_single  — 单个球的 exposed 区域计算
-  2. compute_exposed_batch   — 批量球（CSR 邻居输入）
-  3. query_inside            — 判断点是否在 exposed 区域内
-  4. query_closest_on_arcs   — 查询点到 exposed 边界的最近点
-  5. sample_arcs             — 在 exposed 边界上采样点
-
-编译后 import：
-  import sphere_exposed_pybind as sep
+query 详细演示：batch → 取单球 → 3种query函数逐一展示
 """
 
 import numpy as np
-import sphere_exposed_pybind as sep   # 改成你的模块名
+import sphere_exposed_pybind as sep
 
 
-# ══════════════════════════════════════════════════════════════════
-# 1. compute_exposed_single
-# ══════════════════════════════════════════════════════════════════
-#
-# 输入：
-#   center        (3,)   float64   主球球心
-#   radius        float            主球半径
-#   other_centers (N,3)  float64   邻居球球心
-#   other_radii   (N,)   float64   邻居球半径
-#   tol           float  =1e-8     数值容差（平行 cap 判断、区间跳过）
-#   degen_tol     float  =1e-6     退化点检测阈值（total_arc < degen_tol 时触发）
-#   merge_tol     float  =1e-12    区间合并容差
-#
-# 输出：dict，key 如下：
-#   arcs_by_cap      dict  {int: [(start,end),...]}
-#                          key = compacted cap 编号 0..K-1
-#                          value = 该 cap 上的 exposed 弧段列表（角度，单位 rad）
-#   exposed_points   list  [array(3,), ...]
-#                          退化 exposed 点（total_arc≈0 时才有）
-#   total_arc        float 所有弧段角度之和（衡量 exposed 区域大小）
-#   n_caps           int   有弧段的 cap 数（compacted）
-#   --- 以下供 query 函数使用 ---
-#   cap_normals      (K,3) float64   compacted cap 法向量
-#   cap_d            (K,)  float64   compacted cap 平面偏移 d（dot(n,x)=d 为边界）
-#   cap_centers      (K,3) float64   cap 边界圆心
-#   cap_radii        (K,)  float64   cap 边界圆半径
-#   cap_u            (K,3) float64   边界圆局部 u 轴
-#   cap_v            (K,3) float64   边界圆局部 v 轴
-#   all_cap_normals  (M,3) float64   所有 cap 法向量（含无弧段的，用于 query_inside）
-#   all_cap_d        (M,)  float64   所有 cap 偏移
-#   arc_cap_idx      (A,)  int32     每条弧属于哪个 compacted cap
-#   arc_start        (A,)  float64   弧起始角（rad, in [0, 2π]）
-#   arc_end          (A,)  float64   弧终止角（rad）
-
-def example_single():
-    print("=" * 60)
-    print("1. compute_exposed_single")
-    print("=" * 60)
-
-    # 主球
-    center = np.array([0.0, 0.0, 0.0])
-    radius = 1.0
-
-    # 6 个邻居球，从 ±x ±y ±z 方向各贴一个
-    other_centers = np.array([
-        [ 1.5,  0.0,  0.0],
-        [-1.5,  0.0,  0.0],
-        [ 0.0,  1.5,  0.0],
-        [ 0.0, -1.5,  0.0],
-        [ 0.0,  0.0,  1.5],
-        [ 0.0,  0.0, -1.5],
-    ], dtype=np.float64)
-    other_radii = np.full(6, 0.8, dtype=np.float64)
-
-    result = sep.compute_exposed_single(
-        center, radius,
-        other_centers, other_radii,
-        tol=1e-8, degen_tol=1e-6, merge_tol=1e-12
-    )
-
-    print(f"n_caps     : {result['n_caps']}")
-    print(f"total_arc  : {result['total_arc']:.6f} rad")
-    print(f"arcs_by_cap:")
-    for cap_id, arcs in result['arcs_by_cap'].items():
-        for s, e in arcs:
-            print(f"  cap {cap_id}: [{s:.4f}, {e:.4f}]  len={e-s:.4f}")
-    print(f"exposed_points: {len(result['exposed_points'])} pts")
-
-    print(f"cap_normals shape : {result['cap_normals'].shape}")   # (K,3)
-    print(f"arc_cap_idx shape : {result['arc_cap_idx'].shape}")   # (A,)
-    print(f"arc_start   shape : {result['arc_start'].shape}")     # (A,)
-
-    return result
+def get_sphere_data(batch, i):
+    """从 batch 结果里切出第 i 个球的数据"""
+    arc_mask = batch['arc_sphere_idx'] == i
+    cap_mask = batch['cap_sphere_idx'] == i
+    pt_mask  = batch['point_sphere_idx'] == i
+    return {
+        'n_caps'        : int(batch['n_caps'][i]),
+        'total_arc'     : float(batch['total_arc'][i]),
+        'arc_cap_idx'   : batch['arc_cap_idx'][arc_mask],
+        'arc_start'     : batch['arc_start'][arc_mask],
+        'arc_end'       : batch['arc_end'][arc_mask],
+        'cap_normals'   : batch['cap_normals'][cap_mask],   # (K,3) 法向量
+        'cap_d'         : batch['cap_d'][cap_mask],         # (K,)  平面偏移
+        'cap_centers'   : batch['cap_centers'][cap_mask],   # (K,3) 边界圆心
+        'cap_radii'     : batch['cap_radii'][cap_mask],     # (K,)  边界圆半径
+        'cap_u'         : batch['cap_u'][cap_mask],         # (K,3) 边界圆 u 轴
+        'cap_v'         : batch['cap_v'][cap_mask],         # (K,3) 边界圆 v 轴
+        'exposed_points': batch['point_positions'][pt_mask],# (P,3) 退化点
+    }
 
 
-# ══════════════════════════════════════════════════════════════════
-# 2. compute_exposed_batch
-# ══════════════════════════════════════════════════════════════════
-#
-# 输入：
-#   centers      (N,3)  float64   所有球球心
-#   radii        (N,)   float64   所有球半径
-#   nbr_indices  (E,)   int64     CSR 邻居索引（所有球的邻居展平）
-#   nbr_offsets  (N+1,) int64     CSR 偏移，第 i 球的邻居在 nbr_indices[off[i]:off[i+1]]
-#   tol / degen_tol / merge_tol   同 single
-#
-# 输出：dict，key 如下：
-#   n_caps           (N,)  int32   每球的 compacted cap 数
-#   n_arcs           (N,)  int32   每球的弧段数
-#   n_points         (N,)  int32   每球的退化点数
-#   total_arc        (N,)  float64 每球的 total_arc
-#   arc_sphere_idx   (A,)  int32   每条弧属于哪个球
-#   arc_cap_idx      (A,)  int32   每条弧属于哪个 compacted cap（per-sphere）
-#   arc_start        (A,)  float64
-#   arc_end          (A,)  float64
-#   point_sphere_idx (P,)  int32   退化点属于哪个球
-#   point_positions  (P,3) float64 退化点坐标
-#   cap_sphere_idx   (C,)  int32   每条 cap 记录属于哪个球
-#   cap_id           (C,)  int32   per-sphere compacted cap 编号
-#   cap_normals      (C,3) float64
-#   cap_d            (C,)  float64
-#   cap_centers      (C,3) float64
-#   cap_radii        (C,)  float64
-#   cap_u            (C,3) float64
-#   cap_v            (C,3) float64
-
-def example_batch():
-    print("\n" + "=" * 60)
-    print("2. compute_exposed_batch")
-    print("=" * 60)
-
+def demo():
     rng = np.random.default_rng(42)
-    N = 20
-    centers = rng.uniform(-3, 3, (N, 3)).astype(np.float64)
-    radii   = rng.uniform(0.3, 1.0, N).astype(np.float64)
-
-    # 构造 CSR 邻居：简单用距离阈值找邻居
-    threshold = 2.5
-    nbr_lists = []
-    for i in range(N):
-        nbrs = []
-        for j in range(N):
-            if i != j:
-                dist = np.linalg.norm(centers[i] - centers[j])
-                if dist < radii[i] + radii[j] + threshold:
-                    nbrs.append(j)
-        nbr_lists.append(nbrs)
-
-    nbr_offsets = np.zeros(N + 1, dtype=np.int64)
-    for i, nbrs in enumerate(nbr_lists):
-        nbr_offsets[i+1] = nbr_offsets[i] + len(nbrs)
-    nbr_indices = np.concatenate([np.array(nb, dtype=np.int64) for nb in nbr_lists]
-                                  if any(nbr_lists) else [np.empty(0, dtype=np.int64)])
-
-    result = sep.compute_exposed_batch(
-        centers, radii, nbr_indices, nbr_offsets,
-        tol=1e-8, degen_tol=1e-6, merge_tol=1e-12
-    )
-
-    print(f"total arcs   : {len(result['arc_start'])}")
-    print(f"total caps   : {len(result['cap_d'])}")
-    print(f"total degen  : {len(result['point_positions'])}")
-    print(f"n_arcs  (per sphere): {result['n_arcs']}")
-    print(f"total_arc (per sphere): {np.round(result['total_arc'], 3)}")
-
-    # 如何按球拆分弧段（利用 arc_sphere_idx）
-    arc_si = result['arc_sphere_idx']    # (A,) 告诉你每条弧属于哪个球
-    arc_s  = result['arc_start']
-    arc_e  = result['arc_end']
-    for i in [0, 1, 2]:
-        mask = arc_si == i
-        print(f"  sphere {i}: {mask.sum()} arcs, "
-              f"total_arc={result['total_arc'][i]:.4f}")
-
-    return result
-
-
-# ══════════════════════════════════════════════════════════════════
-# 3. query_inside
-# ══════════════════════════════════════════════════════════════════
-#
-# 输入：
-#   points           (N,3)  float64   待查询点（应在球面上或附近）
-#   all_cap_normals  (M,3)  float64   来自 compute_exposed_single 的 all_cap_normals
-#   all_cap_d        (M,)   float64   来自 compute_exposed_single 的 all_cap_d
-#
-# 输出：
-#   inside           (N,)   bool
-#                    True  = 该点在 exposed 区域内（不被任何 cap 覆盖）
-#                    False = 该点被至少一个 cap 覆盖（非 exposed）
-
-def example_query_inside(result_single, center, radius):
-    print("\n" + "=" * 60)
-    print("3. query_inside")
-    print("=" * 60)
-
-    # 在球面上均匀采样一些点
-    rng = np.random.default_rng(0)
-    pts_raw = rng.standard_normal((200, 3))
-    pts = center + radius * pts_raw / np.linalg.norm(pts_raw, axis=1, keepdims=True)
-
-    inside = sep.query_inside(
-        pts.astype(np.float64),
-        result_single['all_cap_normals'],
-        result_single['all_cap_d']
-    )
-
-    print(f"查询 {len(pts)} 个点")
-    print(f"exposed 区域内: {inside.sum()} 个")
-    print(f"被 cap 覆盖  : {(~inside).sum()} 个")
-    return pts, inside
-
-
-# ══════════════════════════════════════════════════════════════════
-# 4. query_closest_on_arcs
-# ══════════════════════════════════════════════════════════════════
-#
-# 输入：
-#   points        (N,3)  float64
-#   sphere_center (3,)   float64   主球球心
-#   sphere_radius float             主球半径
-#   cap_centers   (K,3)  float64   来自 compute_exposed_single 的 cap_centers
-#   cap_radii     (K,)   float64
-#   cap_u         (K,3)  float64
-#   cap_v         (K,3)  float64
-#   arc_cap_idx   (A,)   int32     来自 compute_exposed_single 的 arc_cap_idx
-#   arc_start     (A,)   float64
-#   arc_end       (A,)   float64
-#
-# 输出：tuple(closest, distances, arc_indices)
-#   closest       (N,3)  float64   每个查询点在 exposed 边界弧上的最近点
-#   distances     (N,)   float64   欧式距离
-#   arc_indices   (N,)   int32     最近点在哪条弧上（索引到 arc_cap_idx）
-
-def example_query_closest(result_single, center, radius):
-    print("\n" + "=" * 60)
-    print("4. query_closest_on_arcs")
-    print("=" * 60)
-
-    if result_single['n_caps'] == 0:
-        print("  (no caps, skip)")
-        return
-
-    # 取一些在球面上的点
-    rng = np.random.default_rng(1)
-    pts_raw = rng.standard_normal((50, 3))
-    pts = center + radius * pts_raw / np.linalg.norm(pts_raw, axis=1, keepdims=True)
-
-    closest, distances, arc_idx = sep.query_closest_on_arcs(
-        pts.astype(np.float64),
-        np.asarray(center, dtype=np.float64),
-        float(radius),
-        result_single['cap_centers'],
-        result_single['cap_radii'],
-        result_single['cap_u'],
-        result_single['cap_v'],
-        result_single['arc_cap_idx'],
-        result_single['arc_start'],
-        result_single['arc_end']
-    )
-
-    print(f"查询 {len(pts)} 个点")
-    print(f"最近点距离 min={distances.min():.6f}  max={distances.max():.6f}  "
-          f"mean={distances.mean():.6f}")
-    print(f"arc_indices 范围: [{arc_idx.min()}, {arc_idx.max()}]")
-    # 验证最近点在球面附近（它们在 cap 的边界圆上，不一定在主球面上）
-    print(f"closest shape: {closest.shape}")
-
-
-# ══════════════════════════════════════════════════════════════════
-# 5. sample_arcs
-# ══════════════════════════════════════════════════════════════════
-#
-# 输入：
-#   sphere_center    (3,)  float64
-#   sphere_radius    float
-#   cap_centers      (K,3) float64   来自 compute_exposed_single
-#   cap_radii        (K,)  float64
-#   cap_u            (K,3) float64
-#   cap_v            (K,3) float64
-#   arc_cap_idx      (A,)  int32
-#   arc_start        (A,)  float64
-#   arc_end          (A,)  float64
-#   n_total_samples  int              总采样数（≥ n_arcs，每条弧至少1个点）
-#
-# 输出：tuple(points, arc_indices)
-#   points       (S,3) float64   采样点坐标（在各 cap 边界圆上）
-#   arc_indices  (S,)  int32     每个采样点属于哪条弧
-
-def example_sample_arcs(result_single, center, radius):
-    print("\n" + "=" * 60)
-    print("5. sample_arcs")
-    print("=" * 60)
-
-    if result_single['n_caps'] == 0:
-        print("  (no caps, skip)")
-        return
-
-    points, arc_idx = sep.sample_arcs(
-        np.asarray(center, dtype=np.float64),
-        float(radius),
-        result_single['cap_centers'],
-        result_single['cap_radii'],
-        result_single['cap_u'],
-        result_single['cap_v'],
-        result_single['arc_cap_idx'],
-        result_single['arc_start'],
-        result_single['arc_end'],
-        200   # n_total_samples
-    )
-
-    print(f"采样点数: {len(points)}")
-    print(f"points shape : {points.shape}")          # (S, 3)
-    print(f"arc_indices  : {np.unique(arc_idx)}")    # 每条弧都有点
-    # 采样点分布（每条弧分配到的点数）
-    for a in np.unique(arc_idx):
-        n = (arc_idx == a).sum()
-        arc_len = result_single['arc_end'][a] - result_single['arc_start'][a]
-        print(f"  arc {a}: {n} pts, arc_len={arc_len:.4f} rad")
-
-
-# ══════════════════════════════════════════════════════════════════
-# 典型 pipeline：batch 计算 → 按球重建 single 结构 → query
-# ══════════════════════════════════════════════════════════════════
-
-def example_batch_then_query():
-    """
-    batch 输出是展平的，这里演示如何针对某一个球
-    重建出 single-style 的 dict，再调用 query 函数。
-    """
-    print("\n" + "=" * 60)
-    print("Pipeline: batch → pick sphere i → query")
-    print("=" * 60)
-
-    rng = np.random.default_rng(2)
-    N = 100
+    N = 80
     centers = rng.uniform(-2, 2, (N, 3)).astype(np.float64)
     radii   = rng.uniform(0.4, 0.9, N).astype(np.float64)
 
-    # CSR 邻居（全连接，简单示例）
-    nbr_lists = [[j for j in range(N) if j != i] for i in range(N)]
-    nbr_offsets = np.zeros(N+1, dtype=np.int64)
+    # 构造 CSR 邻居
+    nbr_lists   = [[j for j in range(N) if j != i] for i in range(N)]
+    nbr_offsets = np.zeros(N + 1, dtype=np.int64)
     for i, nb in enumerate(nbr_lists):
-        nbr_offsets[i+1] = nbr_offsets[i] + len(nb)
+        nbr_offsets[i + 1] = nbr_offsets[i] + len(nb)
     nbr_indices = np.array([j for nb in nbr_lists for j in nb], dtype=np.int64)
 
-    batch = sep.compute_exposed_batch(
-        centers, radii, nbr_indices, nbr_offsets)
+    batch = sep.compute_exposed_batch(centers, radii, nbr_indices, nbr_offsets)
 
-    # ── 针对球 i=3，重建 single-style 结构 ──────────────────────
-    i = 3
-    arc_mask = batch['arc_sphere_idx'] == i
-    cap_mask  = batch['cap_sphere_idx'] == i
+    # 找一个有弧段的球来演示
+    target = -1
+    for i in range(N):
+        if batch['n_caps'][i] > 0 and batch['n_arcs'][i] > 0:
+            target = i
+            break
+    if target < 0:
+        print("没有找到有弧段的球，换个随机种子试试")
+        return
 
-    single_like = {
-        'n_caps'         : int(batch['n_caps'][i]),
-        'total_arc'      : float(batch['total_arc'][i]),
-        'arc_cap_idx'    : batch['arc_cap_idx'][arc_mask],
-        'arc_start'      : batch['arc_start'][arc_mask],
-        'arc_end'        : batch['arc_end'][arc_mask],
-        'cap_centers'    : batch['cap_centers'][cap_mask],
-        'cap_radii'      : batch['cap_radii'][cap_mask],
-        'cap_u'          : batch['cap_u'][cap_mask],
-        'cap_v'          : batch['cap_v'][cap_mask],
-        # batch 没有 all_cap_normals/d，如需 query_inside 要再调用 single
-    }
+    sp = get_sphere_data(batch, target)
+    c  = centers[target]   # 球心 (3,)
+    r  = radii[target]     # 半径 float
 
-    print(f"sphere {i}: n_caps={single_like['n_caps']}, "
-          f"total_arc={single_like['total_arc']:.4f}, "
-          f"n_arcs={arc_mask.sum()}")
+    print(f"球 {target}:  球心={np.round(c,3)},  半径={r:.4f}")
+    print(f"  n_caps    = {sp['n_caps']}   (有弧段的 cap 数)")
+    print(f"  n_arcs    = {len(sp['arc_cap_idx'])}   (弧段总数)")
+    print(f"  total_arc = {sp['total_arc']:.4f} rad = {np.degrees(sp['total_arc']):.2f}°")
 
-    if single_like['n_caps'] > 0 and arc_mask.sum() > 0:
-        pts_raw = rng.standard_normal((30, 3))
-        pts = centers[i] + radii[i] * pts_raw / np.linalg.norm(pts_raw, axis=1, keepdims=True)
+    # ── cap_u / cap_v 是什么 ─────────────────────────────────────
+    print(f"\n── cap 几何 ──")
+    print(f"  cap_normals  shape={sp['cap_normals'].shape}  "
+          f"  每行是 cap 平面法向量（单位向量，指向邻居球方向）")
+    print(f"  cap_centers  shape={sp['cap_centers'].shape}  "
+          f"  每行是 cap 边界圆的圆心（3D坐标）")
+    print(f"  cap_radii    shape={sp['cap_radii'].shape}  "
+          f"  每个值是边界圆半径")
+    print(f"  cap_u        shape={sp['cap_u'].shape}  "
+          f"  每行是边界圆的 u 轴（单位向量，在圆平面内）")
+    print(f"  cap_v        shape={sp['cap_v'].shape}  "
+          f"  每行是边界圆的 v 轴（单位向量，= normal × u）")
+    print()
 
-        pts_s, idx_s = sep.sample_arcs(
-            centers[i], radii[i],
-            single_like['cap_centers'],
-            single_like['cap_radii'],
-            single_like['cap_u'],
-            single_like['cap_v'],
-            single_like['arc_cap_idx'],
-            single_like['arc_start'],
-            single_like['arc_end'],
-            100
-        )
-        print(f"  sampled {len(pts_s)} points on exposed boundary of sphere {i}")
+    # 验证 u/v 的正交性
+    K = sp['n_caps']
+    dot_un = np.einsum('ki,ki->k', sp['cap_u'], sp['cap_normals'])  # u·n 应≈0
+    dot_vn = np.einsum('ki,ki->k', sp['cap_v'], sp['cap_normals'])  # v·n 应≈0
+    dot_uv = np.einsum('ki,ki->k', sp['cap_u'], sp['cap_v'])        # u·v 应≈0
+    norm_u = np.linalg.norm(sp['cap_u'], axis=1)                    # |u| 应≈1
+    norm_v = np.linalg.norm(sp['cap_v'], axis=1)                    # |v| 应≈1
+    print(f"  正交性验证（应全≈0）:")
+    print(f"    max|u·n| = {np.abs(dot_un).max():.2e}")
+    print(f"    max|v·n| = {np.abs(dot_vn).max():.2e}")
+    print(f"    max|u·v| = {np.abs(dot_uv).max():.2e}")
+    print(f"    max||u|-1| = {np.abs(norm_u - 1).max():.2e}")
+    print(f"    max||v|-1| = {np.abs(norm_v - 1).max():.2e}")
+
+    # 展示第一个 cap 的弧段，手动重建边界圆上的点
+    print(f"\n── 弧段详情 ──")
+    for a in range(len(sp['arc_cap_idx'])):
+        ci  = sp['arc_cap_idx'][a]    # 属于哪个 compacted cap
+        t_s = sp['arc_start'][a]
+        t_e = sp['arc_end'][a]
+        print(f"  arc[{a}]: cap={ci},  "
+              f"t=[{t_s:.4f}, {t_e:.4f}]  "
+              f"长度={t_e-t_s:.4f} rad = {np.degrees(t_e-t_s):.2f}°")
+
+    # 手动验证 arc[0] 的端点确实在球面上
+    a = 0
+    ci  = sp['arc_cap_idx'][a]
+    t_s = sp['arc_start'][a]
+    t_e = sp['arc_end'][a]
+    cc  = sp['cap_centers'][ci]
+    cr  = sp['cap_radii'][ci]
+    cu  = sp['cap_u'][ci]
+    cv  = sp['cap_v'][ci]
+
+    # 边界圆参数方程：p(t) = cc + cr*(cos(t)*u + sin(t)*v)
+    pt_start = cc + cr * (np.cos(t_s) * cu + np.sin(t_s) * cv)
+    pt_end   = cc + cr * (np.cos(t_e) * cu + np.sin(t_e) * cv)
+    dist_s   = np.linalg.norm(pt_start - c)
+    dist_e   = np.linalg.norm(pt_end   - c)
+    print(f"\n  arc[0] 端点到球心距离（应≈球半径 {r:.4f}）:")
+    print(f"    start端: {dist_s:.6f}")
+    print(f"    end端:   {dist_e:.6f}")
+
+    # ════════════════════════════════════════════════════════════
+    # 1. sample_arcs：在 exposed 边界上均匀采样
+    # ════════════════════════════════════════════════════════════
+    print(f"\n{'═'*55}")
+    print("1. sample_arcs")
+    print(f"{'═'*55}")
+
+    sample_pts, sample_arc_idx = sep.sample_arcs(
+        sp['cap_centers'], sp['cap_radii'],
+        sp['cap_u'],       sp['cap_v'],
+        sp['arc_cap_idx'], sp['arc_start'], sp['arc_end'],
+        n_total_samples=60
+    )
+    print(f"  采样点数: {len(sample_pts)}")
+    print(f"  shape: {sample_pts.shape}")
+
+    # 验证采样点到球心的距离（应≈球半径，因为边界圆在球面上）
+    dists_to_center = np.linalg.norm(sample_pts - c, axis=1)
+    print(f"  采样点到球心距离: "
+          f"min={dists_to_center.min():.4f}  "
+          f"max={dists_to_center.max():.4f}  "
+          f"(球半径={r:.4f})")
+
+    # 每条弧分配到的采样点数
+    print(f"  每条弧的采样点数:")
+    for a in range(len(sp['arc_cap_idx'])):
+        n_a = int((sample_arc_idx == a).sum())
+        arc_len = sp['arc_end'][a] - sp['arc_start'][a]
+        print(f"    arc[{a}]: {n_a} pts  (弧长={arc_len:.3f} rad)")
+
+    # ════════════════════════════════════════════════════════════
+    # 2. query_inside：判断球面上的点是否在 exposed 区域
+    # ════════════════════════════════════════════════════════════
+    print(f"\n{'═'*55}")
+    print("2. query_inside")
+    print(f"{'═'*55}")
+    print("  注意: query_inside 需要 all_cap_normals/all_cap_d，")
+    print("  这两个字段只有 compute_exposed_single 才输出，")
+    print("  batch 版不含（因为 batch 只保留有弧段的 cap）。")
+    print("  所以对指定球单独调用一次 single 来获取：")
+
+    # 取出该球的邻居
+    nbr = nbr_lists[target]
+    nbr_centers = centers[np.array(nbr)]
+    nbr_radii   = radii[np.array(nbr)]
+
+    single = sep.compute_exposed_single(
+        c, r, nbr_centers, nbr_radii
+    )
+    # single 含 all_cap_normals (M,3) / all_cap_d (M,) —— M 包含所有cap，含无弧段的
+
+    # 在球面上均匀采样测试点
+    test_raw = rng.standard_normal((200, 3))
+    test_pts = c + r * test_raw / np.linalg.norm(test_raw, axis=1, keepdims=True)
+
+    inside = sep.query_inside(
+        test_pts,
+        single['all_cap_normals'],
+        single['all_cap_d']
+    )
+    # inside[i] = True  → 该点不被任何 cap 覆盖 → 在 exposed 区域内
+    # inside[i] = False → 被至少一个 cap 覆盖   → 非 exposed
+
+    print(f"  测试 {len(test_pts)} 个球面点:")
+    print(f"    exposed (True) : {inside.sum()}")
+    print(f"    covered (False): {(~inside).sum()}")
+    print(f"    exposed 比例   : {inside.mean()*100:.1f}%")
+
+    # 验证：sample_arcs 采的点应该全在 exposed 区域内
+    inside_samples = sep.query_inside(
+        sample_pts,
+        single['all_cap_normals'],
+        single['all_cap_d']
+    )
+    print(f"\n  验证 sample_arcs 的点是否都在 exposed 内:")
+    print(f"    {inside_samples.sum()}/{len(inside_samples)} 个点判为 exposed")
+    print(f"    （边界圆上的点恰好在 cap 边界，数值上可能有极少数判为 covered）")
+
+    # ════════════════════════════════════════════════════════════
+    # 3. query_closest_on_arcs：查询点到 exposed 边界的最近点
+    # ════════════════════════════════════════════════════════════
+    print(f"\n{'═'*55}")
+    print("3. query_closest_on_arcs")
+    print(f"{'═'*55}")
+
+    # 用 covered 的点来查询最近 exposed 边界（最有意义的用法）
+    covered_pts = test_pts[~inside]
+    if len(covered_pts) == 0:
+        print("  (没有 covered 点，用全部测试点)")
+        covered_pts = test_pts
+
+    closest, distances, arc_idx = sep.query_closest_on_arcs(
+        covered_pts,
+        sp['cap_centers'], sp['cap_radii'],
+        sp['cap_u'],       sp['cap_v'],
+        sp['arc_cap_idx'], sp['arc_start'], sp['arc_end']
+    )
+    # closest[i]  : covered_pts[i] 在所有 exposed 弧上的最近点 (x,y,z)
+    # distances[i]: 到最近点的欧式距离
+    # arc_idx[i]  : 最近点在哪条弧上（索引到 arc_cap_idx/arc_start/arc_end）
+
+    print(f"  查询 {len(covered_pts)} 个 covered 点到 exposed 边界的距离:")
+    print(f"    min  = {distances.min():.6f}")
+    print(f"    mean = {distances.mean():.6f}")
+    print(f"    max  = {distances.max():.6f}")
+    print(f"  最近点落在哪条弧上（arc index 分布）:")
+    unique_arcs, counts = np.unique(arc_idx, return_counts=True)
+    for a, cnt in zip(unique_arcs, counts):
+        print(f"    arc[{a}]: {cnt} 个查询点")
+
+    # 验证 closest 点确实在边界圆上
+    # 对每个结果点，验证它到对应 cap 边界圆心的距离 ≈ cap_radius
+    ci_arr = sp['arc_cap_idx'][arc_idx]   # 每个结果对应哪个 cap
+    cc_arr = sp['cap_centers'][ci_arr]    # 对应 cap 的圆心
+    cr_arr = sp['cap_radii'][ci_arr]      # 对应 cap 的圆半径
+    dist_to_circle_center = np.linalg.norm(closest - cc_arr, axis=1)
+    err = np.abs(dist_to_circle_center - cr_arr)
+    print(f"\n  验证 closest 点在边界圆上（dist_to_cc ≈ cap_radius）:")
+    print(f"    max误差 = {err.max():.2e}  mean误差 = {err.mean():.2e}")
 
 
-# ══════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════
-if __name__ == "__main__":
-    center = np.array([0.0, 0.0, 0.0])
-    radius = 1.0
-
-    r_single = example_single()
-    # example_batch()
-    # example_query_inside(r_single, center, radius)
-    # example_query_closest(r_single, center, radius)
-    # example_sample_arcs(r_single, center, radius)
-    example_batch_then_query()
+if __name__ == '__main__':
+    demo()

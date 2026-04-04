@@ -304,7 +304,7 @@ def benchmark(path_to_mesh=None, grid_len=20):
                     scene.add_geometry(line_geom)
 
         name = os.path.splitext(os.path.basename(path_to_mesh))[0]
-        export_path = f'a_{name}_{grid_len}.glb'
+        export_path = f'misc/a_{name}_{grid_len}.glb'
         scene.export(export_path)
         print(f"Exported to {export_path}")
 

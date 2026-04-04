@@ -896,8 +896,6 @@ py::array_t<bool> query_inside(
 std::tuple<py::array_t<double>, py::array_t<double>, py::array_t<int32_t>>
 query_closest_on_arcs(
     py::array_t<double>  py_pts,
-    py::array_t<double>  py_sc,
-    double sr,
     py::array_t<double>  py_cc,
     py::array_t<double>  py_cr,
     py::array_t<double>  py_cu,
@@ -996,8 +994,6 @@ query_closest_on_arcs(
  * ═══════════════════════════════════════════════════════════════════ */
 std::tuple<py::array_t<double>, py::array_t<int32_t>>
 sample_arcs(
-    py::array_t<double>  py_sc,
-    double sr,
     py::array_t<double>  py_cc,
     py::array_t<double>  py_cr,
     py::array_t<double>  py_cu,
@@ -1151,8 +1147,6 @@ Test whether each point is in the exposed region (not inside any cap).
 
     m.def("query_closest_on_arcs", &query_closest_on_arcs,
         py::arg("points"),
-        py::arg("sphere_center"),
-        py::arg("sphere_radius"),
         py::arg("cap_centers"),
         py::arg("cap_radii"),
         py::arg("cap_u"),
@@ -1161,7 +1155,7 @@ Test whether each point is in the exposed region (not inside any cap).
         py::arg("arc_start"),
         py::arg("arc_end"),
         R"doc(
-query_closest_on_arcs(points(N,3), sphere_center(3,), sphere_radius,
+query_closest_on_arcs(points(N,3),
   cap_centers(K,3), cap_radii(K,), cap_u(K,3), cap_v(K,3),
   arc_cap_idx(M,), arc_start(M,), arc_end(M,))
   -> (closest(N,3), distances(N,), arc_indices(N,))
@@ -1170,8 +1164,6 @@ Find the closest point on the exposed boundary arcs for each query point.
 )doc");
 
     m.def("sample_arcs", &sample_arcs,
-        py::arg("sphere_center"),
-        py::arg("sphere_radius"),
         py::arg("cap_centers"),
         py::arg("cap_radii"),
         py::arg("cap_u"),
@@ -1181,7 +1173,7 @@ Find the closest point on the exposed boundary arcs for each query point.
         py::arg("arc_end"),
         py::arg("n_total_samples"),
         R"doc(
-sample_arcs(sphere_center(3,), sphere_radius,
+sample_arcs(
   cap_centers(K,3), cap_radii(K,), cap_u(K,3), cap_v(K,3),
   arc_cap_idx(M,), arc_start(M,), arc_end(M,), n_total_samples)
   -> (points(S,3), arc_indices(S,))
