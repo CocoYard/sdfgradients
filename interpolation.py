@@ -287,7 +287,7 @@ class DuchonInterpolator(Interpolator):
         else:
             self.kernel = lambda r: r**3
 
-    def fit(self, points, values, gradients=None, mask=None, force_recompute=False, hermite_interp=False, distance_threshold=0.2):
+    def fit(self, points, values, gradients=None, mask=None, force_recompute=False, hermite_interp=False, dist_threshold=0.2):
         """
         Fit the interpolator with given points and their corresponding values.
 
@@ -301,12 +301,14 @@ class DuchonInterpolator(Interpolator):
             some projection points are in the invisible region.
         force_recompute (bool, optional): If True, forces the interpolator to refit even if it has already been trained. Default is False.
         hermite_interp (bool, optional): If True and gradients are provided, uses Hermite interpolation. Default is False.
-        distance_threshold (float, optional): If the number of points exceeds 5000, only keep points with absolute values less than this
+        dist_threshold (float, optional): If the number of points exceeds 5000, only keep points with absolute values less than this
             threshold to reduce time and memory usage. Default is 0.2.
         """
         if self.trained and not force_recompute:
             print(f"Interpolator is already trained. Use force_recompute=True to refit {points.shape[0]} points.")
             return
+        # if DEBUG_TIME:
+        #     start_time = time.time()
         if gradients is not None and not hermite_interp:
             if mask is None:
                 projections = points - values[:, np.newaxis] * gradients
@@ -323,13 +325,16 @@ class DuchonInterpolator(Interpolator):
             self.points = points
             self.values = values
         if len(self.values) > 5000:
-            close_mask = np.abs(self.values) < distance_threshold
+            close_mask = np.abs(self.values) < dist_threshold
             self.points = self.points[close_mask]
             self.values = self.values[close_mask]
-            print(f"Warning: too many points, only keeping {len(self.values)} points with abs(value) < {distance_threshold} for fitting.")
+            print(f"Warning: too many points, only keeping {len(self.values)} points with abs(value) < {dist_threshold} for fitting.")
         if not hermite_interp:
             self.alpha, self.p, self.q = self._compute_coefficients(self.points, self.values)
         self.trained = True
+        # if DEBUG_TIME:
+        #     end_time = time.time()
+        #     print(f"  [Duchon fit] Fitting completed in {end_time - start_time:.3f} seconds. ({len(self.values)} points used)")
     
     def _compute_coefficients_with_gradients(self, points, values, gradients):
         """
@@ -1018,11 +1023,24 @@ class PUInterpolator(Interpolator):
         right = indices[~left_mask]
         return self._subdivide(points, left) + self._subdivide(points, right)
 
-    def fit(self, points, values, gradients=None, mask=None, hermite_interp=False, force_recompute=False):
+    def fit(self, points, values, gradients=None, mask=None, force_recompute=False, dist_threshold=0.2):
         """
         Adaptively partition the domain and fit local interpolators on each patch.
         """
         from scipy.spatial import KDTree
+        if gradients is not None:
+            if mask is None:
+                projections = points - values[:, np.newaxis] * gradients
+            else:
+                projections = points[mask] - values[mask, np.newaxis] * gradients[mask]
+            points = np.vstack([points, projections])
+            values = np.concatenate([values, np.zeros(len(projections))])
+        if len(values) > 5000:
+            close_mask = np.abs(values) < dist_threshold
+            points = points[close_mask]
+            values = values[close_mask]
+            print(f"Warning: too many points, only keeping {len(values)} points with abs(value) < {dist_threshold} for fitting.")
+        
         n, d = points.shape
         min_pts = max(self.min_points, d + 2)
 
@@ -1056,21 +1074,18 @@ class PUInterpolator(Interpolator):
 
             local_pts = points[idx]
             local_vals = values[idx]
-            local_grads = gradients[idx] if gradients is not None else None
-            local_mask = mask[idx] if mask is not None else None
             if DEBUG_TIME: patch_sizes.append(len(idx))
 
             if DEBUG_TIME: tf0 = time.perf_counter()
             interp = DuchonInterpolator(kernel=self.kernel)
-            interp.fit(local_pts, local_vals, gradients=local_grads,
-                        mask=local_mask, hermite_interp=hermite_interp)
+            interp.fit(local_pts, local_vals)
             if DEBUG_TIME: t_local_fit += time.perf_counter() - tf0
 
             self.patches.append((center, R_ext, interp))
 
         if DEBUG_TIME:
             t3 = time.perf_counter()
-            print(f"  [PU fit] patch loop: {t3-t2:.3f}s  (query: {t_query:.3f}s, local fit: {t_local_fit:.3f}s)")
+            print(f"  [PU fit] patch loop: {t3-t2:.3f}s  (local fit: {t_local_fit:.3f}s)")
             if patch_sizes:
                 print(f"  [PU fit] patch sizes: min={min(patch_sizes)}, max={max(patch_sizes)}, mean={np.mean(patch_sizes):.0f}")
 
@@ -1086,6 +1101,63 @@ class PUInterpolator(Interpolator):
         self.trained = True
         if DEBUG_TIME:
             print(f"  [PU fit] total: {time.perf_counter()-t0:.3f}s  ({len(self.patches)} patches)")
+            self._visualize_patches(points, d)
+
+    def _visualize_patches(self, points, d):
+        """Visualize patches: 2D uses matplotlib, 3D exports a .glb file."""
+        if d == 2:
+            self._visualize_patches_2d(points)
+        else:
+            self._visualize_patches_3d(points)
+
+    def _visualize_patches_2d(self, points):
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        cmap = plt.cm.tab20
+        for i, (center, radius, interp) in enumerate(self.patches):
+            color = cmap(i % 20)
+            circle = plt.Circle(center, radius, fill=True, alpha=0.15,
+                                facecolor=color, edgecolor=color, linewidth=1.5)
+            ax.add_patch(circle)
+            # Plot points inside this patch
+            dist = np.linalg.norm(points - center, axis=1)
+            mask = dist < radius
+            ax.scatter(points[mask, 0], points[mask, 1], s=2, color=color, alpha=0.5)
+            ax.plot(*center, 'x', color=color, markersize=8)
+        ax.set_aspect('equal')
+        ax.autoscale()
+        ax.set_title(f'PU Patches ({len(self.patches)} patches)')
+        plt.savefig('pu_patches.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  [PU] saved patch visualization to pu_patches.png")
+
+    def _visualize_patches_3d(self, points):
+        try:
+            import trimesh
+            from trimesh.visual.material import PBRMaterial
+        except ImportError:
+            print("  [PU] trimesh not installed, skipping 3D visualization")
+            return
+        scene = trimesh.Scene()
+        cmap_colors = [
+            [31,119,180], [255,127,14], [44,160,44], [214,39,40],
+            [148,103,189], [140,86,75], [227,119,194], [127,127,127],
+            [188,189,34], [23,190,207], [174,199,232], [255,187,120],
+            [152,223,138], [255,152,150], [197,176,213], [196,156,148],
+            [247,182,210], [199,199,199], [219,219,141], [158,218,229],
+        ]
+        # Add points as small spheres
+        pc = trimesh.PointCloud(points, colors=[255, 0, 0, 255])
+        scene.add_geometry(pc, node_name=f'points')
+        for i, (center, radius, interp) in enumerate(self.patches):
+            color = cmap_colors[i % len(cmap_colors)]
+            sphere = trimesh.creation.icosphere(subdivisions=2, radius=radius)
+            sphere.apply_translation(center)
+            # sphere.visual.face_colors = [*color, 50]
+            sphere.visual.material = PBRMaterial(baseColorFactor=[*color, 100], alphaMode='BLEND')
+            scene.add_geometry(sphere, node_name=f'patch_{i}')
+        scene.export(f'pu_patches_{len(self.patches)}.glb')
+        print(f"  [PU] saved patch visualization to pu_patches_{len(self.patches)}.glb ({len(self.patches)} patches)")
 
     def predict(self, x_new, chunk_size=5000):
         """
