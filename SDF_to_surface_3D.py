@@ -7,7 +7,7 @@ import numpy as np
 # matplotlib.use('Agg')  # Non-interactive backend, no window shown
 import matplotlib.pyplot as plt
 import iterative_projection as ip
-from interpolation import Interpolator, CurlFree_Interpolator
+from interpolation import Interpolator, CurlFree_Interpolator, PUInterpolator
 from enum import Enum
 import time
 import optimization as opt
@@ -413,7 +413,7 @@ def yongs_algorithm(sdf_points, sdf_values, options : Options):
     batch, degenerate_pts, ngbrs_list = get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8)
     if options.turn_off_short_arcs:
         degenerate_pts = {}
-    interpolator = Interpolator('cubic')
+    interpolator = PUInterpolator('cubic')
     init_gradients = init_gradients_interp(sdf_points, sdf_values, interpolator, degenerate_pts, batch, ngbrs_list, options)
     if options.use_gt_gradients and gt_gradients is not None:
         init_gradients = gt_gradients
@@ -606,7 +606,7 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
-    options = Options(name='horse', grid_len=15, max_iters=10, clamp=False, export_short_arcs=True, export_projections=True, use_gt_gradients=False)
+    options = Options(name='horse', grid_len=20, max_iters=10, clamp=True, export_short_arcs=True, export_projections=True, use_gt_gradients=False)
     # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
     plt = test_our_method(options)
     # test_rfta(options)

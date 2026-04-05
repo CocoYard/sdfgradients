@@ -26,3 +26,92 @@ Correctness check (ref = C++: Uniform Grid+Mailbox):
   ✓ PASS  C++: 3-Axis SAP
   ✓ PASS  C++: BVH (median split)
   ✗ FAIL  C++: Multi-level Hash
+
+
+  (.venv) (base) yongcheng@Mac sdfgradients % uv run SDF_to_surface_3D.py
+Options: grid_len=15, max_iters=10, clamp=False, turn_off_short_arcs=False, export_short_arcs=True, export_projections=True, use_gt_gradients=False
+bbox_min: [-0.3290977  -0.6        -0.51680802] bbox_max: [0.3290977  0.6        0.51680802]
+0 fully covered spheres (with neighbors but no arcs or points), which are likely to be completely invisible
+======== first fit done with input 3375 points 
+Filtered out 40 degenerate points that are too far from the surface or len!=1. Remaining degenerate points: 14
+
+Building GLB scene: 14 visible + 0 invisible projections...
+Exported to out/shortArcs_horse_15.glb
+After adding points for degenerate arcs, total points: 3389
+Interpolator is already trained. Use force_recompute=True to refit 3389 points.
+======== second fit done with input 3389 points (including 14 degenerate arc points)
+initial gradient estimation done
+Number of visible projected points: 1428 out of 3375. percent: 42.31%
+======== third fit done with initial gradients
+Interpolator is already trained. Use force_recompute=True to refit 3375 points.
+cos_sim mean to the ground truth gradients: 0.965999
+Iter   1 | mean cos_sim: 0.991068  max angle change: 54.33°  
+Number of visible projected points: 1898 out of 3375. Percentage: 56.24%
+Warning: too many points, only keeping 3787 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.970470
+Iter   2 | mean cos_sim: 0.997010  max angle change: 45.26°  
+Number of visible projected points: 2101 out of 3375. Percentage: 62.25%
+Warning: too many points, only keeping 3990 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.971467
+Iter   3 | mean cos_sim: 0.997862  max angle change: 40.91°  
+Number of visible projected points: 2208 out of 3375. Percentage: 65.42%
+Warning: too many points, only keeping 4097 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.971513
+Iter   4 | mean cos_sim: 0.998065  max angle change: 37.81°  
+Number of visible projected points: 2283 out of 3375. Percentage: 67.64%
+Warning: too many points, only keeping 4172 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.971549
+Iter   5 | mean cos_sim: 0.998267  max angle change: 37.54°  
+Number of visible projected points: 2355 out of 3375. Percentage: 69.78%
+Warning: too many points, only keeping 4244 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.971847
+Iter   6 | mean cos_sim: 0.998254  max angle change: 37.86°  
+Number of visible projected points: 2401 out of 3375. Percentage: 71.14%
+Warning: too many points, only keeping 4290 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.971968
+Iter   7 | mean cos_sim: 0.998206  max angle change: 31.33°  
+Number of visible projected points: 2434 out of 3375. Percentage: 72.12%
+Warning: too many points, only keeping 4323 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.972155
+Iter   8 | mean cos_sim: 0.998205  max angle change: 32.66°  
+Number of visible projected points: 2472 out of 3375. Percentage: 73.24%
+Warning: too many points, only keeping 4361 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.971907
+Iter   9 | mean cos_sim: 0.998282  max angle change: 37.88°  
+Number of visible projected points: 2499 out of 3375. Percentage: 74.04%
+Warning: too many points, only keeping 4388 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.971753
+Iter  10 | mean cos_sim: 0.998311  max angle change: 35.43°  
+Number of visible projected points: 2523 out of 3375. Percentage: 74.76%
+Warning: too many points, only keeping 4412 points with abs(value) < 0.2 for fitting.
+cos_sim mean to the ground truth gradients: 0.971751
+  ⏱  Interpolator fitted             101.46 s
+  ⏱  Grid evaluation                  32.54 s
+
+Building GLB scene: 1428 visible + 1947 invisible projections...
+Exported to out/projections_horse_15_10.glb
+Exported: out/horse/interpolant_15_10_clampinit.obj, out/horse/sample_points_15.obj
+  Hausdorff: 0.039752  Chamfer: 0.001609
+horse                         
+interpolant_10_0.obj           against ground truth...  Hausdorff: 0.0935  Chamfer: 0.0049
+interpolant_10_10.obj          against ground truth...  Hausdorff: 0.0368  Chamfer: 0.0038
+interpolant_10_10_clampinit.obj against ground truth...  Hausdorff: 0.0425  Chamfer: 0.0038
+interpolant_10_10_noclamp.obj  against ground truth...  Hausdorff: 0.0368  Chamfer: 0.0038
+interpolant_15_0.obj           against ground truth...  Hausdorff: 0.0367  Chamfer: 0.0020
+interpolant_15_0_clampinit bad.obj against ground truth...  Hausdorff: 0.0248  Chamfer: 0.0019
+interpolant_15_0_clampinit good.obj against ground truth...  Hausdorff: 0.0383  Chamfer: 0.0019
+interpolant_15_0_clampinit.obj against ground truth...  Hausdorff: 0.0366  Chamfer: 0.0020
+interpolant_15_10.obj          against ground truth...  Hausdorff: 0.0389  Chamfer: 0.0016
+interpolant_15_10_clampinit.obj against ground truth...  Hausdorff: 0.0310  Chamfer: 0.0017
+interpolant_15_10_noclamp.obj  against ground truth...  Hausdorff: 0.0398  Chamfer: 0.0016
+interpolant_20_0.obj           against ground truth...  Hausdorff: 0.0271  Chamfer: 0.0011
+interpolant_20_10.obj          against ground truth...  Hausdorff: 0.0237  Chamfer: 0.0009
+interpolant_20_10_bak.obj      against ground truth...  Hausdorff: 0.0237  Chamfer: 0.0009
+interpolant_20_10_clampinit.obj against ground truth...  Hausdorff: 0.0236  Chamfer: 0.0009
+interpolant_20_10_sdf0.2.obj   against ground truth...  Hausdorff: 0.0236  Chamfer: 0.0009
+interpolant_20_noFilter.obj    against ground truth...  Hausdorff: 0.0807  Chamfer: 0.0031
+rfta_20.obj                    against ground truth...  Hausdorff: 0.0284  Chamfer: 0.0016
+sample_points_10.obj           against ground truth...  Hausdorff: 0.1704  Chamfer: 0.0180
+sample_points_15.obj           against ground truth...  Hausdorff: 0.2089  Chamfer: 0.0090
+sample_points_20.obj           against ground truth...  Hausdorff: 0.0598  Chamfer: 0.0046
+  ⏱  Total execution time            182.04 s

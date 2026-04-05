@@ -1,7 +1,266 @@
 import numpy as np
 from scipy.spatial.distance import cdist
+from abc import ABC, abstractmethod
+import time
 
-class Interpolator:
+DEBUG_TIME = True
+
+class Interpolator(ABC):
+    """
+    Abstract base class for interpolation. Subclasses must implement fit(), predict(),
+    predict_gradients(), and sample_best_gradients().
+    """
+    @abstractmethod
+    def fit(self, points, values, gradients=None, **kwargs):
+        pass
+
+    @abstractmethod
+    def predict(self, x_new, chunk_size=500):
+        pass
+
+    @abstractmethod
+    def predict_gradients(self, x_new, chunk_size=500):
+        pass
+
+    def extract_zero_level_set(self, bounds, resolution=256):
+        """
+        Extract zero level set contours (Marching Squares for 2D / Marching Cubes for 3D)
+        """
+        if len(bounds) == 3:
+            return self._extract_zero_level_set_3d(bounds, resolution)
+        else:
+            return self._extract_zero_level_set_2d(bounds, resolution)
+
+    def _extract_zero_level_set_2d(self, bounds, resolution=256):
+        (xmin, xmax), (ymin, ymax) = bounds
+        xs = np.linspace(xmin, xmax, resolution)
+        ys = np.linspace(ymin, ymax, resolution)
+        X, Y = np.meshgrid(xs, ys)
+        grid_pts = np.column_stack([X.ravel(), Y.ravel()])
+        Z = self.predict(grid_pts).reshape(resolution, resolution)
+
+        dx = (xmax - xmin) / (resolution - 1)
+        dy = (ymax - ymin) / (resolution - 1)
+
+        signs = (Z >= 0).astype(np.int8)
+        TL = signs[:-1, :-1]; TR = signs[:-1, 1:]
+        BL = signs[1:, :-1];  BR = signs[1:, 1:]
+        case = TL * 8 + TR * 4 + BR * 2 + BL
+
+        vTL = Z[:-1, :-1]; vTR = Z[:-1, 1:]
+        vBL = Z[1:, :-1];  vBR = Z[1:, 1:]
+
+        def lerp_frac(va, vb):
+            denom = va - vb
+            denom[denom == 0] = 1e-30
+            return va / denom
+
+        frac_top = lerp_frac(vTL, vTR)
+        frac_bottom = lerp_frac(vBL, vBR)
+        frac_left = lerp_frac(vTL, vBL)
+        frac_right = lerp_frac(vTR, vBR)
+
+        nr, nc = case.shape
+        row_idx, col_idx = np.mgrid[:nr, :nc]
+
+        pt_top = np.stack([xmin + (col_idx + frac_top) * dx, ymin + row_idx * dy], axis=-1)
+        pt_bottom = np.stack([xmin + (col_idx + frac_bottom) * dx, ymin + (row_idx + 1) * dy], axis=-1)
+        pt_left = np.stack([xmin + col_idx * dx, ymin + (row_idx + frac_left) * dy], axis=-1)
+        pt_right = np.stack([xmin + (col_idx + 1) * dx, ymin + (row_idx + frac_right) * dy], axis=-1)
+
+        _edge_table = {
+            0: [], 1: [(2, 3)], 2: [(1, 2)], 3: [(1, 3)],
+            4: [(0, 1)], 5: [(0, 3), (1, 2)], 6: [(0, 2)], 7: [(0, 3)],
+            8: [(0, 3)], 9: [(0, 2)], 10: [(0, 1), (2, 3)], 11: [(0, 1)],
+            12: [(1, 3)], 13: [(1, 2)], 14: [(2, 3)], 15: [],
+        }
+        edge_pts = [pt_top, pt_right, pt_bottom, pt_left]
+
+        segments = []
+        for i in range(nr):
+            for j in range(nc):
+                c = case[i, j]
+                for ea, eb in _edge_table[c]:
+                    segments.append((tuple(edge_pts[ea][i, j]), tuple(edge_pts[eb][i, j])))
+
+        if not segments:
+            return []
+
+        from collections import defaultdict
+        adj = defaultdict(list)
+        for idx, (a, b) in enumerate(segments):
+            adj[a].append((b, idx))
+            adj[b].append((a, idx))
+
+        used = [False] * len(segments)
+        contours = []
+        for start_idx in range(len(segments)):
+            if used[start_idx]:
+                continue
+            used[start_idx] = True
+            a, b = segments[start_idx]
+            chain = [a, b]
+            for end, insert_fn in [(b, chain.append), (a, lambda x: chain.insert(0, x))]:
+                cur = end
+                while True:
+                    found = False
+                    for nxt, seg_idx in adj[cur]:
+                        if not used[seg_idx]:
+                            used[seg_idx] = True
+                            insert_fn(nxt)
+                            cur = nxt
+                            found = True
+                            break
+                    if not found:
+                        break
+            contours.append(np.array(chain))
+
+        self.contour_resolution = resolution
+        self.zero_contours = contours
+        return contours
+
+    def _extract_zero_level_set_3d(self, bounds, grid_resolution=64):
+        try:
+            from skimage.measure import marching_cubes
+        except ImportError:
+            raise ImportError("scikit-image required for 3D Marching Cubes: pip install scikit-image")
+        lx = np.linspace(bounds[0][0], bounds[0][1], grid_resolution)
+        ly = np.linspace(bounds[1][0], bounds[1][1], grid_resolution)
+        lz = np.linspace(bounds[2][0], bounds[2][1], grid_resolution)
+        xx, yy, zz = np.meshgrid(lx, ly, lz, indexing='ij')
+        pts = np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
+        grid_values = self.predict(pts).reshape(grid_resolution, grid_resolution, grid_resolution)
+        from skimage import measure
+        sp = ((lx[-1]-lx[0])/(grid_resolution-1), (ly[-1]-ly[0])/(grid_resolution-1), (lz[-1]-lz[0])/(grid_resolution-1))
+        verts, faces, normals, values = measure.marching_cubes(grid_values, level=0.0, spacing=sp)
+        verts += np.array([lx[0], ly[0], lz[0]])
+        return verts, faces
+
+    def sample_best_gradients(self, x_new, sdf, num_coarse=24, given_samples=None,
+                              refine_steps=4, num_refine=12, initial_guess=None, chunk_size=200):
+        """
+        Find best gradient directions via coarse sweep + iterative refinement.
+        Works for any subclass since it only calls self.predict().
+        """
+        if given_samples is not None:
+            batch_size = x_new.shape[0]
+            num_coarse = given_samples.shape[1]
+            sign = np.where(sdf > 0, 1.0, -1.0)
+            preds = self.predict(given_samples.reshape(-1, x_new.shape[1])).reshape(batch_size, num_coarse)
+            obj = preds * sign[:, None]
+            best_idx = np.argmin(obj, axis=1)
+            best_grads = x_new - given_samples[np.arange(batch_size), best_idx]
+            best_grads /= sdf[:, None] + 1e-10
+            initial_guess = best_grads
+
+        if x_new.shape[1] == 3:
+            return self._sample_best_gradients_3d(x_new, sdf, num_coarse,
+                                                  refine_steps, num_refine, initial_guess, chunk_size)
+        else:
+            return self._sample_best_gradients_2d(x_new, sdf, num_coarse,
+                                                  refine_steps, num_refine, initial_guess, chunk_size)
+
+    def _sample_best_gradients_2d(self, x_new, sdf, num_coarse=24,
+                                  refine_steps=4, num_refine=12, initial_guess=None, chunk_size=200):
+        batch_size = x_new.shape[0]
+        sdf_flat = sdf.ravel()
+        sign = np.where(sdf_flat > 0, 1.0, -1.0)
+
+        if initial_guess is not None:
+            best_angles = initial_guess
+        else:
+            angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)
+            dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+            samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs[None, :, :]
+            preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_coarse)
+            obj = preds * sign[:, None]
+            best_idx = np.argmin(obj, axis=1)
+            best_angles = angles[best_idx]
+
+        half_range = np.pi / num_coarse
+        for _ in range(refine_steps):
+            offsets = np.linspace(-1.0, 1.0, num_refine)
+            local_angles = best_angles[:, None] + half_range * offsets
+            cos_a = np.cos(local_angles)
+            sin_a = np.sin(local_angles)
+            samples = x_new[:, None, :] - sdf_flat[:, None, None] * np.stack([cos_a, sin_a], axis=2)
+            preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_refine)
+            obj = preds * sign[:, None]
+            best_local = np.argmin(obj, axis=1)
+            best_angles = local_angles[np.arange(batch_size), best_local]
+            half_range = 2.0 * half_range / (num_refine - 1)
+
+        best_dirs = np.stack([np.cos(best_angles), np.sin(best_angles)], axis=1)
+        return best_dirs
+
+    def _sample_best_gradients_3d(self, x_new, sdf, num_coarse=64,
+                                  refine_steps=4, num_refine=16, initial_guess=None,
+                                  chunk_size=200):
+        batch_size = x_new.shape[0]
+        sdf_flat = sdf.ravel()
+        sign = np.where(sdf_flat > 0, 1.0, -1.0)
+
+        def fibonacci_sphere(n):
+            golden = (1 + np.sqrt(5)) / 2
+            i = np.arange(n, dtype=float)
+            theta = 2 * np.pi * i / golden
+            phi = np.arccos(1 - 2 * (i + 0.5) / n)
+            return np.stack([np.sin(phi)*np.cos(theta),
+                             np.sin(phi)*np.sin(theta),
+                             np.cos(phi)], axis=1)
+
+        def tangent_frame(d):
+            ref = np.where(np.abs(d[:, 0:1]) < 0.9,
+                           np.broadcast_to([1., 0., 0.], d.shape).copy(),
+                           np.broadcast_to([0., 1., 0.], d.shape).copy())
+            t1 = np.cross(d, ref)
+            t1 /= np.linalg.norm(t1, axis=1, keepdims=True)
+            t2 = np.cross(d, t1)
+            return t1, t2
+
+        def cone_dirs(best_dirs, half_angle, n):
+            golden = (1 + np.sqrt(5)) / 2
+            i = np.arange(n, dtype=float)
+            r = half_angle * np.sqrt((i + 0.5) / n)
+            alpha = 2 * np.pi * i / golden
+            t1, t2 = tangent_frame(best_dirs)
+            dirs = (np.cos(r)[None, :, None] * best_dirs[:, None, :]
+                    + np.sin(r)[None, :, None] * (np.cos(alpha)[None, :, None] * t1[:, None, :]
+                                                  + np.sin(alpha)[None, :, None] * t2[:, None, :]))
+            return dirs
+
+        if initial_guess is not None:
+            valid_mask = ~np.isnan(initial_guess).any(axis=1)
+            invalid_mask = ~valid_mask
+        else:
+            invalid_mask = np.ones(batch_size, dtype=bool)
+            valid_mask = np.zeros(batch_size, dtype=bool)
+
+        best_dirs = np.zeros((batch_size, 3))
+        if np.any(valid_mask):
+            best_dirs[valid_mask] = initial_guess[valid_mask]
+
+        if np.any(invalid_mask):
+            dirs = fibonacci_sphere(num_coarse)
+            samples_invalid = x_new[invalid_mask, None, :] - sdf_flat[invalid_mask, None, None] * dirs[None, :, :]
+            preds_invalid = self.predict(samples_invalid.reshape(-1, 3), chunk_size).reshape(np.sum(invalid_mask), num_coarse)
+            obj_invalid = preds_invalid * sign[invalid_mask, None]
+            best_idx_invalid = np.argmin(obj_invalid, axis=1)
+            best_dirs[invalid_mask] = dirs[best_idx_invalid]
+
+        half_angle = np.pi / np.sqrt(num_coarse)
+        for _ in range(refine_steps):
+            dirs_r = cone_dirs(best_dirs, half_angle, num_refine)
+            samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs_r
+            preds = self.predict(samples.reshape(-1, 3), chunk_size).reshape(batch_size, num_refine)
+            obj = preds * sign[:, None]
+            best_local = np.argmin(obj, axis=1)
+            best_dirs = dirs_r[np.arange(batch_size), best_local]
+            best_dirs /= np.linalg.norm(best_dirs, axis=1, keepdims=True)
+            half_angle /= np.sqrt(num_refine)
+        return best_dirs
+
+class DuchonInterpolator(Interpolator):
     """
     A Duchon interpolator to fit and predict values based on input signed distance data.
     """
@@ -201,215 +460,8 @@ class Interpolator:
                 result += psi_k @ self.beta[:, k]
 
         return result
-    
-    def extract_zero_level_set(self, bounds, resolution=256):
-        """
-        Extract zero level set contours (Marching Squares for 2D / Marching Cubes for 3D)
-        
-        Parameters
-        ----------
-        bounds : tuple
-            2D: ((xmin, xmax), (ymin, ymax))
-            3D: ((xmin, xmax), (ymin, ymax), (zmin, zmax))
-        resolution : int
-            Grid resolution per axis (default 256)
-        
-        Returns
-        -------
-        2D: list of np.ndarray
-            List of polyline vertex arrays, each with shape (M, 2)
-        3D: tuple (vertices, faces)
-            Vertex array (N, 3) and triangle face index array (M, 3)
-        """
-        # Detect dimensionality
-        is_3d = len(bounds) == 3
-        
-        if is_3d:
-            return self._extract_zero_level_set_3d(bounds, resolution)
-        else:
-            return self._extract_zero_level_set_2d(bounds, resolution)
-    
-    def _extract_zero_level_set_2d(self, bounds, resolution=256):
-        """
-        2D Marching Squares algorithm for extracting iso-contours.
-        """
-        (xmin, xmax), (ymin, ymax) = bounds
-        xs = np.linspace(xmin, xmax, resolution)
-        ys = np.linspace(ymin, ymax, resolution)
-        X, Y = np.meshgrid(xs, ys)
-        grid_pts = np.column_stack([X.ravel(), Y.ravel()])
-        Z = self.predict(grid_pts).reshape(resolution, resolution)
-        
-        dx = (xmax - xmin) / (resolution - 1)
-        dy = (ymax - ymin) / (resolution - 1)
-        
-        # --- Marching Squares: collect edge segments ---
-        # For each 2x2 cell, classify corners by sign and interpolate crossings
-        signs = (Z >= 0).astype(np.int8)  # 0 = negative, 1 = positive
-        
-        # Cell corner indices: TL=top-left (row i, col j), TR, BL, BR
-        # Row i goes downward (y increases), col j goes rightward (x increases)
-        TL = signs[:-1, :-1]
-        TR = signs[:-1, 1:]
-        BL = signs[1:, :-1]
-        BR = signs[1:, 1:]
-        case = TL * 8 + TR * 4 + BR * 2 + BL  # 0-15 case index
-        
-        # Values at corners
-        vTL = Z[:-1, :-1]
-        vTR = Z[:-1, 1:]
-        vBL = Z[1:, :-1]
-        vBR = Z[1:, 1:]
-        
-        # Precompute interpolation fractions on each edge (0->1 along the edge)
-        def lerp_frac(va, vb):
-            denom = va - vb
-            denom[denom == 0] = 1e-30
-            return va / denom
-        
-        frac_top = lerp_frac(vTL, vTR)     # top edge: TL -> TR
-        frac_bottom = lerp_frac(vBL, vBR)  # bottom edge: BL -> BR
-        frac_left = lerp_frac(vTL, vBL)    # left edge: TL -> BL
-        frac_right = lerp_frac(vTR, vBR)   # right edge: TR -> BR
-        
-        nr, nc = case.shape  # (resolution-1, resolution-1)
-        
-        # Edge midpoint coordinates for a cell (row_i, col_j):
-        #   top:    (xmin + (j + frac)*dx, ymin + i*dy)
-        #   bottom: (xmin + (j + frac)*dx, ymin + (i+1)*dy)
-        #   left:   (xmin + j*dx,          ymin + (i + frac)*dy)
-        #   right:  (xmin + (j+1)*dx,      ymin + (i + frac)*dy)
-        row_idx, col_idx = np.mgrid[:nr, :nc]
-        
-        top_x = xmin + (col_idx + frac_top) * dx
-        top_y = ymin + row_idx * dy
-        bottom_x = xmin + (col_idx + frac_bottom) * dx
-        bottom_y = ymin + (row_idx + 1) * dy
-        left_x = xmin + col_idx * dx
-        left_y = ymin + (row_idx + frac_left) * dy
-        right_x = xmin + (col_idx + 1) * dx
-        right_y = ymin + (row_idx + frac_right) * dy
-        
-        # Edge point arrays: shape (nr, nc, 2)
-        pt_top = np.stack([top_x, top_y], axis=-1)
-        pt_bottom = np.stack([bottom_x, bottom_y], axis=-1)
-        pt_left = np.stack([left_x, left_y], axis=-1)
-        pt_right = np.stack([right_x, right_y], axis=-1)
-        
-        # Marching squares lookup: case -> list of (edge_a, edge_b) line segments
-        # Edges: 0=top, 1=right, 2=bottom, 3=left
-        _edge_table = {
-            0: [], 1: [(2, 3)], 2: [(1, 2)], 3: [(1, 3)],
-            4: [(0, 1)], 5: [(0, 3), (1, 2)], 6: [(0, 2)], 7: [(0, 3)],
-            8: [(0, 3)], 9: [(0, 2)], 10: [(0, 1), (2, 3)], 11: [(0, 1)],
-            12: [(1, 3)], 13: [(1, 2)], 14: [(2, 3)], 15: [],
-        }
-        edge_pts = [pt_top, pt_right, pt_bottom, pt_left]
-        
-        # Collect all segments
-        segments = []
-        for i in range(nr):
-            for j in range(nc):
-                c = case[i, j]
-                for ea, eb in _edge_table[c]:
-                    pa = edge_pts[ea][i, j]
-                    pb = edge_pts[eb][i, j]
-                    segments.append((tuple(pa), tuple(pb)))
-        
-        if not segments:
-            return []
-        
-        # --- Chain segments into polylines ---
-        from collections import defaultdict
-        
-        adj = defaultdict(list)
-        for idx, (a, b) in enumerate(segments):
-            adj[a].append((b, idx))
-            adj[b].append((a, idx))
-        
-        used = [False] * len(segments)
-        contours = []
-        
-        for start_idx in range(len(segments)):
-            if used[start_idx]:
-                continue
-            used[start_idx] = True
-            a, b = segments[start_idx]
-            chain = [a, b]
-            
-            # Extend forward from b
-            cur = b
-            while True:
-                found = False
-                for nxt, seg_idx in adj[cur]:
-                    if not used[seg_idx]:
-                        used[seg_idx] = True
-                        chain.append(nxt)
-                        cur = nxt
-                        found = True
-                        break
-                if not found:
-                    break
-            
-            # Extend backward from a
-            cur = a
-            while True:
-                found = False
-                for nxt, seg_idx in adj[cur]:
-                    if not used[seg_idx]:
-                        used[seg_idx] = True
-                        chain.insert(0, nxt)
-                        cur = nxt
-                        found = True
-                        break
-                if not found:
-                    break
-            
-            contours.append(np.array(chain))
 
-        self.contour_resolution = resolution
-        self.zero_contours = contours
-        return contours
-    
-    def _extract_zero_level_set_3d(self, bounds, grid_resolution=64):
-        """
-        3D Marching Cubes algorithm for extracting zero level set (triangle mesh).
-        
-        Uses scikit-image's built-in implementation.
-        
-        Parameters
-        ----------
-        bounds : ((xmin, xmax), (ymin, ymax), (zmin, zmax))
-            3D bounding box
-        grid_resolution : int
-            Grid resolution per axis (default 64 for 3D to avoid memory explosion)
-        
-        Returns
-        -------
-        vertices : (N, 3) ndarray
-            Triangle mesh vertex coordinates
-        faces : (M, 3) ndarray
-            Triangle face vertex indices (0-indexed)
-        """
-        try:
-            from skimage.measure import marching_cubes
-        except ImportError:
-            raise ImportError("scikit-image required for 3D Marching Cubes support: pip install scikit-image")
-        lx = np.linspace(bounds[0][0], bounds[0][1], grid_resolution)
-        ly = np.linspace(bounds[1][0], bounds[1][1], grid_resolution)
-        lz = np.linspace(bounds[2][0], bounds[2][1], grid_resolution)
-        xx, yy, zz = np.meshgrid(lx, ly, lz, indexing='ij')
-        pts = np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
-        grid_values = self.predict(pts).reshape(grid_resolution, grid_resolution, grid_resolution)
-        # Extract isosurface at value 0 using marching cubes
-        from skimage import measure
-        sp = ((lx[-1]-lx[0])/(grid_resolution-1), (ly[-1]-ly[0])/(grid_resolution-1), (lz[-1]-lz[0])/(grid_resolution-1))
-        verts, faces, normals, values = measure.marching_cubes(grid_values, level=0.0, spacing=sp)
-        verts += np.array([lx[0], ly[0], lz[0]])
-        
-        return verts, faces
-
-    def predict_gradient(self, x_new):
+    def predict_gradients(self, x_new):
         """
         Predict gradients at new input points using the fitted interpolator.
         """
@@ -479,7 +531,7 @@ class Interpolator:
         def objective(angle):
             direction = np.array([np.cos(angle), np.sin(angle)])
             sample = (x_new + np.abs(sdf) * direction).reshape(1, -1)
-            pred_grad = self.predict_gradient(sample)[0]
+            pred_grad = self.predict_gradients(sample)[0]
             pred_grad /= np.linalg.norm(pred_grad) + 1e-10
             return sign * direction @ pred_grad
         if initial_guess is not None:
@@ -498,7 +550,7 @@ class Interpolator:
 
             all_dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)
             samples = x_new + np.abs(sdf) * all_dirs
-            pred_grads = self.predict_gradient(samples)
+            pred_grads = self.predict_gradients(samples)
             pred_grads = pred_grads / np.linalg.norm(pred_grads, axis=1, keepdims=True)
             best_idx = np.argmin(np.sum(sign * all_dirs * pred_grads, axis=1))
             best_angle = angles[best_idx]
@@ -562,210 +614,6 @@ class Interpolator:
         best_angle = result.x
         direction = np.array([np.cos(best_angle), np.sin(best_angle)])
         return direction
-
-    def sample_best_gradients(self, x_new, sdf, num_coarse=24, given_samples=None,
-                              refine_steps=4, num_refine=12, initial_guess=None, chunk_size=200):
-        """
-        Batch version: find best gradient directions via coarse sweep + iterative
-        narrowing refinement (similar to binary search on the angle).
-        Phase 1 — coarse uniform sweep over the full circle to locate the best
-        angular region per point.
-        Phase 2 — repeatedly zoom into a smaller interval around the current best
-        angle and re-evaluate, shrinking the search window each iteration.
-        
-        Parameters:
-        -----------
-        x_new (np.ndarray): Shape (batch_size, dimensions) — input points.
-        sdf (np.ndarray): Shape (batch_size,) — signed distance values.
-        num_coarse (int): Directions in the initial coarse sweep. Default 24.
-        refine_steps (int): Number of zoom-in refinement iterations. Default 4.
-        num_refine (int): Directions evaluated per refinement step. Default 12.
-        initial_guess (np.ndarray): Initial guesses for the optimal angles. Default None. If provided, the coarse sweep will skip and the first refinement will 
-        be centered around these angles.
-        given_samples (np.ndarray): Optional Shape (batch_size, num_samples, dimensions) containing pre-sampled candidate points for each query. If provided, the coarse sweep will skip and the best samples will be selected from these candidates instead of uniform angles.
-
-        Returns:
-        --------
-        np.ndarray: Shape (batch_size, dimensions) — best gradient directions (unit vectors).
-        """
-        if given_samples is not None:
-            # If given_samples is provided, we just evaluate them and pick the best one.
-            batch_size = x_new.shape[0]
-            num_coarse = given_samples.shape[1]
-            sign = np.where(sdf > 0, 1.0, -1.0)  # (batch,)
-            preds = self.predict(given_samples.reshape(-1, x_new.shape[1])).reshape(batch_size, num_coarse)
-            obj = preds * sign[:, None]
-            best_idx = np.argmin(obj, axis=1)           # (batch,)
-            best_grads = x_new - given_samples[np.arange(batch_size), best_idx]
-            best_grads /= sdf[:, None] + 1e-10
-            initial_guess = best_grads
-        
-        if x_new.shape[1] == 3:
-            return self._sample_best_gradients_3d(x_new, sdf, num_coarse,
-                                                 refine_steps, num_refine, initial_guess, chunk_size)
-        else:
-            return self._sample_best_gradients_2d(x_new, sdf, num_coarse,
-                                                 refine_steps, num_refine, initial_guess, chunk_size)
-        
-    def _sample_best_gradients_2d(self, x_new, sdf, num_coarse=24,
-                                  refine_steps=4, num_refine=12, initial_guess=None, chunk_size=200):
-        """
-        Batch version: find best gradient directions via coarse sweep + iterative
-        narrowing refinement (similar to binary search on the angle).
-
-        Phase 1 — coarse uniform sweep over the full circle to locate the best
-        angular region per point.
-        Phase 2 — repeatedly zoom into a smaller interval around the current best
-        angle and re-evaluate, shrinking the search window each iteration.
-
-        Parameters:
-        x_new (np.ndarray): Shape (batch_size, dimensions) — input points.
-        sdf (np.ndarray): Shape (batch_size,) — signed distance values.
-        num_coarse (int): Directions in the initial coarse sweep. Default 24.
-        refine_steps (int): Number of zoom-in refinement iterations. Default 4.
-        num_refine (int): Directions evaluated per refinement step. Default 12.
-        initial_guess (np.ndarray): Initial guesses for the optimal angles. Default None. 
-        If provided, the coarse sweep will skip and the first refinement will 
-        be centered around these angles.
-
-        Returns:
-        np.ndarray: Shape (batch_size, dimensions) — best gradient directions (unit vectors).
-        """
-        batch_size = x_new.shape[0]
-        sdf_flat = sdf.ravel()
-        sign = np.where(sdf_flat > 0, 1.0, -1.0)  # (batch,)
-
-        # --- Phase 1: coarse sweep ---
-        if initial_guess is not None:
-            best_angles = initial_guess
-        else:
-            angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)  # (C,)
-            dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)       # (C, 2)
-
-            # samples: (batch, C, 2)
-            samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs[None, :, :]
-            preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_coarse)
-            obj = preds * sign[:, None]
-            best_idx = np.argmin(obj, axis=1)           # (batch,)
-            best_angles = angles[best_idx]              # (batch,)
-
-        # --- Phase 2: iterative refinement ---
-        half_range = np.pi / num_coarse  # initial half-width of search window
-
-        for _ in range(refine_steps):
-            offsets = np.linspace(-1.0, 1.0, num_refine)               # (R,)
-            local_angles = best_angles[:, None] + half_range * offsets  # (batch, R)
-
-            cos_a = np.cos(local_angles)  # (batch, R)
-            sin_a = np.sin(local_angles)
-            # samples: (batch, R, 2)
-            samples = x_new[:, None, :] - sdf_flat[:, None, None] * np.stack([cos_a, sin_a], axis=2)
-            preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_refine)
-            obj = preds * sign[:, None]
-            best_local = np.argmin(obj, axis=1)
-            best_angles = local_angles[np.arange(batch_size), best_local]
-
-            # Shrink window: next half_range = one spacing of current grid
-            half_range = 2.0 * half_range / (num_refine - 1)
-
-        best_dirs = np.stack([np.cos(best_angles), np.sin(best_angles)], axis=1)
-        best_dirs /= np.linalg.norm(best_dirs, axis=1, keepdims=True)
-        return best_dirs
-    
-
-    def _sample_best_gradients_3d(self, x_new, sdf, num_coarse=64,
-                                  refine_steps=4, num_refine=16, initial_guess=None,
-                                  chunk_size=200):
-        """
-        3D version: find best gradient directions via coarse sphere sweep + iterative
-        cone refinement.
-
-        Phase 1 — coarse uniform sweep over the full sphere using Fibonacci sampling.
-        Phase 2 — repeatedly zoom into a cone around the current best direction,
-                   sampling a Fibonacci disk within the cone.
-
-        Parameters:
-        x_new (np.ndarray): Shape (batch_size, 3) — input points.
-        sdf (np.ndarray): Shape (batch_size,) — signed distance values.
-        num_coarse (int): Directions in the initial coarse sweep. Default 64.
-        refine_steps (int): Number of cone-narrowing refinement iterations. Default 4.
-        num_refine (int): Directions evaluated per refinement step. Default 16.
-        initial_guess (np.ndarray): Initial guesses (batch_size, 3) unit vectors. Default None.
-
-        Returns:
-        np.ndarray: Shape (batch_size, 3) — best gradient directions (unit vectors).
-        """
-        batch_size = x_new.shape[0]
-        sdf_flat = sdf.ravel()
-        sign = np.where(sdf_flat > 0, 1.0, -1.0)  # (batch,)
-
-        def fibonacci_sphere(n):
-            """Uniformly distributed directions on unit sphere."""
-            golden = (1 + np.sqrt(5)) / 2
-            i = np.arange(n, dtype=float)
-            theta = 2 * np.pi * i / golden
-            phi = np.arccos(1 - 2 * (i + 0.5) / n)
-            return np.stack([np.sin(phi)*np.cos(theta),
-                             np.sin(phi)*np.sin(theta),
-                             np.cos(phi)], axis=1)  # (n, 3)
-
-        def tangent_frame(d):
-            """Build orthonormal tangent vectors t1, t2 perpendicular to d (batch, 3)."""
-            ref = np.where(np.abs(d[:, 0:1]) < 0.9,
-                           np.broadcast_to([1., 0., 0.], d.shape).copy(),
-                           np.broadcast_to([0., 1., 0.], d.shape).copy())
-            t1 = np.cross(d, ref)
-            t1 /= np.linalg.norm(t1, axis=1, keepdims=True)
-            t2 = np.cross(d, t1)
-            return t1, t2  # each (batch, 3)
-
-        def cone_dirs(best_dirs, half_angle, n):
-            """Sample n directions in a cone of half_angle around each best_dir."""
-            golden = (1 + np.sqrt(5)) / 2
-            i = np.arange(n, dtype=float)
-            r = half_angle * np.sqrt((i + 0.5) / n)   # radial angle within cone (n,)
-            alpha = 2 * np.pi * i / golden             # azimuth within cone (n,)
-            t1, t2 = tangent_frame(best_dirs)          # (batch, 3)
-            # world_dirs: (batch, n, 3)
-            dirs = (np.cos(r)[None, :, None] * best_dirs[:, None, :]
-                    + np.sin(r)[None, :, None] * (np.cos(alpha)[None, :, None] * t1[:, None, :]
-                                                  + np.sin(alpha)[None, :, None] * t2[:, None, :]))
-            return dirs  # (batch, n, 3)
-
-        # --- Phase 1: coarse sweep ---
-        if initial_guess is not None:
-            valid_mask = ~np.isnan(initial_guess).any(axis=1)
-            invalid_mask = ~valid_mask
-        else:
-            invalid_mask = np.ones(batch_size, dtype=bool)
-            valid_mask = np.zeros(batch_size, dtype=bool)
-
-        best_dirs = np.zeros((batch_size, 3))
-        if np.any(valid_mask):
-            best_dirs[valid_mask] = initial_guess[valid_mask]
-
-        # Only compute coarse sweep for invalid positions
-        if np.any(invalid_mask):
-            dirs = fibonacci_sphere(num_coarse)  # (C, 3)
-            samples_invalid = x_new[invalid_mask, None, :] - sdf_flat[invalid_mask, None, None] * dirs[None, :, :]
-            preds_invalid = self.predict(samples_invalid.reshape(-1, 3), chunk_size).reshape(np.sum(invalid_mask), num_coarse)
-            obj_invalid = preds_invalid * sign[invalid_mask, None]
-            best_idx_invalid = np.argmin(obj_invalid, axis=1)
-            best_dirs[invalid_mask] = dirs[best_idx_invalid]
-            
-        # --- Phase 2: iterative cone refinement ---
-        half_angle = np.pi / np.sqrt(num_coarse)
-
-        for _ in range(refine_steps):
-            dirs_r = cone_dirs(best_dirs, half_angle, num_refine)  # (batch, R, 3)
-            samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs_r
-            preds = self.predict(samples.reshape(-1, 3), chunk_size).reshape(batch_size, num_refine)
-            obj = preds * sign[:, None]
-            best_local = np.argmin(obj, axis=1)
-            best_dirs = dirs_r[np.arange(batch_size), best_local]
-            best_dirs /= np.linalg.norm(best_dirs, axis=1, keepdims=True)
-            half_angle /= np.sqrt(num_refine)
-        return best_dirs
 
 class CurlFree_Interpolator(Interpolator):
     """
@@ -900,7 +748,7 @@ class CurlFree_Interpolator(Interpolator):
         V_correction = self._eval_scalar_potential(query_points)
         return V_base + V_correction
 
-    def predict_gradient(self, x_new, use_gradient_field=False):
+    def predict_gradients(self, x_new, use_gradient_field=False):
         """
         Compute predicted gradients at given query point locations.
         """
@@ -1129,3 +977,216 @@ class CurlFree_Interpolator(Interpolator):
         x, y = X_query[:, 0], X_query[:, 1]
         V += self.b_sc[0] + self.b_sc[1]*x + self.b_sc[2]*y
         return V
+
+class PUInterpolator(Interpolator):
+    """
+    Partition of Unity interpolator that accelerates RBF interpolation
+    by decomposing the domain into overlapping patches with local solves.
+    """
+    def __init__(self, kernel='thin_plate', overlap=0.25,
+                 min_points=10, max_points=200):
+        self.kernel = kernel
+        self.overlap = overlap
+        self.min_points = min_points
+        self.max_points = max_points
+        self.patches = []  # list of (center, radius, local_interpolator)
+        self.trained = False
+
+    @staticmethod
+    def _wendland_weight(r, radius):
+        """Wendland C2 compactly supported weight: (1 - r/R)^4 * (4r/R + 1), 0 outside."""
+        s = np.clip(r / radius, 0.0, 1.0)
+        return (1.0 - s) ** 4 * (4.0 * s + 1.0)
+
+    def _subdivide(self, points, indices):
+        """
+        Recursively subdivide points along the longest axis at the median.
+        Returns a list of index arrays, each representing a leaf patch.
+        """
+        if len(indices) <= self.max_points:
+            return [indices]
+        pts = points[indices]
+        # Split along the axis with largest spread
+        spreads = pts.max(axis=0) - pts.min(axis=0)
+        axis = np.argmax(spreads)
+        median = np.median(pts[:, axis])
+        left_mask = pts[:, axis] <= median
+        # Avoid degenerate splits where all points go to one side
+        if left_mask.all() or (~left_mask).all():
+            return [indices]
+        left = indices[left_mask]
+        right = indices[~left_mask]
+        return self._subdivide(points, left) + self._subdivide(points, right)
+
+    def fit(self, points, values, gradients=None, mask=None, hermite_interp=False, force_recompute=False):
+        """
+        Adaptively partition the domain and fit local interpolators on each patch.
+        """
+        from scipy.spatial import KDTree
+        n, d = points.shape
+        min_pts = max(self.min_points, d + 2)
+
+        if DEBUG_TIME: t0 = time.perf_counter()
+
+        all_indices = np.arange(n)
+        leaves = self._subdivide(points, all_indices)
+        if DEBUG_TIME:
+            t1 = time.perf_counter()
+            print(f"  [PU fit] subdivide: {t1-t0:.3f}s  ({len(leaves)} leaves)")
+
+        tree = KDTree(points)
+        if DEBUG_TIME:
+            t2 = time.perf_counter()
+            print(f"  [PU fit] build KDTree: {t2-t1:.3f}s")
+
+        self.patches = []
+        if DEBUG_TIME: t_query = 0; t_local_fit = 0; patch_sizes = []
+
+        for leaf_idx in leaves:
+            if len(leaf_idx) < min_pts:
+                continue
+            leaf_pts = points[leaf_idx]
+            center = leaf_pts.mean(axis=0)
+            leaf_radius = np.max(np.linalg.norm(leaf_pts - center, axis=1))
+            R_ext = leaf_radius * (1.0 + self.overlap)
+
+            if DEBUG_TIME: tq0 = time.perf_counter()
+            idx = tree.query_ball_point(center, R_ext)
+            if DEBUG_TIME: t_query += time.perf_counter() - tq0
+
+            local_pts = points[idx]
+            local_vals = values[idx]
+            local_grads = gradients[idx] if gradients is not None else None
+            local_mask = mask[idx] if mask is not None else None
+            if DEBUG_TIME: patch_sizes.append(len(idx))
+
+            if DEBUG_TIME: tf0 = time.perf_counter()
+            interp = DuchonInterpolator(kernel=self.kernel)
+            interp.fit(local_pts, local_vals, gradients=local_grads,
+                        mask=local_mask, hermite_interp=hermite_interp)
+            if DEBUG_TIME: t_local_fit += time.perf_counter() - tf0
+
+            self.patches.append((center, R_ext, interp))
+
+        if DEBUG_TIME:
+            t3 = time.perf_counter()
+            print(f"  [PU fit] patch loop: {t3-t2:.3f}s  (query: {t_query:.3f}s, local fit: {t_local_fit:.3f}s)")
+            if patch_sizes:
+                print(f"  [PU fit] patch sizes: min={min(patch_sizes)}, max={max(patch_sizes)}, mean={np.mean(patch_sizes):.0f}")
+
+        self._all_points = points
+        self._all_values = values
+
+        # Build KDTree on patch centers for fast query-to-patch lookup
+        self._patch_centers = np.array([c for c, _, _ in self.patches])
+        self._patch_radii = np.array([r for _, r, _ in self.patches])
+        self._max_radius = self._patch_radii.max()
+        self._patch_tree = KDTree(self._patch_centers)
+
+        self.trained = True
+        if DEBUG_TIME:
+            print(f"  [PU fit] total: {time.perf_counter()-t0:.3f}s  ({len(self.patches)} patches)")
+
+    def predict(self, x_new, chunk_size=5000):
+        """
+        Predict values by blending local interpolators with Wendland weights.
+        """
+        if len(x_new) > chunk_size:
+            return np.concatenate([self.predict(x_new[s:s + chunk_size], chunk_size)
+                                   for s in range(0, len(x_new), chunk_size)])
+
+        from scipy.spatial import KDTree as _KDTree
+        n = len(x_new)
+        result = np.zeros(n)
+        weight_sum = np.zeros(n)
+
+        # if DEBUG_TIME: t0 = time.perf_counter()
+        query_tree = _KDTree(x_new)
+        # if DEBUG_TIME:
+        #     t1 = time.perf_counter()
+        #     t_query = 0; t_predict = 0; n_patches_used = 0
+
+        for center, radius, interp in self.patches:
+            # if DEBUG_TIME: tq0 = time.perf_counter()
+            idx = query_tree.query_ball_point(center, radius)
+            # if DEBUG_TIME: t_query += time.perf_counter() - tq0
+            if len(idx) == 0:
+                continue
+            # if DEBUG_TIME: n_patches_used += 1
+            idx = np.array(idx)
+            pts = x_new[idx]
+            dist = np.linalg.norm(pts - center, axis=1)
+
+            w = self._wendland_weight(dist, radius)
+            # if DEBUG_TIME: tp0 = time.perf_counter()
+            v = interp.predict(pts)
+            # if DEBUG_TIME: t_predict += time.perf_counter() - tp0
+
+            result[idx] += w * v
+            weight_sum[idx] += w
+
+        safe = weight_sum > 0
+        result[safe] /= weight_sum[safe]
+        # if DEBUG_TIME:
+        #     t2 = time.perf_counter()
+        #     print(f"  [PU predict] n={n}, build_tree: {t1-t0:.4f}s, query: {t_query:.4f}s, "
+        #           f"local_predict: {t_predict:.4f}s, total: {t2-t0:.4f}s  ({n_patches_used}/{len(self.patches)} patches used)")
+
+        # Fallback: for uncovered points, use nearest data point's value
+        uncovered = ~safe
+        if np.any(uncovered):
+            uncov_pts = x_new[uncovered]
+            _, nearest = self._patch_tree.query(uncov_pts)
+            for pi in np.unique(nearest):
+                pts_mask = nearest == pi
+                _, _, interp = self.patches[pi]
+                result[np.where(uncovered)[0][pts_mask]] = interp.predict(uncov_pts[pts_mask])
+
+        return result
+    
+    def predict_gradients(self, x_new, chunk_size=5000):
+        """
+        Predict gradients by blending local interpolators with Wendland weights.
+        """
+        if len(x_new) > chunk_size:
+            return np.concatenate([self.predict_gradients(x_new[s:s + chunk_size], chunk_size)
+                                   for s in range(0, len(x_new), chunk_size)])
+
+        from scipy.spatial import KDTree as _KDTree
+        n = len(x_new)
+        d = x_new.shape[1]
+        result = np.zeros((n, d))
+        weight_sum = np.zeros(n)
+
+        query_tree = _KDTree(x_new)
+
+        for center, radius, interp in self.patches:
+            idx = query_tree.query_ball_point(center, radius)
+            if len(idx) == 0:
+                continue
+            idx = np.array(idx)
+            pts = x_new[idx]
+            dist = np.linalg.norm(pts - center, axis=1)
+
+            w = self._wendland_weight(dist, radius)
+            g = interp.predict_gradients(pts)
+
+            result[idx] += w[:, np.newaxis] * g
+            weight_sum[idx] += w
+
+        safe = weight_sum > 0
+        result[safe] /= weight_sum[safe, np.newaxis]
+
+        # Fallback: for uncovered points, use nearest patch to predict
+        uncovered = ~safe
+        if np.any(uncovered):
+            uncov_pts = x_new[uncovered]
+            _, nearest = self._patch_tree.query(uncov_pts)
+            for patch_idx in np.unique(nearest):
+                pts_mask = nearest == patch_idx
+                _, _, interp = self.patches[patch_idx]
+                result[np.where(uncovered)[0][pts_mask]] = interp.predict_gradients(uncov_pts[pts_mask])
+
+        return result
+
+
