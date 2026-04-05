@@ -989,13 +989,46 @@ class PUInterpolator(Interpolator):
     by decomposing the domain into overlapping patches with local solves.
     """
     def __init__(self, kernel='thin_plate', overlap=0.25,
-                 min_points=10, max_points=200):
+                 min_points=10, max_points=200, partition='fps'):
+        """
+        partition: 'fps' (farthest point sampling) or 'kdtree' (recursive median split).
+        """
         self.kernel = kernel
         self.overlap = overlap
         self.min_points = min_points
         self.max_points = max_points
+        self.partition = partition
         self.patches = []  # list of (center, radius, local_interpolator)
         self.trained = False
+
+    def _kdtree_partition(self, points, tree):
+        """
+        KD-tree style recursive median split, then extend each leaf into a ball.
+        Same logic as the original _subdivide but returns the same
+        (center, R_ext, ext_idx) format as _fps_partition.
+        """
+        def subdivide(indices):
+            if len(indices) <= self.max_points:
+                return [indices]
+            pts = points[indices]
+            spreads = pts.max(axis=0) - pts.min(axis=0)
+            axis = int(np.argmax(spreads))
+            median = np.median(pts[:, axis])
+            left_mask = pts[:, axis] <= median
+            if left_mask.all() or (~left_mask).all():
+                return [indices]
+            return subdivide(indices[left_mask]) + subdivide(indices[~left_mask])
+
+        leaves = subdivide(np.arange(len(points)))
+        patches_meta = []
+        for leaf_idx in leaves:
+            leaf_pts = points[leaf_idx]
+            center = leaf_pts.mean(axis=0)
+            r_core = float(np.max(np.linalg.norm(leaf_pts - center, axis=1)))
+            R_ext = r_core * (1.0 + self.overlap)
+            ext_idx = np.array(tree.query_ball_point(center, R_ext), dtype=int)
+            patches_meta.append((center, R_ext, ext_idx))
+        return patches_meta
 
     @staticmethod
     def _wendland_weight(r, radius):
@@ -1003,25 +1036,44 @@ class PUInterpolator(Interpolator):
         s = np.clip(r / radius, 0.0, 1.0)
         return (1.0 - s) ** 4 * (4.0 * s + 1.0)
 
-    def _subdivide(self, points, indices):
+    def _fps_partition(self, points, tree):
         """
-        Recursively subdivide points along the longest axis at the median.
-        Returns a list of index arrays, each representing a leaf patch.
+        Farthest Point Sampling partition: pick patch centers via FPS so they are
+        spread evenly, then assign each center its k=max_points nearest neighbors as
+        the core and extend by the overlap factor.
+        n_patches is chosen so that each patch covers ~half of max_points on average,
+        ensuring full coverage without gaps.
         """
-        if len(indices) <= self.max_points:
-            return [indices]
-        pts = points[indices]
-        # Split along the axis with largest spread
-        spreads = pts.max(axis=0) - pts.min(axis=0)
-        axis = np.argmax(spreads)
-        median = np.median(pts[:, axis])
-        left_mask = pts[:, axis] <= median
-        # Avoid degenerate splits where all points go to one side
-        if left_mask.all() or (~left_mask).all():
-            return [indices]
-        left = indices[left_mask]
-        right = indices[~left_mask]
-        return self._subdivide(points, left) + self._subdivide(points, right)
+        n = len(points)
+        k = min(self.max_points, n)
+        n_patches = max(1, int(np.ceil(n / (k / 2))))
+
+        # --- FPS to pick n_patches center indices ---
+        centroid = points.mean(axis=0)
+        first = int(np.argmin(np.linalg.norm(points - centroid, axis=1)))
+        centers_idx = [first]
+        min_dists = np.linalg.norm(points - points[first], axis=1)
+
+        for _ in range(n_patches - 1):
+            next_idx = int(np.argmax(min_dists))
+            centers_idx.append(next_idx)
+            d = np.linalg.norm(points - points[next_idx], axis=1)
+            min_dists = np.minimum(min_dists, d)
+
+        # --- build patches ---
+        patches_meta = []
+        for ci in centers_idx:
+            dists, core_idx = tree.query(points[ci], k=k)
+            if np.isscalar(dists):
+                dists = np.array([dists])
+                core_idx = np.array([core_idx])
+            r_core = float(dists[-1])
+            center = points[core_idx].mean(axis=0)
+            R_ext = r_core * (1.0 + self.overlap)
+            ext_idx = np.array(tree.query_ball_point(center, R_ext), dtype=int)
+            patches_meta.append((center, R_ext, ext_idx))
+
+        return patches_meta
 
     def fit(self, points, values, gradients=None, mask=None, force_recompute=False, dist_threshold=0.2):
         """
@@ -1046,35 +1098,30 @@ class PUInterpolator(Interpolator):
 
         if DEBUG_TIME: t0 = time.perf_counter()
 
-        all_indices = np.arange(n)
-        leaves = self._subdivide(points, all_indices)
-        if DEBUG_TIME:
-            t1 = time.perf_counter()
-            print(f"  [PU fit] subdivide: {t1-t0:.3f}s  ({len(leaves)} leaves)")
-
         tree = KDTree(points)
         if DEBUG_TIME:
+            t1 = time.perf_counter()
+            print(f"  [PU fit] build KDTree: {t1-t0:.3f}s")
+        self.partition = 'kdtree'
+        # self.partition = 'fps'
+        if self.partition == 'kdtree':
+            patches_meta = self._kdtree_partition(points, tree)
+        else:
+            patches_meta = self._fps_partition(points, tree)
+        if DEBUG_TIME:
             t2 = time.perf_counter()
-            print(f"  [PU fit] build KDTree: {t2-t1:.3f}s")
+            print(f"  [PU fit] greedy cover: {t2-t1:.3f}s  ({len(patches_meta)} patches)")
 
         self.patches = []
-        if DEBUG_TIME: t_query = 0; t_local_fit = 0; patch_sizes = []
+        if DEBUG_TIME: t_local_fit = 0; patch_sizes = []
 
-        for leaf_idx in leaves:
-            if len(leaf_idx) < min_pts:
+        for center, R_ext, ext_idx in patches_meta:
+            if len(ext_idx) < min_pts:
                 continue
-            leaf_pts = points[leaf_idx]
-            center = leaf_pts.mean(axis=0)
-            leaf_radius = np.max(np.linalg.norm(leaf_pts - center, axis=1))
-            R_ext = leaf_radius * (1.0 + self.overlap)
 
-            if DEBUG_TIME: tq0 = time.perf_counter()
-            idx = tree.query_ball_point(center, R_ext)
-            if DEBUG_TIME: t_query += time.perf_counter() - tq0
-
-            local_pts = points[idx]
-            local_vals = values[idx]
-            if DEBUG_TIME: patch_sizes.append(len(idx))
+            local_pts = points[ext_idx]
+            local_vals = values[ext_idx]
+            if DEBUG_TIME: patch_sizes.append(len(ext_idx))
 
             if DEBUG_TIME: tf0 = time.perf_counter()
             interp = DuchonInterpolator(kernel=self.kernel)
