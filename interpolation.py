@@ -513,6 +513,7 @@ class Interpolator:
         direction = np.array([np.cos(best_angle), np.sin(best_angle)])
         return -direction * sign
     
+    # Deprecated
     def sample_best_gradient(self, x_new, sdf, num_coarse=24, tol=1e-6, initial_guess=None):
         """
         Find the best gradient direction by coarse sweep + bounded scalar optimization.
@@ -562,7 +563,7 @@ class Interpolator:
         direction = np.array([np.cos(best_angle), np.sin(best_angle)])
         return direction
 
-    def sample_best_gradients(self, x_new, sdf, num_coarse=24,
+    def sample_best_gradients(self, x_new, sdf, num_coarse=24, given_samples=None,
                               refine_steps=4, num_refine=12, initial_guess=None, chunk_size=200):
         """
         Batch version: find best gradient directions via coarse sweep + iterative
@@ -581,11 +582,24 @@ class Interpolator:
         num_refine (int): Directions evaluated per refinement step. Default 12.
         initial_guess (np.ndarray): Initial guesses for the optimal angles. Default None. If provided, the coarse sweep will skip and the first refinement will 
         be centered around these angles.
+        given_samples (np.ndarray): Optional Shape (batch_size, num_samples, dimensions) containing pre-sampled candidate points for each query. If provided, the coarse sweep will skip and the best samples will be selected from these candidates instead of uniform angles.
 
         Returns:
         --------
         np.ndarray: Shape (batch_size, dimensions) — best gradient directions (unit vectors).
         """
+        if given_samples is not None:
+            # If given_samples is provided, we just evaluate them and pick the best one.
+            batch_size = x_new.shape[0]
+            num_coarse = given_samples.shape[1]
+            sign = np.where(sdf > 0, 1.0, -1.0)  # (batch,)
+            preds = self.predict(given_samples.reshape(-1, x_new.shape[1])).reshape(batch_size, num_coarse)
+            obj = preds * sign[:, None]
+            best_idx = np.argmin(obj, axis=1)           # (batch,)
+            best_grads = x_new - given_samples[np.arange(batch_size), best_idx]
+            best_grads /= sdf[:, None] + 1e-10
+            initial_guess = best_grads
+        
         if x_new.shape[1] == 3:
             return self._sample_best_gradients_3d(x_new, sdf, num_coarse,
                                                  refine_steps, num_refine, initial_guess, chunk_size)
@@ -720,15 +734,25 @@ class Interpolator:
 
         # --- Phase 1: coarse sweep ---
         if initial_guess is not None:
-            best_dirs = initial_guess / np.linalg.norm(initial_guess, axis=1, keepdims=True)
+            valid_mask = ~np.isnan(initial_guess).any(axis=1)
+            invalid_mask = ~valid_mask
         else:
-            dirs = fibonacci_sphere(num_coarse)  # (C, 3)
-            samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs[None, :, :]
-            preds = self.predict(samples.reshape(-1, 3), chunk_size).reshape(batch_size, num_coarse)
-            obj = preds * sign[:, None]
-            best_idx = np.argmin(obj, axis=1)
-            best_dirs = dirs[best_idx]  # (batch, 3)
+            invalid_mask = np.ones(batch_size, dtype=bool)
+            valid_mask = np.zeros(batch_size, dtype=bool)
 
+        best_dirs = np.zeros((batch_size, 3))
+        if np.any(valid_mask):
+            best_dirs[valid_mask] = initial_guess[valid_mask]
+
+        # Only compute coarse sweep for invalid positions
+        if np.any(invalid_mask):
+            dirs = fibonacci_sphere(num_coarse)  # (C, 3)
+            samples_invalid = x_new[invalid_mask, None, :] - sdf_flat[invalid_mask, None, None] * dirs[None, :, :]
+            preds_invalid = self.predict(samples_invalid.reshape(-1, 3), chunk_size).reshape(np.sum(invalid_mask), num_coarse)
+            obj_invalid = preds_invalid * sign[invalid_mask, None]
+            best_idx_invalid = np.argmin(obj_invalid, axis=1)
+            best_dirs[invalid_mask] = dirs[best_idx_invalid]
+            
         # --- Phase 2: iterative cone refinement ---
         half_angle = np.pi / np.sqrt(num_coarse)
 

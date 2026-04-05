@@ -445,7 +445,7 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
     return gradients, interpolator
 
 
-def iterative_projection_3d(points, values, init_gradients, interpolator : Interpolator, num_iter=10,
+def iterative_projection_3d(points, values, init_gradients, interpolator : Interpolator, num_iter=10, short_arc_idx=None,
                          num_coarse=24, refine_steps=4, num_refine=5, gt_gradients=None):
     """
     Iteratively refine SDF gradients by projecting sample points onto the zero
@@ -520,6 +520,9 @@ def iterative_projection_3d(points, values, init_gradients, interpolator : Inter
         visible_mask_old = are_points_visible(projections_old, points, values)
         # Don't update gradients to make visible gradients invisible
         skip_mask = visible_mask_old & ~visible_mask_new
+        # Don't update gradients for short arc points
+        for i in short_arc_idx:
+            skip_mask[i] = True
         new_gradients[skip_mask] = gradients[skip_mask]
 
         # ----- Convergence diagnostic -----

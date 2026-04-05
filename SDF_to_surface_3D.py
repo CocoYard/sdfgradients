@@ -12,20 +12,41 @@ from enum import Enum
 import time
 import optimization as opt
 from util import mesh_distances, are_points_visible
+# from bench import sphere_exposed_cpp as va
+from bench import sphere_exposed_pybind as sep
+from bench import sphere_intersect
+import util
 
-class NeighborEstimation(Enum):
-    VISIBLE_CONNECTIVITY = 'visible_connectivity'
-    SPATIAL = 'spatial'
+class Options:
+    def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', turn_off_short_arcs=False, export_short_arcs=True, export_projections=True, use_gt_gradients=False, turn_off_projection=False):
+        self.grid_len = grid_len
+        self.max_iters = max_iters
+        self.clamp = clamp
+        self.turn_off_short_arcs = turn_off_short_arcs
+        self.name = name
+        self.path_to_obj = f'examples/{name}.obj'
+        self.export_short_arcs = export_short_arcs  # whether to export short arcs .glb for visualization
+        self.export_projections = export_projections  # export gradients .glb for visualization
+        self.use_gt_gradients = use_gt_gradients
+        
+        self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
+        self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
 
-class GradientEstimation(Enum):
-    CurlFree_OPT = 'curlfree_opt'
-    INTERP_GLOBAL_OPT = 'interp_global_opt'
-    INTERP_LOCAL = 'interp_local'
-    ORACLE_CURLFREE = 'oracle_curlfree'
-    IRLS = 'irls'
-    RANSAC = 'ransac'
-    FINITE = 'finite'
-    LSTSQ = 'lstsq'
+        self.tolerance = None
+        # never used
+        self.path_to_sdf = None # set it manually to avoid accidentally loading old data, e.g. f'out/{name}_sdf_{grid_len**3}.npz'
+        # self.turn_off_projection = turn_off_projection  # this means only interpolating SDF values without projection or optimization
+    def print(self):
+        print(f"Options: grid_len={self.grid_len}, max_iters={self.max_iters}, clamp={self.clamp}, turn_off_short_arcs={self.turn_off_short_arcs}, export_short_arcs={self.export_short_arcs}, export_projections={self.export_projections}, use_gt_gradients={self.use_gt_gradients}")
+
+class Tolerance:
+    def __init__(self, clamp_radius_ratio=0.2, clamp_sdf_tol=1e-2, angle_tol=np.radians(15)):
+        # 0.2 means gradient rotates 11.5 degrees at most
+        # 0.1 means gradient rotates 5.7 degrees at most
+        self.clamp_radius_ratio = clamp_radius_ratio # for clamping to the nearest arc point
+        self.clamp_sdf_tol = clamp_sdf_tol           # for clamping to the optimal point on visible boundary
+        self.float_tol = 1e-8
+        self.angle_tol = angle_tol
 
 def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False ):
     '''
@@ -61,6 +82,7 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False ):
     x = np.linspace(bbox_min[0], bbox_max[0], grid_len)
     y = np.linspace(bbox_min[1], bbox_max[1], grid_len)
     z = np.linspace(bbox_min[2], bbox_max[2], grid_len)
+    print("bbox_min:", bbox_min, "bbox_max:", bbox_max)
     X, Y, Z = np.meshgrid(x, y, z)
     points = np.vstack([X.ravel(), Y.ravel(), Z.ravel()]).T
     # Find the closest points on the mesh surface
@@ -152,11 +174,12 @@ def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_npz=False):
     mesh_distances(recon, mesh, verbose=True)
     return plt
 
-def test_rfta(grid_len=20, path_to_sdf=None, path_to_obj=None, save_npz=False):
+def test_rfta(options, save_npz=False):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
     """
+    grid_len, path_to_obj, path_to_sdf = options.grid_len, options.path_to_obj, options.path_to_sdf
     if path_to_sdf is not None:
         # read sdf data from file
         data = np.load(path_to_sdf)
@@ -177,36 +200,97 @@ def test_rfta(grid_len=20, path_to_sdf=None, path_to_obj=None, save_npz=False):
     largest.export(f'{out_dir}/rfta_{grid_len}.obj')
     print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept largest component: {len(largest.faces)} faces out of {len(Fr)})")
 
-def clamp_gradients_to_arcs(points, values, gradients, degenerate_arcs):
-    pass
-
-def clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values, clamp_indices=None):
-    """
-    Use the colinear neighbors to estimate the gradient. For points inside clamp_indices, we will use that estimated gradient to clamp into visible arcs.
-    """
-    for i, neighbors in colinear_neighbors.items():
-        if len(neighbors) == 0:
-            continue
-        if i in degenerate_arcs:
+def clamp_gradients_to_arcs(points, values, gradients, degenerate_pts, batch, ngbrs_list, interpolator : Interpolator, tolerance : Tolerance):
+    projections = points - values[:, np.newaxis] * gradients
+    sdf_tol = tolerance.clamp_sdf_tol
+    ratio = tolerance.clamp_radius_ratio
+    float_tol = tolerance.float_tol
+    debug_cnt = 0
+    for i in range(len(points)):
+        if i in degenerate_pts:
             continue    # skip clamping for points with degenerate arcs, since we will set their gradients directly toward the angle later
-        if clamp_indices is not None and i not in clamp_indices:
-            continue    # only clamp points that are outside visible arcs, for other points we keep their original gradients since they are already within visible arcs
-        neighbor_points = sdf_points[neighbors]
-        neighbor_sdf = sdf_values[neighbors]
-        diffs = neighbor_points - sdf_points[i]
-        sdf_diffs = neighbor_sdf - sdf_values[i]
-        if len(diffs) >= 2 and np.linalg.matrix_rank(diffs, tol=1e-8) < 2:
-            # Rank-deficient: project onto the available direction
-            direction = diffs[0] / (np.linalg.norm(diffs[0]) + 1e-10)
-            projections = diffs @ direction
-            slope = np.linalg.lstsq(projections.reshape(-1, 1), sdf_diffs, rcond=None)[0][0]
-            grad = slope * direction
-        else:
-            grad, _, _, _ = np.linalg.lstsq(diffs, sdf_diffs, rcond=None)
-        gradients[i] = grad
-    return gradients
+        ngbrs = points[ngbrs_list[i]]
+        dists = np.linalg.norm(projections[i] - ngbrs, axis=1)
+        inside = dists < (np.abs(values[ngbrs_list[i]])) - float_tol
+        if not np.any(inside):
+            continue    # no neighbor contains the projection, skip clamping
+        # 1. if it is close to some arc, clamp to the closest point on that arc
+        closest, distances = util.query_closest_on_arcs(projections[i:i+1], i, batch)
+        if distances[0] < ratio * np.abs(values[i]):
+            pt = closest[0]
+            gradients[i] = (points[i] - pt) / (values[i] + 1e-10)  # clamp to the closest point on the arc, with a slightly relaxed denominator to avoid over-shooting
+            continue
 
-def estimate_gradients_interp(sdf_points, sdf_values, interpolator : Interpolator, degenerate_arcs, colinear_neighbors=None):
+        # 2. otherwise, if some point on the arc has a low function value, clamp to that point
+        sample_pts = util.sample_arcs(i, batch, num_points=100)
+        if len(sample_pts) == 0:
+            res = util.get_sphere_data(batch, i)  # for debugging
+            debug_cnt += 1
+            continue
+        grads = interpolator.sample_best_gradients(points[i:i+1], values[i:i+1], given_samples=sample_pts[np.newaxis, :, :])  # given_samples shape: (1, num_points, 3)
+        proj = points[i] - values[i] * grads[0]
+        pred_sdf = interpolator.predict(proj[np.newaxis, :])
+        if -sdf_tol < pred_sdf < sdf_tol:
+            gradients[i] = grads[0]
+            continue
+        # 3. if no suitable arc point found, keep the original gradient (which is outside visible arcs, filtered out later)
+        """ --- Visualization for debugging --- """
+        """
+        # 可视化采样点
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # 绘制当前球的点（加粗）
+        ax.scatter(points[i, 0], points[i, 1], points[i, 2], 
+                  c='red', marker='*', s=500, label=f'Sphere {i}')
+        
+        # 绘制该球的前5个邻居
+        if i < len(ngbrs_list):
+            ngbrs_indices = ngbrs_list[i][:5]  # 只取前5个邻居
+            if len(ngbrs_indices) > 0:
+                ax.scatter(points[ngbrs_indices, 0], points[ngbrs_indices, 1], points[ngbrs_indices, 2],
+                          c='orange', marker='s', s=100, alpha=0.7, label=f'Neighbors (first {len(ngbrs_indices)})')
+        
+        # 绘制采样点
+        if len(sample_pts) > 0:
+            ax.scatter(sample_pts[:, 0], sample_pts[:, 1], sample_pts[:, 2], 
+                      c='green', marker='.', s=50, alpha=0.8, label=f'Arc samples ({len(sample_pts)} pts)')
+        
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title(f'Sphere {i}: Arc Sampling Visualization')
+        ax.legend()
+        plt.tight_layout()
+        plt.show()
+        
+        if len(sample_pts) == 0:
+            continue
+        """
+    if debug_cnt > 0:
+        print(f"\n there are {debug_cnt} samples without any arcs\n")
+
+def filter_degenerate_pts(degenerate_pts, interpolator : Interpolator, dist_tol=1e-1):
+    """ 
+    Filter out degenerate points that are too far from the surface or more than 1 point, since 
+    they may cause numerical issues in optimization. After filtering, every idx in degenerate_pts 
+    should have exactly 1 point that is close to the surface.
+    """
+    to_remove = []
+    for idx, pts in degenerate_pts.items():
+        if len(pts) != 1:
+            to_remove.append(idx)
+            continue
+        pt = pts[0]
+        pred = interpolator.predict(pt[np.newaxis, :])
+        if np.abs(pred) > dist_tol:
+            print(f"Degenerate point {idx} is too far from the surface with predicted sdf {pred}, removing it. This may cause issues in later optimization.")
+            to_remove.append(idx)
+    for idx in to_remove:
+        del degenerate_pts[idx]
+    print(f"Filtered out {len(to_remove)} degenerate points that are too far from the surface or len!=1. Remaining degenerate points: {len(degenerate_pts)}")
+
+def init_gradients_interp(sdf_points, sdf_values, interpolator : Interpolator, degenerate_pts, batch, ngbrs_list, options : Options):
     '''
     Estimate gradients by fitting a Duchon interpolator to the signed distance data and evaluating its gradient.
 
@@ -220,8 +304,8 @@ def estimate_gradients_interp(sdf_points, sdf_values, interpolator : Interpolato
         A fitted Interpolator object that can predict values and gradients.
     visible_arcs: a dictionary: point index -> list of visible arcs
         A collection of visible arcs that can be used to clamp the gradients.
-    degenerate_arcs: a dictionary: point index -> list of degenerate arcs
-        A collection of degenerate arcs that can be used to clamp the gradients.
+    degenerate_pts: a dictionary: point index -> list of degenerate points
+        A collection of degenerate points that can be used to clamp the gradients.
     colinear_neighbors: a dictionary: point index -> list of colinear neighbors, optional
         A collection of colinear neighbors that can be used for gradient estimation. Default is None.
     Returns:
@@ -229,14 +313,34 @@ def estimate_gradients_interp(sdf_points, sdf_values, interpolator : Interpolato
     gradients: (N, d) array of estimated gradient vectors
         The estimated gradient vectors at each input point.
     '''
+    interpolator.fit(sdf_points, sdf_values)
+    print(f"======== first fit done with input {len(sdf_points)} points ")
+
+    filter_degenerate_pts(degenerate_pts, interpolator)
+    if options.export_short_arcs and len(degenerate_pts) > 0:
+        mask = np.zeros(len(sdf_points), dtype=bool)
+        mask[list(degenerate_pts.keys())] = True
+        origins = sdf_points[mask]
+        projections = np.array([pts[0] for pts in degenerate_pts.values()])
+        mask = np.ones(len(origins), dtype=bool)
+        out_path = f'out/shortArcs_{options.name}_{options.grid_len}.glb'
+        export_projection_visualization(origins, projections, mask=mask, recon_mesh=options.gt_mesh, output_path=out_path)
 
     to_train_points = sdf_points.copy()
     to_train_sdf = sdf_values.copy()
-    # TODO: Add points for degenerate arcs.
+    # Add points for degenerate arcs.
+    degenerate_pts_to_add = []
+    for i, pts in degenerate_pts.items():
+        degenerate_pts_to_add.append(pts[0])
+    if len(degenerate_pts_to_add) > 0:
+        to_train_points = np.vstack([to_train_points, np.array(degenerate_pts_to_add)])
+        to_train_sdf = np.append(to_train_sdf, np.zeros(len(degenerate_pts_to_add)))  # The SDF value at the projected point should be 0
     print(f"After adding points for degenerate arcs, total points: {len(to_train_points)}")
     interpolator.fit(to_train_points, to_train_sdf)
-    print(f"first fit done with input {len(to_train_points)} points")
+    print(f"======== second fit done with input {len(to_train_points)} points (including {len(degenerate_pts_to_add)} degenerate arc points)")
+
     gradients = interpolator.sample_best_gradients(sdf_points, sdf_values)
+    ## project to 0-level surface code
     # verts, faces = interpolator.extract_zero_level_set(bounds=((sdf_points[:, 0].min(), sdf_points[:, 0].max()), 
     #                                             (sdf_points[:, 1].min(), sdf_points[:, 1].max()), 
     #                                             (sdf_points[:, 2].min(), sdf_points[:, 2].max())), resolution=50)
@@ -251,24 +355,68 @@ def estimate_gradients_interp(sdf_points, sdf_values, interpolator : Interpolato
     # norms[norms < 1e-10] = 1.0
     # gradients /= norms
     print("initial gradient estimation done")
-    if colinear_neighbors is not None:
-        # Clamp the gradients ONLY in clamp_indices to the directions defined by their colinear neighbors.
-        # va.clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values, clamp_indices)
-        # Clamp the gradients to the directions defined by their colinear neighbors.
-        clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values)
-    # TODO: Clamp gradients to visible arcs based on the lowest function value.
-    clamp_indices = clamp_gradients_to_arcs(sdf_points, sdf_values, gradients, degenerate_arcs)
-    for i, angle in degenerate_arcs.items():
+
+    if options.clamp:
+        clamp_gradients_to_arcs(sdf_points, sdf_values, gradients, degenerate_pts, batch, ngbrs_list, interpolator, options.tolerance)
+
+    # debug
+    for i, pts in degenerate_pts.items():
+        if len(pts) != 1:
+            print(f"ERRRRRRRRRRR")
         # For points with degenerate arcs, set gradient directly toward the angle
-        gradients[i] = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
+        gradients[i] = (sdf_points[i] - pts[0]) / (sdf_values[i] + 1e-10)
+        proj = sdf_points[i] - sdf_values[i] * gradients[i]
+        pred_sdf = interpolator.predict(proj[np.newaxis, :])
+        if pred_sdf > 0.6:
+            print(f"Warning: For degenerate point {i}, the projected point is still outside with predicted sdf {pred_sdf}. This may cause issues in later optimization.")
     return gradients
 
-def yongs_algorithm(sdf_points, sdf_values, gt_gradients=None, max_iters=100):
+def find_all_neighbors_list(centers, radii):
+    """ Find all neighbors for each point based on the sphere defined by centers and radii. """
+    offsets, neighbors = sphere_intersect.find_intersections(centers, radii)
+    return offsets, neighbors, [neighbors[offsets[i]:offsets[i+1]] for i in range(len(offsets)-1)]
+
+def get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8):
+    nbr_offsets, nbr_indices, nbr_lists = find_all_neighbors_list(sdf_points, np.abs(sdf_values))
+    # batch_res = compute_batch(sdf_points, np.abs(sdf_values), nbr_indices, nbr_offsets)
+    batch_res = sep.compute_exposed_batch(sdf_points, np.abs(sdf_values), nbr_indices, nbr_offsets, tol=1e-4)
+    n_arcs_arr  = batch_res['n_arcs']
+    n_pts_arr   = batch_res['n_points']
+    nbr_counts = np.array([len(v) for v in nbr_lists])
+    fully_covered = int(np.sum(
+        (n_arcs_arr == 0) & (n_pts_arr == 0) & (nbr_counts > 0)))
+    print(fully_covered, "fully covered spheres (with neighbors but no arcs or points), which are likely to be completely invisible")
+    # Extract degenerate points and organize by sphere
+    degenerate_pts = {}
+    if 'point_positions' in batch_res:
+        pt_positions = batch_res['point_positions']  # shape: [total_pts, 3]
+        pt_sphere_idx = batch_res['point_sphere_idx']  # shape: [total_pts]
+        for idx, pos in zip(pt_sphere_idx, pt_positions):
+            if idx not in degenerate_pts:
+                degenerate_pts[idx] = []
+            degenerate_pts[idx].append(pos)
+    return batch_res, degenerate_pts, nbr_lists
+
+def yongs_algorithm(sdf_points, sdf_values, options : Options):
+    gt_gradients, max_iters, gt_mesh = options.gt_gradients, options.max_iters, options.gt_mesh
+    if options.tolerance is None:
+        from sklearn.neighbors import KDTree
+        tree = KDTree(sdf_points)
+        dists, _ = tree.query(sdf_points, k=2)  # k=2, 0 distance for k=0 (the point itself)
+        mean_spacing = np.median(dists[:, 1])
+        clamp_sdf_tol = mean_spacing * 0.5
+        tolerance = Tolerance(clamp_sdf_tol=clamp_sdf_tol)
+        options.tolerance = tolerance
+
     """ step 1: initial gradient estimation using an interpolation """
-    degenerate_arcs = {}  #TODO: compute degenerate arcs
+    # collect visible arcs for each point, which will be used to clamp the gradients later
+    batch, degenerate_pts, ngbrs_list = get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8)
+    if options.turn_off_short_arcs:
+        degenerate_pts = {}
     interpolator = Interpolator('cubic')
-    init_gradients = estimate_gradients_interp(sdf_points, sdf_values, interpolator, degenerate_arcs)
-    # init_gradients = gt_gradients if gt_gradients is not None else init_gradients
+    init_gradients = init_gradients_interp(sdf_points, sdf_values, interpolator, degenerate_pts, batch, ngbrs_list, options)
+    if options.use_gt_gradients and gt_gradients is not None:
+        init_gradients = gt_gradients
     
     """ step 2: project onto surface, then filter invisible points """
     init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
@@ -281,21 +429,97 @@ def yongs_algorithm(sdf_points, sdf_values, gt_gradients=None, max_iters=100):
 
     """ step 3: refit the interpolator with the original points + projected points """
     interpolator.fit(new_points, new_values, force_recompute=True) # it is the same as interpolator.fit(sdf_points, sdf_values, init_gradients, mask, force_recompute=True)
+    print(f"======== third fit done with initial gradients")
 
     # init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
 
     """ step 4: iterative optimization """
     # gradients = opt.iterative_gradient_alignment(sdf_points, sdf_values, init_gradients, interpolator, visible_arcs, degenerate_arcs, num_iter=iters, gt=points)
-    gradients, interpolator = opt.iterative_projection_3d(sdf_points, sdf_values, init_gradients, interpolator=interpolator, num_iter=max_iters, gt_gradients=gt_gradients)
+    gradients, interpolator = opt.iterative_projection_3d(sdf_points, sdf_values, init_gradients, interpolator=interpolator, num_iter=max_iters, short_arc_idx=degenerate_pts.keys(), gt_gradients=gt_gradients)
 
     # interpolator.fit(sdf_points, sdf_values, gradients, force_recompute=True, use_projection=True)
-    return interpolator
 
-def test_our_method(grid_len=20, path_to_sdf=None, path_to_obj=None, iters=10, save_npz=False):
+    return interpolator, init_projections, mask
+
+def export_projection_visualization(sdf_points, init_projections, mask, recon_mesh, output_path='out/projection_debug.glb'):
+    """
+    Export a GLB visualization showing SDF points -> projections with visibility filtering.
+    
+    Visible projections: red SDF sphere -> blue projection sphere + green line
+    Invisible projections: red SDF sphere -> gray projection sphere + red line
+    """
+    import trimesh
+    from trimesh.visual.material import PBRMaterial
+    import os
+    
+    scene = trimesh.Scene()
+    
+    # Add reconstructed mesh
+    if recon_mesh is not None:
+        mesh_copy = recon_mesh.copy()
+        mesh_copy.visual.material = PBRMaterial(
+            baseColorFactor=[200, 200, 200, 255], alphaMode='OPAQUE')
+        scene.add_geometry(mesh_copy)
+    
+    num_visible = np.sum(mask)
+    num_invisible = np.sum(~mask)
+    print(f"\nBuilding GLB scene: {num_visible} visible + {num_invisible} invisible projections...")
+    
+    for i in range(len(sdf_points)):
+        sdf_pt = sdf_points[i]
+        proj_pt = init_projections[i]
+        is_visible = mask[i]
+        
+        # SDF point (always gray sphere)
+        sdf_geom = trimesh.primitives.Sphere(radius=0.0008, center=sdf_pt)
+        sdf_geom.visual.material = PBRMaterial(
+            baseColorFactor=[100, 100, 100, 255],
+            emissiveFactor=[0.3, 0.3, 0.3],
+            alphaMode='OPAQUE')
+        scene.add_geometry(sdf_geom)
+        
+        if is_visible:
+            # Visible: blue projection sphere + green line
+            proj_geom = trimesh.primitives.Sphere(radius=0.002, center=proj_pt)
+            proj_geom.visual.material = PBRMaterial(
+                baseColorFactor=[0, 0, 255, 255],
+                emissiveFactor=[0.0, 0.0, 1.0],
+                alphaMode='OPAQUE')
+            scene.add_geometry(proj_geom)
+            
+            line_geom = trimesh.load_path([sdf_pt, proj_pt])
+            for e in line_geom.entities:
+                e.color = [0, 255, 0, 255]  # green
+            scene.add_geometry(line_geom)
+        else:
+            # Invisible: light red projection sphere + red line
+            proj_geom = trimesh.primitives.Sphere(radius=0.002, center=proj_pt)
+            proj_geom.visual.material = PBRMaterial(
+                baseColorFactor=[255, 50, 50, 255],
+                emissiveFactor=[1, 0, 0],
+                alphaMode='OPAQUE')
+            scene.add_geometry(proj_geom)
+            
+            line_geom = trimesh.load_path([sdf_pt, proj_pt])
+            for e in line_geom.entities:
+                e.color = [255, 100, 100, 255]  # light red
+            scene.add_geometry(line_geom)
+    
+    # Export
+    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else 'out', exist_ok=True)
+    scene.export(output_path)
+    print(f"Exported to {output_path}")
+
+def test_our_method(options : Options, save_npz=False):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
     """
+    grid_len = options.grid_len
+    path_to_obj = options.path_to_obj
+    path_to_sdf = options.path_to_sdf
+    iters = options.max_iters
+    options.print()
     if path_to_sdf is not None:
         # read sdf data from file
         data = np.load(path_to_sdf)
@@ -304,10 +528,12 @@ def test_our_method(grid_len=20, path_to_sdf=None, path_to_obj=None, iters=10, s
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
         mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_npz)  # Generate new data with 4096 points
+        options.gt_gradients = gt_gradients
+        options.gt_mesh = mesh
 
     # Create and fit the interpolator
     timer = time.perf_counter()
-    interpolator = yongs_algorithm(points, distances, gt_gradients=gt_gradients, max_iters=iters)
+    interpolator, init_projections, mask = yongs_algorithm(points, distances, options)
     print(f"  ⏱  {'Interpolator fitted':<30} {time.perf_counter() - timer:>7.2f} s")
 
     # visualize results using marching cubes to extract isosurface
@@ -339,9 +565,22 @@ def test_our_method(grid_len=20, path_to_sdf=None, path_to_obj=None, iters=10, s
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
     os.makedirs(out_dir, exist_ok=True)
     recon = trimesh.Trimesh(vertices=verts, faces=faces)
-    recon.export(f'{out_dir}/interpolant_{grid_len}_{iters}.obj')
-    trimesh.Trimesh(vertices=verts2, faces=faces2).export(f'{out_dir}/sample_points_{grid_len}.obj')
-    print(f"Exported: {out_dir}/interpolant_{grid_len}_{iters}.obj, {out_dir}/sample_points_{grid_len}.obj")
+    fname = f'interpolant_{grid_len}_{iters}_clampinit.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp.obj'
+    if options.use_gt_gradients:
+        fname = f'interpolant_{grid_len}_gtgrad.obj'
+    recon.export(f'{out_dir}/{fname}')
+    
+    # Export projection visualization GLB
+    if options.export_projections:
+        out_path = f'out/projections_{options.name}_{options.grid_len}_{options.max_iters}.glb'
+        if options.use_gt_gradients:
+            out_path = f'out/projections_{options.name}_{options.grid_len}_gtmesh.glb'
+            export_projection_visualization(points, init_projections, mask, mesh, output_path=out_path)
+            out_path = f'out/projections_{options.name}_{options.grid_len}_gt.glb'
+        export_projection_visualization(points, init_projections, mask, recon, output_path=out_path)
+
+    trimesh.Trimesh(vertices=verts2, faces=faces2).export(f'{out_dir}/sample_points_{grid_len}.obj')    
+    print(f"Exported: {out_dir}/interpolant_{grid_len}_{iters}_clampinit.obj, {out_dir}/sample_points_{grid_len}.obj")
     mesh_distances(recon, mesh, verbose=True)
     return plt
 
@@ -367,12 +606,11 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
-    name = 'eiffel'
+    options = Options(name='horse', grid_len=15, max_iters=10, clamp=False, export_short_arcs=True, export_projections=True, use_gt_gradients=False)
     # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
-    plt = test_our_method(grid_len=20, path_to_obj=f'examples/{name}.obj', iters=0)
-    # check_mesh_error('out/bunny', 'examples/bunny.obj')
-    # test_rfta(grid_len=20, path_to_obj=f'examples/{name}.obj')
-    check_mesh_error(f'out/{name}', f'examples/{name}.obj')
+    plt = test_our_method(options)
+    # test_rfta(options)
+    check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0
     print(f"  ⏱  {'Total execution time':<30} {elapsed:>7.2f} s")
