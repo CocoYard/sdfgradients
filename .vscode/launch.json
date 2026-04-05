@@ -2,6 +2,14 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python: SDF_to_surface_3D.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/SDF_to_surface_3D.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },        
+        {
             "name": "Python: SDF_to_surface.py",
             "type": "debugpy",
             "request": "launch",

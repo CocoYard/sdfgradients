@@ -29,6 +29,7 @@
 #include <pybind11/stl.h>   // std::vector <-> Python list automatic conversion
 
 #include <cmath>
+#include <cfloat>
 #include <cstring>
 #include <vector>
 #include <algorithm>
@@ -58,6 +59,7 @@ struct Tolerances {
     double tol;
     double degen_tol;
     double merge_tol;
+    double tangent_tol;
 };
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -101,6 +103,10 @@ struct Cap {
     Vec3 local_u, local_v;
     double phi;
     int sphere_idx;
+    // only set when the other sphere fully contains main (dist + main.r <= other.r).
+    // value = other.r - dist - main.r = gap between the two sphere surfaces at the closest point.
+    // 0 means internally tangent; DBL_MAX means not a containment cap.
+    double containment_gap;
 };
 
 struct Interval {
@@ -128,7 +134,8 @@ static bool compute_cap(Vec3 mc, double mr, Vec3 oc, double or_, int idx, Cap &o
     if (dist < EPS) {
         if (or_ >= mr) {
             Vec3 n{1,0,0};
-            out = {n, dot(n,mc) - mr - 1, mc, 0, {}, {}, PI, idx};
+            double gap = or_ - mr;  // dist=0, so gap = or_ - dist - mr
+            out = {n, dot(n,mc) - mr - 1, mc, 0, {}, {}, PI, idx, gap};
             return true;
         }
         return false;
@@ -137,7 +144,8 @@ static bool compute_cap(Vec3 mc, double mr, Vec3 oc, double or_, int idx, Cap &o
     if (dist + or_ <= mr) return false;
     if (dist + mr <= or_) {
         Vec3 n = diff * (1.0/dist);
-        out = {n, dot(n,mc) - mr - 1, mc, 0, {}, {}, PI, idx};
+        double gap = or_ - dist - mr;
+        out = {n, dot(n,mc) - mr - 1, mc, 0, {}, {}, PI, idx, gap};
         return true;
     }
 
@@ -148,7 +156,7 @@ static bool compute_cap(Vec3 mc, double mr, Vec3 oc, double or_, int idx, Cap &o
     double phi = std::acos(clampd(h / mr, -1.0, 1.0));
     Vec3 u = perpendicular_unit(n);
     Vec3 v = cross(n, u);
-    out = {n, dot(n, mc) + h, cc, cr, u, v, phi, idx};
+    out = {n, dot(n, mc) + h, cc, cr, u, v, phi, idx, DBL_MAX};
     return true;
 }
 
@@ -446,7 +454,14 @@ static void compute_one(
     if (nc == 0) return;
 
     for (int i = 0; i < nc; i++) {
-        if (caps[i].phi >= PI - EPS10) return;
+        if (caps[i].phi >= PI - EPS10) {
+            if (caps[i].containment_gap <= tol.tangent_tol && *out_npts < MAX_DEGEN_PTS) {
+                // Near-tangent internal containment: treat the tangent point as degenerate.
+                // Use the point opposite to the containing sphere (away from it), which is the exposed side.
+                out_pts[(*out_npts)++] = mc - mr * caps[i].normal;
+            }
+            return;
+        }
     }
 
     int valid_caps[MAX_CAPS];
@@ -539,9 +554,10 @@ py::dict compute_exposed_single(
     double mr,
     py::array_t<double> py_oc,
     py::array_t<double> py_or,
-    double tol_v      = 1e-8,
-    double degen_tol_v = 1e-6,
-    double merge_tol_v = 1e-12)
+    double tol_v        = 1e-8,
+    double degen_tol_v  = 1e-6,
+    double merge_tol_v  = 1e-12,
+    double tangent_tol_v = 1e-8)
 {
     // ── Input validation ──────────────────────────────────────────
     auto mc_buf = py_mc.request();
@@ -553,7 +569,7 @@ py::dict compute_exposed_single(
     if (oc_buf.ndim != 2 || oc_buf.shape[1] != 3)
         throw std::invalid_argument("other_centers must be shape (N,3)");
 
-    Tolerances tol{tol_v, degen_tol_v, merge_tol_v};
+    Tolerances tol{tol_v, degen_tol_v, merge_tol_v, tangent_tol_v};
 
     int n = (int)oc_buf.shape[0];
     double *mc_ptr = static_cast<double*>(mc_buf.ptr);
@@ -679,16 +695,17 @@ py::dict compute_exposed_batch(
     py::array_t<double>  py_radii,
     py::array_t<int64_t> py_nbr_idx,
     py::array_t<int64_t> py_nbr_off,
-    double tol_v       = 1e-8,
-    double degen_tol_v = 1e-6,
-    double merge_tol_v = 1e-12)
+    double tol_v         = 1e-8,
+    double degen_tol_v   = 1e-6,
+    double merge_tol_v   = 1e-12,
+    double tangent_tol_v = 1e-8)
 {
     auto c_buf   = py_centers.request();
     auto r_buf   = py_radii.request();
     auto idx_buf = py_nbr_idx.request();
     auto off_buf = py_nbr_off.request();
 
-    Tolerances tol{tol_v, degen_tol_v, merge_tol_v};
+    Tolerances tol{tol_v, degen_tol_v, merge_tol_v, tangent_tol_v};
 
     int N = (int)c_buf.shape[0];
     double  *centers  = static_cast<double*>(c_buf.ptr);
@@ -1088,12 +1105,13 @@ PYBIND11_MODULE(sphere_exposed_pybind, m) {
         py::arg("radius"),
         py::arg("other_centers"),
         py::arg("other_radii"),
-        py::arg("tol")        = 1e-8,
-        py::arg("degen_tol")  = 1e-6,
-        py::arg("merge_tol")  = 1e-12,
+        py::arg("tol")          = 1e-8,
+        py::arg("degen_tol")    = 1e-6,
+        py::arg("merge_tol")    = 1e-12,
+        py::arg("tangent_tol")  = 1e-8,
         R"doc(
 compute_exposed_single(center, radius, other_centers, other_radii,
-                       tol=1e-8, degen_tol=1e-6, merge_tol=1e-12) -> dict
+                       tol=1e-8, degen_tol=1e-6, merge_tol=1e-12, tangent_tol=1e-8) -> dict
 
 Returns dict with keys:
   arcs_by_cap      : {int: [(start, end), ...]}  compacted cap indices 0..K-1
@@ -1118,12 +1136,13 @@ Returns dict with keys:
         py::arg("radii"),
         py::arg("nbr_indices"),
         py::arg("nbr_offsets"),
-        py::arg("tol")        = 1e-8,
-        py::arg("degen_tol")  = 1e-6,
-        py::arg("merge_tol")  = 1e-12,
+        py::arg("tol")          = 1e-8,
+        py::arg("degen_tol")    = 1e-6,
+        py::arg("merge_tol")    = 1e-12,
+        py::arg("tangent_tol")  = 1e-8,
         R"doc(
 compute_exposed_batch(centers, radii, nbr_indices, nbr_offsets,
-                      tol=1e-8, degen_tol=1e-6, merge_tol=1e-12) -> dict
+                      tol=1e-8, degen_tol=1e-6, merge_tol=1e-12, tangent_tol=1e-8) -> dict
 
 CSR input. arc_cap_idx values are compacted per-sphere (no empty caps).
 Returns dict with keys:

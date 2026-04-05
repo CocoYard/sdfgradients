@@ -30,6 +30,9 @@ class Cap:
     local_v: np.ndarray
     phi: float
     sphere_idx: int
+    containment_gap: float = np.inf  # only set when the other sphere fully contains main (dist + main.r <= other.r).
+                                     # value = other.r - dist - main.r = gap between the two sphere surfaces at the closest point.
+                                     # 0 means internally tangent; inf means not a containment cap.
 
 @dataclass
 class BoundaryArc:
@@ -86,8 +89,10 @@ def compute_cap(main, other, sphere_idx):
         return None
     if dist + main.radius <= other.radius:
         n = diff / dist
+        gap = other.radius - dist - main.radius
         return Cap(n, np.dot(n, main.center) - main.radius - 1,
-                   main.center, 0.0, np.zeros(3), np.zeros(3), np.pi, sphere_idx)
+                   main.center, 0.0, np.zeros(3), np.zeros(3), np.pi, sphere_idx,
+                   containment_gap=gap)
     n = diff / dist
     h = (main.radius**2 - other.radius**2 + dist**2) / (2 * dist)
     d_plane = np.dot(n, main.center) + h
@@ -265,7 +270,7 @@ def compute_exposed_arcs_on_circle(cap_idx, caps, active_cap_indices, skip_tol=1
 
 # Main function
 
-def compute_exposed_region(main, caps, tol=1e-8, degen_tol = 1e-6, merge_tol=1e-12):
+def compute_exposed_region(main, caps, tol=1e-8, degen_tol=1e-6, merge_tol=1e-12, tangent_tol=1e-8):
     """
     Compute the exposed region boundary incrementally.
 
@@ -280,6 +285,11 @@ def compute_exposed_region(main, caps, tol=1e-8, degen_tol = 1e-6, merge_tol=1e-
     valid_caps = []
     for i, cap in enumerate(caps):
         if cap.phi >= np.pi - 1e-10:
+            if cap.containment_gap <= tangent_tol:
+                # Near-tangent internal containment: treat tangent point as degenerate.
+                # Use the point opposite to the containing sphere (away from it), which is the exposed side.
+                tangent_pt = main.center - main.radius * cap.normal
+                return {}, [tangent_pt]
             return {}, []
         if cap.circle_radius < 1e-14:
             continue
@@ -434,6 +444,27 @@ def test_fully_covered():
     print("  PASSED\n")
 
 
+def test_near_tangent_containment():
+    print("=" * 60)
+    print("Test: near-tangent containment -> degenerate point at tangent")
+    print("=" * 60)
+    # small sphere at y=-0.537, r=0.0368; large sphere at y=-0.600, r=0.1000
+    # dist=0.0632, gap = 0.1000 - 0.0632 - 0.0368 = 0.0 (exact tangency)
+    main = Sphere([0.0, -0.537, 0.0], 0.0368)
+    others = [Sphere([0.0, -0.600, 0.0], 0.1000)]
+    caps = compute_all_caps(main, others)
+    arcs_by_cap, degen = compute_exposed_region(main, caps, tangent_tol=1e-3)
+    print(f"  arcs: {len(arcs_by_cap)}, degen points: {len(degen)}")
+    for pt in degen:
+        print(f"    ({pt[0]:+.6f}, {pt[1]:+.6f}, {pt[2]:+.6f})")
+    assert len(degen) == 1
+    # tangent point should be main.center - r * normal(toward large sphere) = away from large sphere
+    # normal = (large.center - main.center) / dist = (0,-1,0)
+    expected = np.array([0.0, -0.537 + 0.0368, 0.0])
+    np.testing.assert_allclose(degen[0], expected, atol=1e-6)
+    print("  PASSED\n")
+
+
 def test_offset_center():
     print("=" * 60)
     print("Test: Offset center, 4 caps -> 2 degenerate points")
@@ -481,14 +512,15 @@ def test_random_compare():
 
 
 if __name__ == "__main__":
-    test_no_caps()
-    test_one_cap()
-    test_two_caps()
-    test_four_caps_degenerate()
-    test_five_caps_one_point()
-    test_fully_covered()
-    test_offset_center()
-    test_random_compare()
-    print("=" * 60)
-    print("All tests passed!")
-    print("=" * 60)
+    # test_no_caps()
+    # test_one_cap()
+    # test_two_caps()
+    # test_four_caps_degenerate()
+    # test_five_caps_one_point()
+    # test_fully_covered()
+    test_near_tangent_containment()
+    # test_offset_center()
+    # test_random_compare()
+    # print("=" * 60)
+    # print("All tests passed!")
+    # print("=" * 60)

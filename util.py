@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.spatial.distance import cdist
 import trimesh
-import sphere_exposed_pybind as sep
+from bench import sphere_exposed_pybind as sep
 
 def get_sphere_data(batch, i):
     """从 batch 结果里切出第 i 个球的数据"""
@@ -64,10 +64,17 @@ def are_points_visible(points, sdf_points, sdf_values, epsilon=1e-8):
     visible : (N,) boolean array, True if the corresponding point is visible, False if it is occluded by any SDF point's sphere.
     """
     # check if points are not inside any other sdf_point's sphere
+    nan_mask = np.any(np.isnan(points), axis=1)
+    
     dists = cdist(points, sdf_points, 'euclidean')
     radii = np.abs(sdf_values)
     inside = dists < (radii[np.newaxis, :] - epsilon)
-    return ~np.any(inside, axis=1)
+    result = ~np.any(inside, axis=1)
+    
+    # Points containing NaN are marked as not visible
+    result[nan_mask] = False
+    
+    return result
 
 def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=False):
     """
