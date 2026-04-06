@@ -7,7 +7,7 @@ import numpy as np
 # matplotlib.use('Agg')  # Non-interactive backend, no window shown
 import matplotlib.pyplot as plt
 import iterative_projection as ip
-from interpolation import Interpolator, CurlFree_Interpolator, PUInterpolator
+from interpolation import Interpolator, CurlFree_Interpolator, PUInterpolator, DuchonInterpolator
 from enum import Enum
 import time
 import optimization as opt
@@ -18,7 +18,10 @@ from bench import sphere_intersect
 import util
 
 class Options:
-    def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', turn_off_short_arcs=False, export_short_arcs=True, export_projections=True, use_gt_gradients=False, turn_off_projection=False):
+    def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', 
+                 turn_off_short_arcs=False, export_short_arcs=True, export_projections=True,
+                 use_gt_gradients=False, interpolator_type='PU', interp_partition='grid', overlap=0.5, 
+                 turn_off_projection=False):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -28,6 +31,9 @@ class Options:
         self.export_short_arcs = export_short_arcs  # whether to export short arcs .glb for visualization
         self.export_projections = export_projections  # export gradients .glb for visualization
         self.use_gt_gradients = use_gt_gradients
+        self.interpolator_type = interpolator_type  # 'Duchon' or 'PU'
+        self.interp_partition = interp_partition  # 'grid' or 'fps' or 'sphere', only for PU interpolator
+        self.interp_overlap = overlap
         
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
@@ -37,7 +43,15 @@ class Options:
         self.path_to_sdf = None # set it manually to avoid accidentally loading old data, e.g. f'out/{name}_sdf_{grid_len**3}.npz'
         # self.turn_off_projection = turn_off_projection  # this means only interpolating SDF values without projection or optimization
     def print(self):
-        print(f"Options: grid_len={self.grid_len}, max_iters={self.max_iters}, clamp={self.clamp}, turn_off_short_arcs={self.turn_off_short_arcs}, export_short_arcs={self.export_short_arcs}, export_projections={self.export_projections}, use_gt_gradients={self.use_gt_gradients}")
+        print(f"Options: grid_len={self.grid_len},"
+              f" max_iters={self.max_iters}, clamp={self.clamp},"
+              f" turn_off_short_arcs={self.turn_off_short_arcs},"
+              f" export_short_arcs={self.export_short_arcs},"
+              f" export_projections={self.export_projections},"
+              f" use_gt_gradients={self.use_gt_gradients},"
+              f" interpolator_type={self.interpolator_type},"
+              f" interp_partition={self.interp_partition}",
+              f" interp_overlap={self.interp_overlap}")
 
 class Tolerance:
     def __init__(self, clamp_radius_ratio=0.2, clamp_sdf_tol=1e-2, angle_tol=np.radians(15)):
@@ -413,7 +427,9 @@ def yongs_algorithm(sdf_points, sdf_values, options : Options):
     batch, degenerate_pts, ngbrs_list = get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8)
     if options.turn_off_short_arcs:
         degenerate_pts = {}
-    interpolator = PUInterpolator('cubic')
+    interpolator = PUInterpolator('cubic', overlap=options.interp_overlap, partition=options.interp_partition)  # use PU for better extrapolation, which is important for the initial gradient estimation. We can switch to Duchon for faster fitting in the optimization loop since we only need to evaluate gradients at given points instead of sampling new points.
+    if options.interpolator_type == 'Duchon':
+        interpolator = DuchonInterpolator('cubic')
     init_gradients = init_gradients_interp(sdf_points, sdf_values, interpolator, degenerate_pts, batch, ngbrs_list, options)
     if options.use_gt_gradients and gt_gradients is not None:
         init_gradients = gt_gradients
@@ -428,7 +444,8 @@ def yongs_algorithm(sdf_points, sdf_values, options : Options):
     new_values = np.concatenate([sdf_values, np.zeros(num_visible_points)])
 
     """ step 3: refit the interpolator with the original points + projected points """
-    interpolator.fit(new_points, new_values, force_recompute=True) # it is the same as interpolator.fit(sdf_points, sdf_values, init_gradients, mask, force_recompute=True)
+    # interpolator.fit(new_points, new_values, force_recompute=True) # it is the same as interpolator.fit(sdf_points, sdf_values, init_gradients, mask, force_recompute=True)
+    interpolator.fit(sdf_points, sdf_values, init_gradients, mask, force_recompute=True)
     print(f"======== third fit done with initial gradients")
 
     # init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
@@ -565,9 +582,9 @@ def test_our_method(options : Options, save_npz=False):
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
     os.makedirs(out_dir, exist_ok=True)
     recon = trimesh.Trimesh(vertices=verts, faces=faces)
-    fname = f'interpolant_{grid_len}_{iters}_clampinit.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp.obj'
+    fname = f'interpolant_{grid_len}_{iters}_clampinit_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}.obj'
     if options.use_gt_gradients:
-        fname = f'interpolant_{grid_len}_gtgrad.obj'
+        fname = f'interpolant_{grid_len}_gtgrad_{options.interpolator_type}.obj'
     recon.export(f'{out_dir}/{fname}')
     
     # Export projection visualization GLB
@@ -580,7 +597,7 @@ def test_our_method(options : Options, save_npz=False):
         export_projection_visualization(points, init_projections, mask, recon, output_path=out_path)
 
     trimesh.Trimesh(vertices=verts2, faces=faces2).export(f'{out_dir}/sample_points_{grid_len}.obj')    
-    print(f"Exported: {out_dir}/interpolant_{grid_len}_{iters}_clampinit.obj, {out_dir}/sample_points_{grid_len}.obj")
+    print(f"Exported: {out_dir}/{fname}, {out_dir}/sample_points_{grid_len}.obj")
     mesh_distances(recon, mesh, verbose=True)
     return plt
 
@@ -601,14 +618,27 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
         if mesh_file.endswith('.obj'):
             mesh = trimesh.load(os.path.join(dir_to_meshes, mesh_file))
             haus, chamfer = mesh_distances(mesh, gt_mesh)
-            print(f"{mesh_file:<30} against ground truth...", end='')
+            print(f"{mesh_file:<50} against ground truth...", end='')
             print(f"  Hausdorff: {haus:.4f}  Chamfer: {chamfer:.4f}")
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
-    options = Options(name='horse', grid_len=20, max_iters=10, clamp=True, export_short_arcs=True, export_projections=True, use_gt_gradients=False)
+    options = Options(name='eiffel', grid_len=20, max_iters=10, clamp=True, 
+                    export_short_arcs=True, export_projections=False, 
+                    use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
+                    overlap=0.2)
     # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
     plt = test_our_method(options)
+    # for grid_len in [20, 25]:  # 20^3=8000 points, 30^3=27000 points
+    #     for max_iters in [0, 10]:  # 0 means no optimization, only initial gradient estimation and projection
+    #         for interp_partition in ['sphere', 'grid']:
+    #             for overlap in [0, 0.5, 1]:
+    #                 options = Options(name='eiffel', grid_len=20, max_iters=0, clamp=True, 
+    #                                 export_short_arcs=True, export_projections=False, 
+    #                                 use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
+    #                                 overlap=1)
+    #                 # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
+    #                 plt = test_our_method(options)
     # test_rfta(options)
     check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
 

@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.spatial.distance import cdist
 from abc import ABC, abstractmethod
+from scipy.spatial import KDTree
 import time
 
 DEBUG_TIME = True
@@ -989,9 +990,9 @@ class PUInterpolator(Interpolator):
     by decomposing the domain into overlapping patches with local solves.
     """
     def __init__(self, kernel='thin_plate', overlap=0.25,
-                 min_points=10, max_points=200, partition='fps'):
+                 min_points=10, max_points=200, partition='grid'):
         """
-        partition: 'fps' (farthest point sampling) or 'kdtree' (recursive median split).
+        partition: 'fps' (farthest point sampling) or 'sphere' and 'grid' (recursive median split).
         """
         self.kernel = kernel
         self.overlap = overlap
@@ -1001,7 +1002,7 @@ class PUInterpolator(Interpolator):
         self.patches = []  # list of (center, radius, local_interpolator)
         self.trained = False
 
-    def _kdtree_partition(self, points, tree):
+    def _kdtree_partition(self, points, tree, is_grid=False):
         """
         KD-tree style recursive median split, then extend each leaf into a ball.
         Same logic as the original _subdivide but returns the same
@@ -1022,12 +1023,65 @@ class PUInterpolator(Interpolator):
         leaves = subdivide(np.arange(len(points)))
         patches_meta = []
         for leaf_idx in leaves:
-            leaf_pts = points[leaf_idx]
-            center = leaf_pts.mean(axis=0)
-            r_core = float(np.max(np.linalg.norm(leaf_pts - center, axis=1)))
-            R_ext = r_core * (1.0 + self.overlap)
-            ext_idx = np.array(tree.query_ball_point(center, R_ext), dtype=int)
-            patches_meta.append((center, R_ext, ext_idx))
+            if is_grid:
+                leaf_pts = points[leaf_idx]
+                spreads = leaf_pts.max(axis=0) - leaf_pts.min(axis=0)
+                center = spreads * 0.5 + leaf_pts.min(axis=0)
+                half_core = spreads * 0.5
+                delta     = half_core.max() * self.overlap
+                half_ext  = half_core + delta
+                if self.overlap == 0.0:
+                    ext_idx = leaf_idx
+                else:
+                    bsphere_r  = float(np.linalg.norm(half_ext))
+                    candidates = np.array(tree.query_ball_point(center, bsphere_r), dtype=int)
+                    in_box     = np.all(np.abs(points[candidates] - center) <= half_ext, axis=1)
+                    ext_idx    = candidates[in_box]
+                patches_meta.append((center, half_ext, ext_idx))
+            else:
+                leaf_pts = points[leaf_idx]
+                center = leaf_pts.mean(axis=0)
+                r_core = float(np.max(np.linalg.norm(leaf_pts - center, axis=1)))
+                R_ext = r_core * (1.0 + self.overlap)
+                ext_idx = np.array(tree.query_ball_point(center, R_ext), dtype=int)
+                patches_meta.append((center, R_ext, ext_idx))
+        if not is_grid:
+            # 1. 提取所有中心点和半径转为 Numpy 数组，以便向量化加速
+            centers = np.array([p[0] for p in patches_meta])
+            radii = np.array([p[1] for p in patches_meta])
+            
+            # 2. 按照半径从大到小进行排序的索引
+            sort_idx = np.argsort(-radii)
+            
+            # 3. 维护一个布尔掩码，记录哪些球被保留
+            keep = np.ones(len(patches_meta), dtype=bool)
+            
+            for idx in range(len(sort_idx)):
+                i = sort_idx[idx]
+                
+                # 如果这个球已经被更大的球吞并了，直接跳过
+                if not keep[i]:
+                    continue
+                
+                # 提取排在它后面的、且目前存活的更小的球的索引
+                candidates = sort_idx[idx + 1:]
+                candidates = candidates[keep[candidates]]
+                
+                if len(candidates) == 0:
+                    break
+                    
+                # 4. 向量化计算当前大球到所有候选小球的距离
+                dist = np.linalg.norm(centers[candidates] - centers[i], axis=1)
+                
+                # 5. 判断包含关系：中心距离 <= 大球半径 - 小球半径
+                # 等价于 dist + r_small <= r_big
+                contained = dist <= (radii[i] - radii[candidates])
+                
+                # 将所有被包含的小球标记为 False (剔除)
+                keep[candidates[contained]] = False
+                
+            # 6. 生成最终清理后的 patches 列表
+            patches_meta = [patches_meta[i] for i in range(len(patches_meta)) if keep[i]]
         return patches_meta
 
     @staticmethod
@@ -1035,6 +1089,21 @@ class PUInterpolator(Interpolator):
         """Wendland C2 compactly supported weight: (1 - r/R)^4 * (4r/R + 1), 0 outside."""
         s = np.clip(r / radius, 0.0, 1.0)
         return (1.0 - s) ** 4 * (4.0 * s + 1.0)
+
+    @staticmethod
+    def _box_weight(pts, center, half_ext):
+        """
+        Tensor-product Wendland C2 weight over an AABB.
+
+        For each axis k: s_k = |x_k - c_k| / h_k
+          phi_k = (1 - s_k)^4 * (4*s_k + 1)
+        w(x) = prod_k phi_k,  zero outside the box.
+        The product of C2 functions is still C2, and the support is exactly the box.
+        """
+        s = np.abs(pts - center) / half_ext        # (N, d)
+        s = np.clip(s, 0.0, 1.0)
+        phi = (1.0 - s) ** 4 * (4.0 * s + 1.0)    # (N, d)
+        return phi.prod(axis=1)                     # (N,)
 
     def _fps_partition(self, points, tree):
         """
@@ -1079,7 +1148,6 @@ class PUInterpolator(Interpolator):
         """
         Adaptively partition the domain and fit local interpolators on each patch.
         """
-        from scipy.spatial import KDTree
         if gradients is not None:
             if mask is None:
                 projections = points - values[:, np.newaxis] * gradients
@@ -1102,10 +1170,11 @@ class PUInterpolator(Interpolator):
         if DEBUG_TIME:
             t1 = time.perf_counter()
             print(f"  [PU fit] build KDTree: {t1-t0:.3f}s")
-        self.partition = 'kdtree'
-        # self.partition = 'fps'
-        if self.partition == 'kdtree':
+        if self.partition == 'sphere':
             patches_meta = self._kdtree_partition(points, tree)
+        elif self.partition == 'grid':
+            patches_meta = self._kdtree_partition(points, tree, is_grid=True)
+            # patches_meta = self._grid_partition(points, tree)
         else:
             patches_meta = self._fps_partition(points, tree)
         if DEBUG_TIME:
@@ -1140,8 +1209,13 @@ class PUInterpolator(Interpolator):
         self._all_values = values
 
         # Build KDTree on patch centers for fast query-to-patch lookup
+        self._patch_type = 'box' if self.partition == 'grid' else 'sphere'
         self._patch_centers = np.array([c for c, _, _ in self.patches])
-        self._patch_radii = np.array([r for _, r, _ in self.patches])
+        if self._patch_type == 'box':
+            # Store bounding-sphere radius of each extended box for fallback queries
+            self._patch_radii = np.array([float(np.linalg.norm(h)) for _, h, _ in self.patches])
+        else:
+            self._patch_radii = np.array([r for _, r, _ in self.patches])
         self._max_radius = self._patch_radii.max()
         self._patch_tree = KDTree(self._patch_centers)
 
@@ -1196,13 +1270,16 @@ class PUInterpolator(Interpolator):
         # Add points as small spheres
         pc = trimesh.PointCloud(points, colors=[255, 0, 0, 255])
         scene.add_geometry(pc, node_name=f'points')
-        for i, (center, radius, interp) in enumerate(self.patches):
+        use_box = getattr(self, '_patch_type', 'sphere') == 'box'
+        for i, (center, radius_or_half, _) in enumerate(self.patches):
             color = cmap_colors[i % len(cmap_colors)]
-            sphere = trimesh.creation.icosphere(subdivisions=2, radius=radius)
-            sphere.apply_translation(center)
-            # sphere.visual.face_colors = [*color, 50]
-            sphere.visual.material = PBRMaterial(baseColorFactor=[*color, 100], alphaMode='BLEND')
-            scene.add_geometry(sphere, node_name=f'patch_{i}')
+            if use_box:
+                mesh = trimesh.creation.box(extents=2 * radius_or_half)
+            else:
+                mesh = trimesh.creation.icosphere(subdivisions=2, radius=radius_or_half)
+            mesh.apply_translation(center)
+            mesh.visual.material = PBRMaterial(baseColorFactor=[*color, 100], alphaMode='BLEND')
+            scene.add_geometry(mesh, node_name=f'patch_{i}')
         scene.export(f'pu_patches_{len(self.patches)}.glb')
         print(f"  [PU] saved patch visualization to pu_patches_{len(self.patches)}.glb ({len(self.patches)} patches)")
 
@@ -1225,22 +1302,32 @@ class PUInterpolator(Interpolator):
         #     t1 = time.perf_counter()
         #     t_query = 0; t_predict = 0; n_patches_used = 0
 
-        for center, radius, interp in self.patches:
-            # if DEBUG_TIME: tq0 = time.perf_counter()
-            idx = query_tree.query_ball_point(center, radius)
-            # if DEBUG_TIME: t_query += time.perf_counter() - tq0
-            if len(idx) == 0:
-                continue
-            # if DEBUG_TIME: n_patches_used += 1
-            idx = np.array(idx)
-            pts = x_new[idx]
-            dist = np.linalg.norm(pts - center, axis=1)
+        use_box = getattr(self, '_patch_type', 'sphere') == 'box'
+        for center, radius_or_half, interp in self.patches:
+            if use_box:
+                half_ext   = radius_or_half
+                bsphere_r  = float(np.linalg.norm(half_ext))
+                candidates = query_tree.query_ball_point(center, bsphere_r)
+                if len(candidates) == 0:
+                    continue
+                candidates = np.array(candidates)
+                pts_cand   = x_new[candidates]
+                in_box     = np.all(np.abs(pts_cand - center) <= half_ext, axis=1)
+                idx        = candidates[in_box]
+                if len(idx) == 0:
+                    continue
+                pts = x_new[idx]
+                w   = self._box_weight(pts, center, half_ext)
+            else:
+                idx = query_tree.query_ball_point(center, radius_or_half)
+                if len(idx) == 0:
+                    continue
+                idx  = np.array(idx)
+                pts  = x_new[idx]
+                dist = np.linalg.norm(pts - center, axis=1)
+                w    = self._wendland_weight(dist, radius_or_half)
 
-            w = self._wendland_weight(dist, radius)
-            # if DEBUG_TIME: tp0 = time.perf_counter()
             v = interp.predict(pts)
-            # if DEBUG_TIME: t_predict += time.perf_counter() - tp0
-
             result[idx] += w * v
             weight_sum[idx] += w
 
@@ -1279,17 +1366,32 @@ class PUInterpolator(Interpolator):
 
         query_tree = _KDTree(x_new)
 
-        for center, radius, interp in self.patches:
-            idx = query_tree.query_ball_point(center, radius)
-            if len(idx) == 0:
-                continue
-            idx = np.array(idx)
-            pts = x_new[idx]
-            dist = np.linalg.norm(pts - center, axis=1)
+        use_box = getattr(self, '_patch_type', 'sphere') == 'box'
+        for center, radius_or_half, interp in self.patches:
+            if use_box:
+                half_ext   = radius_or_half
+                bsphere_r  = float(np.linalg.norm(half_ext))
+                candidates = query_tree.query_ball_point(center, bsphere_r)
+                if len(candidates) == 0:
+                    continue
+                candidates = np.array(candidates)
+                pts_cand   = x_new[candidates]
+                in_box     = np.all(np.abs(pts_cand - center) <= half_ext, axis=1)
+                idx        = candidates[in_box]
+                if len(idx) == 0:
+                    continue
+                pts = x_new[idx]
+                w   = self._box_weight(pts, center, half_ext)
+            else:
+                idx = query_tree.query_ball_point(center, radius_or_half)
+                if len(idx) == 0:
+                    continue
+                idx  = np.array(idx)
+                pts  = x_new[idx]
+                dist = np.linalg.norm(pts - center, axis=1)
+                w    = self._wendland_weight(dist, radius_or_half)
 
-            w = self._wendland_weight(dist, radius)
             g = interp.predict_gradients(pts)
-
             result[idx] += w[:, np.newaxis] * g
             weight_sum[idx] += w
 

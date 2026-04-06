@@ -491,10 +491,7 @@ def iterative_projection_3d(points, values, init_gradients, interpolator : Inter
     values = np.asarray(values, dtype=np.float64).ravel()
     gradients = np.array(init_gradients, dtype=np.float64, copy=True)
 
-    # Normalize initial gradients
-    norms = np.linalg.norm(gradients, axis=1, keepdims=True)
-    gradients /= np.maximum(norms, 1e-12)
-    interpolator.fit(points, values, gradients, force_recompute=False)
+    # interpolator.fit(points, values, gradients, force_recompute=False)
     if gt_gradients is not None:
             print(f"cos_sim mean to the ground truth gradients: {np.mean(np.sum(gt_gradients * gradients, axis=1)):.6f}")
 
