@@ -1,3 +1,4 @@
+from collections import deque
 import numpy as np
 from scipy.spatial.distance import cdist
 from abc import ABC, abstractmethod
@@ -5,6 +6,7 @@ from scipy.spatial import KDTree
 import time
 
 DEBUG_TIME = True
+DEBUG_COVER = True
 
 class Interpolator(ABC):
     """
@@ -990,9 +992,9 @@ class PUInterpolator(Interpolator):
     by decomposing the domain into overlapping patches with local solves.
     """
     def __init__(self, kernel='thin_plate', overlap=0.25,
-                 min_points=10, max_points=200, partition='grid'):
+                 min_points=10, max_points=200, partition='box'):
         """
-        partition: 'fps' (farthest point sampling) or 'sphere' and 'grid' (recursive median split).
+        partition: 'fps' (farthest point sampling) or 'sphere' and 'box' (recursive median split).
         """
         self.kernel = kernel
         self.overlap = overlap
@@ -1001,8 +1003,12 @@ class PUInterpolator(Interpolator):
         self.partition = partition
         self.patches = []  # list of (center, radius, local_interpolator)
         self.trained = False
-
-    def _kdtree_partition(self, points, tree, is_grid=False):
+        # self.max_ext_points = max_points * (1 + max(overlap, 0.5))**3
+        self.max_ext_points = 675
+        if DEBUG_COVER:
+            self.patch_cover_stats = [] # to record the covered patches for each prediction point for later analysis
+        
+    def _kdtree_partition(self, points, tree, is_box=False):
         """
         KD-tree style recursive median split, then extend each leaf into a ball.
         Same logic as the original _subdivide but returns the same
@@ -1022,8 +1028,13 @@ class PUInterpolator(Interpolator):
 
         leaves = subdivide(np.arange(len(points)))
         patches_meta = []
-        for leaf_idx in leaves:
-            if is_grid:
+
+        queue = deque(leaves)
+        print(f"max_points={self.max_points}, max_ext_points={self.max_ext_points}")
+        while queue:
+            leaf_idx = queue.popleft()
+            
+            if is_box:
                 leaf_pts = points[leaf_idx]
                 spreads = leaf_pts.max(axis=0) - leaf_pts.min(axis=0)
                 center = spreads * 0.5 + leaf_pts.min(axis=0)
@@ -1037,15 +1048,132 @@ class PUInterpolator(Interpolator):
                     candidates = np.array(tree.query_ball_point(center, bsphere_r), dtype=int)
                     in_box     = np.all(np.abs(points[candidates] - center) <= half_ext, axis=1)
                     ext_idx    = candidates[in_box]
+                if len(leaf_idx) <= 2:
+                    print(f"Warning: single-point leaf encountered at center {center}")
+                # 超限则继续劈
+                if len(ext_idx) > self.max_ext_points and len(leaf_idx) > 2:
+                    pts = points[leaf_idx]
+                    spreads = pts.max(axis=0) - pts.min(axis=0)
+                    axis = int(np.argmax(spreads))
+                    median = np.median(pts[:, axis])
+                    left_mask = pts[:, axis] <= median
+                    if not left_mask.all() and not (~left_mask).all():
+                        # queue.append(leaf_idx[left_mask])
+                        # queue.append(leaf_idx[~left_mask])
+                        queue.append(leaf_idx[left_mask])
+                        queue.append(leaf_idx[~left_mask])  # ← 用 ~left_mask
+                        continue  # 不生成 patch，改为处理子叶
+                    else:
+                        sort_pts = np.sort(pts, axis=0)
+                        print(sort_pts[:, axis])
+                        # export debug glb
+                        import trimesh
+                        from trimesh.visual.material import PBRMaterial
+                        dbg = trimesh.Scene()
+                        dbg.add_geometry(trimesh.PointCloud(leaf_pts[pts[:, axis]==median], colors=[0,255,0,255]), node_name='median_pts')
+                        # leaf points (red)
+                        dbg.add_geometry(trimesh.PointCloud(leaf_pts, colors=[255,0,0,255]), node_name='leaf_pts')
+                        # ext points (green)
+                        # ext_pts = points[ext_idx & ~leaf_idx]
+                        ext_only = points[np.setdiff1d(ext_idx, leaf_idx)]
+                        dbg.add_geometry(trimesh.PointCloud(ext_only, colors=[0,255,0,255]), node_name='ext_pts')
+                        # core box (blue, semi-transparent)
+                        s_core = trimesh.creation.box(extents=2 * half_core)
+                        s_core.apply_translation(center)
+                        s_core.visual.material = PBRMaterial(baseColorFactor=[0,0,255,80], alphaMode='BLEND')
+                        dbg.add_geometry(s_core, node_name='core_box')
+                        # extended box (yellow, semi-transparent)
+                        s_ext = trimesh.creation.box(extents=2 * half_ext)
+                        s_ext.apply_translation(center)
+                        s_ext.visual.material = PBRMaterial(baseColorFactor=[255,255,0,60], alphaMode='BLEND')
+                        dbg.add_geometry(s_ext, node_name='ext_box')
+                        dbg.export('debug_leaf.glb')
+                        print(f"  [debug] exported debug_leaf.glb  leaf={len(leaf_idx)} ext={len(ext_idx)}")
+
+                    print(f"Warning: single-point leaf encountered at center {center} with core half_extent {np.linalg.norm(half_core):.4f}")
+                    print(f"  Extending to {len(ext_idx)} points within half_extent {np.linalg.norm(half_ext):.4f} ({len(ext_idx) - 1} extra)")
+                
                 patches_meta.append((center, half_ext, ext_idx))
+
             else:
                 leaf_pts = points[leaf_idx]
                 center = leaf_pts.mean(axis=0)
                 r_core = float(np.max(np.linalg.norm(leaf_pts - center, axis=1)))
                 R_ext = r_core * (1.0 + self.overlap)
                 ext_idx = np.array(tree.query_ball_point(center, R_ext), dtype=int)
+                if len(leaf_idx) <= 2:
+                    print(f"Warning: single-point leaf encountered at center {center} with core radius {r_core:.4f}")
+                    print(f"  Extending to {len(ext_idx)} points within radius {R_ext:.4f} ({len(ext_idx) - 1} extra)")
+                # 超限则继续劈
+                if len(ext_idx) > self.max_ext_points and len(leaf_idx) > 2:
+                    pts = points[leaf_idx]
+                    spreads = pts.max(axis=0) - pts.min(axis=0)
+                    axis = int(np.argmax(spreads))
+                    median = np.median(pts[:, axis])
+                    left_mask = pts[:, axis] <= median
+                    right_mask = pts[:, axis] > median
+                    if not left_mask.all() and not (right_mask).all():
+                        queue.append(leaf_idx[left_mask])
+                        queue.append(leaf_idx[right_mask])
+                        continue
+                    else:
+                        sort_pts = np.sort(pts, axis=0)
+                        print(sort_pts[:, axis])
+                        # export debug glb
+                        import trimesh
+                        from trimesh.visual.material import PBRMaterial
+                        dbg = trimesh.Scene()
+                        # leaf points (red)
+                        dbg.add_geometry(trimesh.PointCloud(leaf_pts, colors=[255,0,0,255]), node_name='leaf_pts')
+                        # ext points (green)
+                        # ext_pts = points[ext_idx & ~leaf_idx]
+                        ext_only = points[np.setdiff1d(ext_idx, leaf_idx)]
+                        dbg.add_geometry(trimesh.PointCloud(ext_only, colors=[0,255,0,255]), node_name='ext_pts')
+                        # core box (blue, semi-transparent)
+                        s_core = trimesh.creation.box(extents=[2*r_core, 2*r_core, 2*r_core])
+                        s_core.apply_translation(center)
+                        s_core.visual.material = PBRMaterial(baseColorFactor=[0,0,255,80], alphaMode='BLEND')
+                        dbg.add_geometry(s_core, node_name='core_box')
+                        # extended box (yellow, semi-transparent)
+                        s_ext = trimesh.creation.box(extents=[2*R_ext, 2*R_ext, 2*R_ext])
+                        s_ext.apply_translation(center)
+                        s_ext.visual.material = PBRMaterial(baseColorFactor=[255,255,0,60], alphaMode='BLEND')
+                        dbg.add_geometry(s_ext, node_name='ext_box')
+                        dbg.export('debug_leaf.glb')
+                        print(f"  [debug] exported debug_leaf.glb  leaf={len(leaf_idx)} ext={len(ext_idx)}")
+                        # # print the spread and median info for debugging
+                        # print(f"Warning: unable to split leaf at center {center} with core radius {r_core:.4f}")
+                        # print(len(leaf_idx), "points in leaf, but cannot be split further.")
+                        # print(f"  Spreads: {spreads}, median: {median}")
+                        # print(f"  Left mask sum: {left_mask.sum()}, right mask sum: {right_mask.sum()}")
+                        # print(f"  Extending to {len(ext_idx)} points within radius {R_ext:.4f} ({len(ext_idx) - 1} extra)")
+                        # print(f"  Leaf points max min mean:\n{leaf_pts.max(axis=0)}\n{leaf_pts.min(axis=0)}\n{leaf_pts.mean(axis=0)}")
+
                 patches_meta.append((center, R_ext, ext_idx))
-        if not is_grid:
+        # for leaf_idx in leaves:
+        #     if is_box:
+        #         leaf_pts = points[leaf_idx]
+        #         spreads = leaf_pts.max(axis=0) - leaf_pts.min(axis=0)
+        #         center = spreads * 0.5 + leaf_pts.min(axis=0)
+        #         half_core = spreads * 0.5
+        #         delta     = half_core.max() * self.overlap
+        #         half_ext  = half_core + delta
+        #         if self.overlap == 0.0:
+        #             ext_idx = leaf_idx
+        #         else:
+        #             bsphere_r  = float(np.linalg.norm(half_ext))
+        #             candidates = np.array(tree.query_ball_point(center, bsphere_r), dtype=int)
+        #             in_box     = np.all(np.abs(points[candidates] - center) <= half_ext, axis=1)
+        #             ext_idx    = candidates[in_box]
+        #         patches_meta.append((center, half_ext, ext_idx))
+        #     else:
+        #         leaf_pts = points[leaf_idx]
+        #         center = leaf_pts.mean(axis=0)
+        #         r_core = float(np.max(np.linalg.norm(leaf_pts - center, axis=1)))
+        #         R_ext = r_core * (1.0 + self.overlap)
+        #         ext_idx = np.array(tree.query_ball_point(center, R_ext), dtype=int)
+        #         patches_meta.append((center, R_ext, ext_idx))
+        if not is_box:
             # 1. 提取所有中心点和半径转为 Numpy 数组，以便向量化加速
             centers = np.array([p[0] for p in patches_meta])
             radii = np.array([p[1] for p in patches_meta])
@@ -1143,11 +1271,27 @@ class PUInterpolator(Interpolator):
             patches_meta.append((center, R_ext, ext_idx))
 
         return patches_meta
+    
+    def _deduplicate_sdf_points(self, points, values, tol=1e-8):
+        # Deduplicate points that are very close to each other (within a small epsilon)
+        # to avoid numerical issues in interpolation. We can use a KDTree for this.
+        tree = KDTree(points)
+        all_neighbors = tree.query_ball_tree(tree, r=tol)
+        unique_mask = np.ones(len(points), dtype=bool)
+        for i, neighbors in enumerate(all_neighbors):
+            if not unique_mask[i]:
+                continue
+            for j in neighbors:
+                if j > i:
+                    unique_mask[j] = False
+        return points[unique_mask], values[unique_mask]
 
     def fit(self, points, values, gradients=None, mask=None, force_recompute=False, dist_threshold=0.2):
         """
         Adaptively partition the domain and fit local interpolators on each patch.
         """
+        if DEBUG_TIME: t0 = time.perf_counter()
+
         if gradients is not None:
             if mask is None:
                 projections = points - values[:, np.newaxis] * gradients
@@ -1160,20 +1304,19 @@ class PUInterpolator(Interpolator):
             points = points[close_mask]
             values = values[close_mask]
             print(f"Warning: too many points, only keeping {len(values)} points with abs(value) < {dist_threshold} for fitting.")
-        
-        n, d = points.shape
+        points, values = self._deduplicate_sdf_points(points, values)
+        _, d = points.shape
         min_pts = max(self.min_points, d + 2)
-
-        if DEBUG_TIME: t0 = time.perf_counter()
 
         tree = KDTree(points)
         if DEBUG_TIME:
             t1 = time.perf_counter()
             print(f"  [PU fit] build KDTree: {t1-t0:.3f}s")
+        
         if self.partition == 'sphere':
             patches_meta = self._kdtree_partition(points, tree)
-        elif self.partition == 'grid':
-            patches_meta = self._kdtree_partition(points, tree, is_grid=True)
+        elif self.partition == 'box':
+            patches_meta = self._kdtree_partition(points, tree, is_box=True)
             # patches_meta = self._grid_partition(points, tree)
         else:
             patches_meta = self._fps_partition(points, tree)
@@ -1209,7 +1352,7 @@ class PUInterpolator(Interpolator):
         self._all_values = values
 
         # Build KDTree on patch centers for fast query-to-patch lookup
-        self._patch_type = 'box' if self.partition == 'grid' else 'sphere'
+        self._patch_type = 'box' if self.partition == 'box' else 'sphere'
         self._patch_centers = np.array([c for c, _, _ in self.patches])
         if self._patch_type == 'box':
             # Store bounding-sphere radius of each extended box for fallback queries
@@ -1268,8 +1411,15 @@ class PUInterpolator(Interpolator):
             [247,182,210], [199,199,199], [219,219,141], [158,218,229],
         ]
         # Add points as small spheres
-        pc = trimesh.PointCloud(points, colors=[255, 0, 0, 255])
-        scene.add_geometry(pc, node_name=f'points')
+        sphere_meshes = []
+        for pt in points:
+            s = trimesh.primitives.Sphere(radius=0.003, center=pt, subdivisions=1).to_mesh()
+            s.visual.vertex_colors = np.tile([255, 0, 0, 255], (len(s.vertices), 1))
+            sphere_meshes.append(s)
+        merged = trimesh.util.concatenate(sphere_meshes)
+        scene.add_geometry(merged, node_name='points')
+        # pc = trimesh.PointCloud(points, colors=[255, 0, 0, 255])
+        # scene.add_geometry(pc, node_name=f'points')
         use_box = getattr(self, '_patch_type', 'sphere') == 'box'
         for i, (center, radius_or_half, _) in enumerate(self.patches):
             color = cmap_colors[i % len(cmap_colors)]
@@ -1291,54 +1441,38 @@ class PUInterpolator(Interpolator):
             return np.concatenate([self.predict(x_new[s:s + chunk_size], chunk_size)
                                    for s in range(0, len(x_new), chunk_size)])
 
-        from scipy.spatial import KDTree as _KDTree
         n = len(x_new)
         result = np.zeros(n)
         weight_sum = np.zeros(n)
-
-        # if DEBUG_TIME: t0 = time.perf_counter()
-        query_tree = _KDTree(x_new)
-        # if DEBUG_TIME:
-        #     t1 = time.perf_counter()
-        #     t_query = 0; t_predict = 0; n_patches_used = 0
-
+        if DEBUG_COVER:
+            self.patch_cover_stats = np.array([0] * n)
         use_box = getattr(self, '_patch_type', 'sphere') == 'box'
         for center, radius_or_half, interp in self.patches:
             if use_box:
-                half_ext   = radius_or_half
-                bsphere_r  = float(np.linalg.norm(half_ext))
-                candidates = query_tree.query_ball_point(center, bsphere_r)
-                if len(candidates) == 0:
-                    continue
-                candidates = np.array(candidates)
-                pts_cand   = x_new[candidates]
-                in_box     = np.all(np.abs(pts_cand - center) <= half_ext, axis=1)
-                idx        = candidates[in_box]
+                idx = np.where(np.all(np.abs(x_new - center) <= radius_or_half, axis=1))[0]
                 if len(idx) == 0:
                     continue
                 pts = x_new[idx]
-                w   = self._box_weight(pts, center, half_ext)
+                w   = self._box_weight(pts, center, radius_or_half)
             else:
-                idx = query_tree.query_ball_point(center, radius_or_half)
+                dist = np.linalg.norm(x_new - center, axis=1)
+                idx  = np.where(dist <= radius_or_half)[0]
                 if len(idx) == 0:
                     continue
-                idx  = np.array(idx)
-                pts  = x_new[idx]
-                dist = np.linalg.norm(pts - center, axis=1)
-                w    = self._wendland_weight(dist, radius_or_half)
+                w = self._wendland_weight(dist[idx], radius_or_half)
+                pts = x_new[idx]
 
             v = interp.predict(pts)
             result[idx] += w * v
             weight_sum[idx] += w
+            if DEBUG_COVER:
+                self.patch_cover_stats[idx] += 1
+            
 
         safe = weight_sum > 0
         result[safe] /= weight_sum[safe]
-        # if DEBUG_TIME:
-        #     t2 = time.perf_counter()
-        #     print(f"  [PU predict] n={n}, build_tree: {t1-t0:.4f}s, query: {t_query:.4f}s, "
-        #           f"local_predict: {t_predict:.4f}s, total: {t2-t0:.4f}s  ({n_patches_used}/{len(self.patches)} patches used)")
 
-        # Fallback: for uncovered points, use nearest data point's value
+        # Fallback: for uncovered points, use nearest patch by surface distance
         uncovered = ~safe
         if np.any(uncovered):
             uncov_pts = x_new[uncovered]
@@ -1347,6 +1481,30 @@ class PUInterpolator(Interpolator):
                 pts_mask = nearest == pi
                 _, _, interp = self.patches[pi]
                 result[np.where(uncovered)[0][pts_mask]] = interp.predict(uncov_pts[pts_mask])
+
+        if DEBUG_COVER:
+            if np.sum(uncovered) > 200 and len(x_new) < chunk_size:
+                filtered_cover_stats = self.patch_cover_stats[safe]
+                print(f"  [PU predict] patch cover stats: "
+                    f"min={min(filtered_cover_stats)}, "
+                    f"max={max(filtered_cover_stats)}, "
+                    f"mean={np.mean(filtered_cover_stats):.2f}"
+                    f"  (uncovered: {np.sum(uncovered)}/{n} points)")
+                # export uncovered points for debugging
+                import trimesh
+                from trimesh.visual.material import PBRMaterial
+                dbg = trimesh.Scene()
+                # dbg.add_geometry(trimesh.PointCloud(x_new[safe], colors=[0,255,0,255]), node_name='covered')
+                sphere_meshes = []
+                for pt in x_new[self.patch_cover_stats <= 1]:
+                    s = trimesh.primitives.Sphere(radius=0.003, center=pt, subdivisions=1).to_mesh()
+                    s.visual.vertex_colors = np.tile([255, 0, 0, 255], (len(s.vertices), 1))
+                    sphere_meshes.append(s)
+                merged = trimesh.util.concatenate(sphere_meshes)
+                dbg.add_geometry(merged, node_name='uncovered')
+                # dbg.add_geometry(trimesh.PointCloud(x_new[uncovered], colors=[255,0,0,255]), node_name='uncovered')
+                dbg.export('pu_uncovered.glb')
+                print(f"  [PU] exported uncovered points to pu_uncovered.glb")  
 
         return result
     
@@ -1358,38 +1516,26 @@ class PUInterpolator(Interpolator):
             return np.concatenate([self.predict_gradients(x_new[s:s + chunk_size], chunk_size)
                                    for s in range(0, len(x_new), chunk_size)])
 
-        from scipy.spatial import KDTree as _KDTree
         n = len(x_new)
         d = x_new.shape[1]
         result = np.zeros((n, d))
         weight_sum = np.zeros(n)
 
-        query_tree = _KDTree(x_new)
-
-        use_box = getattr(self, '_patch_type', 'sphere') == 'box'
+        use_box = getattr(self, '_patch_type', 'sphere') == 'box'            
         for center, radius_or_half, interp in self.patches:
             if use_box:
-                half_ext   = radius_or_half
-                bsphere_r  = float(np.linalg.norm(half_ext))
-                candidates = query_tree.query_ball_point(center, bsphere_r)
-                if len(candidates) == 0:
-                    continue
-                candidates = np.array(candidates)
-                pts_cand   = x_new[candidates]
-                in_box     = np.all(np.abs(pts_cand - center) <= half_ext, axis=1)
-                idx        = candidates[in_box]
+                idx = np.where(np.all(np.abs(x_new - center) <= radius_or_half, axis=1))[0]
                 if len(idx) == 0:
                     continue
                 pts = x_new[idx]
-                w   = self._box_weight(pts, center, half_ext)
+                w   = self._box_weight(pts, center, radius_or_half)
             else:
-                idx = query_tree.query_ball_point(center, radius_or_half)
+                dist = np.linalg.norm(x_new - center, axis=1)
+                idx  = np.where(dist <= radius_or_half)[0]
                 if len(idx) == 0:
                     continue
-                idx  = np.array(idx)
-                pts  = x_new[idx]
-                dist = np.linalg.norm(pts - center, axis=1)
-                w    = self._wendland_weight(dist, radius_or_half)
+                w   = self._wendland_weight(dist[idx], radius_or_half)
+                pts = x_new[idx]
 
             g = interp.predict_gradients(pts)
             result[idx] += w[:, np.newaxis] * g

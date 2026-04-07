@@ -20,7 +20,7 @@ import util
 class Options:
     def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', 
                  turn_off_short_arcs=False, export_short_arcs=True, export_projections=True,
-                 use_gt_gradients=False, interpolator_type='PU', interp_partition='grid', overlap=0.5, 
+                 use_gt_gradients=False, interpolator_type='PU', interp_partition='box', overlap=0.5, 
                  turn_off_projection=False):
         self.grid_len = grid_len
         self.max_iters = max_iters
@@ -32,7 +32,7 @@ class Options:
         self.export_projections = export_projections  # export gradients .glb for visualization
         self.use_gt_gradients = use_gt_gradients
         self.interpolator_type = interpolator_type  # 'Duchon' or 'PU'
-        self.interp_partition = interp_partition  # 'grid' or 'fps' or 'sphere', only for PU interpolator
+        self.interp_partition = interp_partition  # 'box' or 'fps' or 'sphere', only for PU interpolator
         self.interp_overlap = overlap
         
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
@@ -584,7 +584,7 @@ def test_our_method(options : Options, save_npz=False):
     recon = trimesh.Trimesh(vertices=verts, faces=faces)
     fname = f'interpolant_{grid_len}_{iters}_clampinit_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}.obj'
     if options.use_gt_gradients:
-        fname = f'interpolant_{grid_len}_gtgrad_{options.interpolator_type}.obj'
+        fname = f'interpolant_{grid_len}_gtgrad_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}.obj'
     recon.export(f'{out_dir}/{fname}')
     
     # Export projection visualization GLB
@@ -623,15 +623,15 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
-    options = Options(name='eiffel', grid_len=20, max_iters=10, clamp=True, 
+    options = Options(name='eiffel', grid_len=20, max_iters=0, clamp=True, 
                     export_short_arcs=True, export_projections=False, 
-                    use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                    overlap=0.2)
+                    use_gt_gradients=True, interpolator_type='PU', interp_partition='box', 
+                    overlap=1)
     # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
     plt = test_our_method(options)
     # for grid_len in [20, 25]:  # 20^3=8000 points, 30^3=27000 points
     #     for max_iters in [0, 10]:  # 0 means no optimization, only initial gradient estimation and projection
-    #         for interp_partition in ['sphere', 'grid']:
+    #         for interp_partition in ['sphere', 'box']:
     #             for overlap in [0, 0.5, 1]:
     #                 options = Options(name='eiffel', grid_len=20, max_iters=0, clamp=True, 
     #                                 export_short_arcs=True, export_projections=False, 
