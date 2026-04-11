@@ -6,7 +6,7 @@ from scipy.spatial import KDTree
 import time
 
 DEBUG_TIME = True
-DEBUG_COVER = True
+DEBUG_COVER = False
 
 class Interpolator(ABC):
     """
@@ -122,7 +122,26 @@ class Interpolator(ABC):
         self.zero_contours = contours
         return contours
 
-    def _extract_zero_level_set_3d(self, bounds, grid_resolution=64):
+    def _extract_zero_level_set_3d(self, bounds, grid_resolution=64, use_dual_contouring=False):
+        if use_dual_contouring:
+            from occupancy_dual_contouring import occupancy_dual_contouring
+            import torch
+            if torch.cuda.is_available():
+                device = "cuda:1"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
+            print(f"[dual contouring] using device: {device}")
+            odc = occupancy_dual_contouring(device);
+            def predict_wrapper(xyz: torch.Tensor) -> torch.Tensor:
+                pts = xyz.cpu().numpy().astype(np.float64)
+                sdf = self.predict(pts)
+                return torch.from_numpy(sdf.astype(np.float32)).to(xyz.device)
+            min_bound = np.array([b[0] for b in bounds], dtype=np.float32)
+            max_bound = np.array([b[1] for b in bounds], dtype=np.float32)
+            vertices, triangles = odc.extract_mesh(predict_wrapper, min_coord=min_bound, max_coord=max_bound, num_grid=grid_resolution);
+            return vertices.cpu().numpy(), triangles.cpu().numpy()
         try:
             from skimage.measure import marching_cubes
         except ImportError:
@@ -1057,6 +1076,7 @@ class PUInterpolator(Interpolator):
                     axis = int(np.argmax(spreads))
                     median = np.median(pts[:, axis])
                     left_mask = pts[:, axis] <= median
+                    # TODO: fix the case where all points are on one side of the median (should be rare if max_points is reasonably large and data is not pathological)
                     if not left_mask.all() and not (~left_mask).all():
                         # queue.append(leaf_idx[left_mask])
                         # queue.append(leaf_idx[~left_mask])
@@ -1286,7 +1306,7 @@ class PUInterpolator(Interpolator):
                     unique_mask[j] = False
         return points[unique_mask], values[unique_mask]
 
-    def fit(self, points, values, gradients=None, mask=None, force_recompute=False, dist_threshold=0.2):
+    def fit(self, points, values, gradients=None, mask=None, dist_threshold=0.2):
         """
         Adaptively partition the domain and fit local interpolators on each patch.
         """
@@ -1485,6 +1505,9 @@ class PUInterpolator(Interpolator):
         if DEBUG_COVER:
             if np.sum(uncovered) > 200 and len(x_new) < chunk_size:
                 filtered_cover_stats = self.patch_cover_stats[safe]
+                if len(filtered_cover_stats) == 0:
+                    print(f"  [PU predict] all {n} points uncovered")
+                    return result
                 print(f"  [PU predict] patch cover stats: "
                     f"min={min(filtered_cover_stats)}, "
                     f"max={max(filtered_cover_stats)}, "
@@ -1495,14 +1518,16 @@ class PUInterpolator(Interpolator):
                 from trimesh.visual.material import PBRMaterial
                 dbg = trimesh.Scene()
                 # dbg.add_geometry(trimesh.PointCloud(x_new[safe], colors=[0,255,0,255]), node_name='covered')
-                sphere_meshes = []
-                for pt in x_new[self.patch_cover_stats <= 1]:
-                    s = trimesh.primitives.Sphere(radius=0.003, center=pt, subdivisions=1).to_mesh()
-                    s.visual.vertex_colors = np.tile([255, 0, 0, 255], (len(s.vertices), 1))
-                    sphere_meshes.append(s)
-                merged = trimesh.util.concatenate(sphere_meshes)
-                dbg.add_geometry(merged, node_name='uncovered')
-                # dbg.add_geometry(trimesh.PointCloud(x_new[uncovered], colors=[255,0,0,255]), node_name='uncovered')
+                if False:
+                    sphere_meshes = []
+                    for pt in x_new[self.patch_cover_stats <= 1]:
+                        s = trimesh.primitives.Sphere(radius=0.003, center=pt, subdivisions=1).to_mesh()
+                        s.visual.vertex_colors = np.tile([255, 0, 0, 255], (len(s.vertices), 1))
+                        sphere_meshes.append(s)
+                    merged = trimesh.util.concatenate(sphere_meshes)
+                    dbg.add_geometry(merged, node_name='uncovered')
+                else:
+                    dbg.add_geometry(trimesh.PointCloud(x_new[uncovered], colors=[255,0,0,255]), node_name='uncovered')
                 dbg.export('pu_uncovered.glb')
                 print(f"  [PU] exported uncovered points to pu_uncovered.glb")  
 
