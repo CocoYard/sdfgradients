@@ -1131,10 +1131,13 @@ class PUInterpolator(Interpolator):
                     axis = int(np.argmax(spreads))
                     median = np.median(pts[:, axis])
                     left_mask = pts[:, axis] <= median
-                    right_mask = pts[:, axis] > median
-                    if not left_mask.all() and not (right_mask).all():
+                    if left_mask.all() or (~left_mask).all():
+                        left_mask = pts[:, axis] < median  # 如果所有点都在一侧，说明数据分布极端，改为严格小于 median 作为左侧，避免出现空子叶
+                    if left_mask.all() or (~left_mask).all():
+                        left_mask = pts[:, axis] < center # 如果仍然所有点都在一侧，说明数据分布极端，改为小于 mean 作为左侧
+                    if not left_mask.all() and not (~left_mask).all():
                         queue.append(leaf_idx[left_mask])
-                        queue.append(leaf_idx[right_mask])
+                        queue.append(leaf_idx[~left_mask])
                         continue
                     else:
                         sort_pts = np.sort(pts, axis=0)
@@ -1170,29 +1173,6 @@ class PUInterpolator(Interpolator):
                         # print(f"  Leaf points max min mean:\n{leaf_pts.max(axis=0)}\n{leaf_pts.min(axis=0)}\n{leaf_pts.mean(axis=0)}")
 
                 patches_meta.append((center, R_ext, ext_idx))
-        # for leaf_idx in leaves:
-        #     if is_box:
-        #         leaf_pts = points[leaf_idx]
-        #         spreads = leaf_pts.max(axis=0) - leaf_pts.min(axis=0)
-        #         center = spreads * 0.5 + leaf_pts.min(axis=0)
-        #         half_core = spreads * 0.5
-        #         delta     = half_core.max() * self.overlap
-        #         half_ext  = half_core + delta
-        #         if self.overlap == 0.0:
-        #             ext_idx = leaf_idx
-        #         else:
-        #             bsphere_r  = float(np.linalg.norm(half_ext))
-        #             candidates = np.array(tree.query_ball_point(center, bsphere_r), dtype=int)
-        #             in_box     = np.all(np.abs(points[candidates] - center) <= half_ext, axis=1)
-        #             ext_idx    = candidates[in_box]
-        #         patches_meta.append((center, half_ext, ext_idx))
-        #     else:
-        #         leaf_pts = points[leaf_idx]
-        #         center = leaf_pts.mean(axis=0)
-        #         r_core = float(np.max(np.linalg.norm(leaf_pts - center, axis=1)))
-        #         R_ext = r_core * (1.0 + self.overlap)
-        #         ext_idx = np.array(tree.query_ball_point(center, R_ext), dtype=int)
-        #         patches_meta.append((center, R_ext, ext_idx))
         if not is_box:
             # 1. 提取所有中心点和半径转为 Numpy 数组，以便向量化加速
             centers = np.array([p[0] for p in patches_meta])

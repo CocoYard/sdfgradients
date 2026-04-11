@@ -1,22 +1,13 @@
-import mes_contact
-from scipy.spatial import cKDTree
 import gpytoolbox as gpy
 import igl
-from scipy.spatial.distance import cdist
 import numpy as np
-# import matplotlib
-# matplotlib.use('Agg')  # Non-interactive backend, no window shown
 import matplotlib.pyplot as plt
-import iterative_projection as ip
-from interpolation import Interpolator, CurlFree_Interpolator, PUInterpolator, DuchonInterpolator
-from enum import Enum
+from interpolation import Interpolator, PUInterpolator, DuchonInterpolator
 import time
 import optimization as opt
 from util import mesh_distances, are_points_visible
-# from bench import sphere_exposed_cpp as va
 from bench import sphere_exposed_pybind as sep
 from bench import sphere_intersect
-import util
 
 class Options:
     def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', 
@@ -43,13 +34,12 @@ class Options:
         self.degenerate_pts = None  # set it after get_visible_arcs, which is a dictionary: point index -> list of degenerate points (the angle points for short arcs)
         self.batch = None
         self.ngbrs_list = None
-        self.MES_normals = None  # set it after mes_contact
 
         # never used
         self.path_to_sdf = None # set it manually to avoid accidentally loading old data, e.g. f'out/{name}_sdf_{grid_len**3}.npz'
         # self.turn_off_projection = turn_off_projection  # this means only interpolating SDF values without projection or optimization
     def print(self):
-        print(f"Options: grid_len={self.grid_len},"
+        print(f"Options: grid_len={self.grid_len}, name={self.name},"
               f" max_iters={self.max_iters}, clamp={self.clamp},"
               f" turn_off_short_arcs={self.turn_off_short_arcs},"
               f" export_short_arcs={self.export_short_arcs},"
@@ -220,91 +210,6 @@ def test_rfta(options, save_npz=False):
     largest.export(f'{out_dir}/rfta_{grid_len}.obj')
     print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept largest component: {len(largest.faces)} faces out of {len(Fr)})")
 
-def clamp_gradients_to_arcs(points, values, gradients, degenerate_pts, batch, ngbrs_list, interpolator : Interpolator, tolerance : Tolerance, MES_normals):
-    projections = points - values[:, np.newaxis] * gradients
-    sdf_tol = tolerance.clamp_sdf_tol
-    ratio = tolerance.clamp_radius_ratio
-    float_tol = tolerance.float_tol
-    debug_cnt = 0
-    clamp_precision_cnt = 0
-    clamp_work_cnt = 0
-    for i in range(len(points)):
-        if i in degenerate_pts:
-            continue    # skip clamping for points with degenerate arcs, since we will set their gradients directly toward the angle later
-        ngbrs = points[ngbrs_list[i]]
-        dists = np.linalg.norm(projections[i] - ngbrs, axis=1)
-        inside = dists < (np.abs(values[ngbrs_list[i]])) - float_tol
-        if not np.any(inside):
-            continue    # no neighbor contains the projection, skip clamping
-        # 1. if it is close to some arc, clamp to the closest point on that arc
-        closest, distances = util.query_closest_on_arcs(projections[i:i+1], i, batch)
-        if distances[0] < ratio * np.abs(values[i]):
-            pt = closest[0]
-            if (np.linalg.norm(ngbrs - pt, axis=1) < (np.abs(values[ngbrs_list[i]]) - float_tol)).any():
-                clamp_precision_cnt += 1  # if the closest point on arc is too close to neighbors, it may cause more issues, skip clamping in this case
-            else:
-                clamp_work_cnt += 1
-            gradients[i] = (points[i] - pt) / (values[i] + 1e-10) # clamp to the closest point on the arc, with a slightly relaxed denominator to avoid over-shooting
-            continue
-
-        # 2. otherwise, if some point on the arc has a low function value, clamp to that point
-        # sample_pts = util.sample_arcs(i, batch, num_points=100)
-        # if len(sample_pts) == 0:
-        #     debug_cnt += 1
-        # else:
-        #     grads = interpolator.sample_best_gradients(points[i:i+1], values[i:i+1], given_samples=sample_pts[np.newaxis, :, :])  # given_samples shape: (1, num_points, 3)
-        #     proj = points[i] - values[i] * grads[0]
-        #     pred_sdf = interpolator.predict(proj[np.newaxis, :])
-        #     if -sdf_tol < pred_sdf < sdf_tol:
-        #         gradients[i] = grads[0]
-        #         continue
-            
-        # # 3. if MES is available, directly use that normal
-        # if not np.isnan(MES_normals[i]).any():
-        #     proj = points[i] - values[i] * MES_normals[i]
-        #     dists = np.linalg.norm(proj - ngbrs, axis=1)
-        #     inside = dists < (np.abs(values[ngbrs_list[i]])) - float_tol
-        #     if not inside.any():  # only clamp to MES normal if the projected point is visible, otherwise it may cause more issues
-        #         gradients[i] = MES_normals[i]
-        # 4. if no suitable arc point found, keep the original gradient (which is outside visible arcs, filtered out later)
-        """ --- Visualization for debugging --- """
-        """
-        # 可视化采样点
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        # 绘制当前球的点（加粗）
-        ax.scatter(points[i, 0], points[i, 1], points[i, 2], 
-                  c='red', marker='*', s=500, label=f'Sphere {i}')
-        
-        # 绘制该球的前5个邻居
-        if i < len(ngbrs_list):
-            ngbrs_indices = ngbrs_list[i][:5]  # 只取前5个邻居
-            if len(ngbrs_indices) > 0:
-                ax.scatter(points[ngbrs_indices, 0], points[ngbrs_indices, 1], points[ngbrs_indices, 2],
-                          c='orange', marker='s', s=100, alpha=0.7, label=f'Neighbors (first {len(ngbrs_indices)})')
-        
-        # 绘制采样点
-        if len(sample_pts) > 0:
-            ax.scatter(sample_pts[:, 0], sample_pts[:, 1], sample_pts[:, 2], 
-                      c='green', marker='.', s=50, alpha=0.8, label=f'Arc samples ({len(sample_pts)} pts)')
-        
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        ax.set_title(f'Sphere {i}: Arc Sampling Visualization')
-        ax.legend()
-        plt.tight_layout()
-        plt.show()
-        
-        if len(sample_pts) == 0:
-            continue
-        """
-    print(f"clamp_precision_cnt: {clamp_precision_cnt}")
-    print(f"clamp_work_cnt: {clamp_work_cnt}")
-    if debug_cnt > 0:
-        print(f"\n there are {debug_cnt} samples without any arcs\n")
-
 def filter_degenerate_pts(degenerate_pts, interpolator : Interpolator, dist_tol=1e-1):
     """ 
     Filter out degenerate points that are too far from the surface or more than 1 point, since 
@@ -325,7 +230,7 @@ def filter_degenerate_pts(degenerate_pts, interpolator : Interpolator, dist_tol=
         del degenerate_pts[idx]
     print(f"Filtered out {len(to_remove)} degenerate points that are too far from the surface or len!=1. Remaining degenerate points: {len(degenerate_pts)}")
 
-def init_gradients_interp(sdf_points, sdf_values, interpolator : Interpolator, degenerate_pts, batch, ngbrs_list, options : Options):
+def init_gradients_by_degenerate_pts(sdf_points, sdf_values, interpolator : Interpolator, degenerate_pts, batch, ngbrs_list, options : Options):
     '''
     Estimate gradients by fitting a Duchon interpolator to the signed distance data and evaluating its gradient.
 
@@ -363,54 +268,21 @@ def init_gradients_interp(sdf_points, sdf_values, interpolator : Interpolator, d
         out_path = f'out/shortArcs_{options.name}_{options.grid_len}.glb'
         export_projection_visualization(origins, projections, mask=temp_mask, recon_mesh=options.gt_mesh, output_path=out_path)
     
+    init_grads = np.nan*np.ones_like(sdf_points)
     to_train_points = sdf_points.copy()
     to_train_sdf = sdf_values.copy()
     # Add points for degenerate arcs.
     degenerate_pts_to_add = []
     for i, pts in degenerate_pts.items():
         degenerate_pts_to_add.append(pts[0])
+        init_grads[i] = (sdf_points[i] - pts[0]) / (sdf_values[i] + 1e-10)
     if len(degenerate_pts_to_add) > 0:
         to_train_points = np.vstack([to_train_points, np.array(degenerate_pts_to_add)])
         to_train_sdf = np.append(to_train_sdf, np.zeros(len(degenerate_pts_to_add)))  # The SDF value at the projected point should be 0
     print(f"After adding points for degenerate arcs, total points: {len(to_train_points)}")
     interpolator.fit(to_train_points, to_train_sdf)
     print(f"======== second fit done with input {len(to_train_points)} points (including {len(degenerate_pts_to_add)} degenerate arc points)")
-
-    """ 2. project to the 0-level surface of the interpolator to get better gradient estimation for MES points """
-    init_grads = interpolator.sample_best_gradients(sdf_points, sdf_values)
-    for i, pts in degenerate_pts.items():
-        init_grads[i] = (sdf_points[i] - pts[0]) / (sdf_values[i] + 1e-10)
     print("initial gradient estimation done")
-    ## project to 0-level surface code
-    # verts, faces = interpolator.extract_zero_level_set(bounds=((sdf_points[:, 0].min(), sdf_points[:, 0].max()), 
-    #                                             (sdf_points[:, 1].min(), sdf_points[:, 1].max()), 
-    #                                             (sdf_points[:, 2].min(), sdf_points[:, 2].max())), resolution=50)
-    # # project sdf_points onto the zero level set mesh to get nearest surface points
-    # faces_igl = np.asarray(faces, dtype=np.int32)
-    # sq_dists, _, nearest = igl.point_mesh_squared_distance(sdf_points, verts, faces_igl)
-    # valid = sq_dists > 1e-16  # skip points that landed exactly on surface
-    # gradients = np.zeros_like(sdf_points)
-    # # gradient = (point - nearest) / sdf_value  (sign is automatic via sdf_value)
-    # gradients[valid] = (sdf_points[valid] - nearest[valid]) / sdf_values[valid, np.newaxis]
-    # norms = np.linalg.norm(gradients, axis=1, keepdims=True)
-    # norms[norms < 1e-10] = 1.0
-    # gradients /= norms
-
-    if options.clamp:
-        """ 3. MES normal estimation for non-degenerate points """
-        contact_pts, normals = mes_contact.contact_points_from_sdf(sdf_points, sdf_values, debug_level=0)
-        options.MES_normals = normals
-        mask = ~np.isnan(contact_pts).any(axis=1)
-        print(f"{mask.sum()} MES contact points, {len(degenerate_pts)} degenerate points")
-        # check the distribution of valid MES normals
-        # number of positive sdf_value points that have valid MES normals
-        num_pos_valid = np.sum((sdf_values > 0) & mask)
-        print(f"{num_pos_valid} positive sdf_value points have valid MES normals")
-        num_neg_valid = np.sum((sdf_values < 0) & mask)
-        print(f"{num_neg_valid} negative sdf_value points have valid MES normals")
-        print(f"{np.sum(sdf_values > 0)} positive sdf_value points in total, {np.sum(sdf_values < 0)} negative sdf_value points in total")
-
-        clamp_gradients_to_arcs(sdf_points, sdf_values, init_grads, degenerate_pts, batch, ngbrs_list, interpolator, options.tolerance, normals)
 
     # debug
     for i, pts in degenerate_pts.items():
@@ -450,7 +322,7 @@ def get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8):
             degenerate_pts[idx].append(pos)
     return batch_res, degenerate_pts, nbr_lists
 
-def yongs_algorithm(sdf_points, sdf_values, options : Options):
+def main_algorithm(sdf_points, sdf_values, options : Options):
     gt_gradients, max_iters, gt_mesh = options.gt_gradients, options.max_iters, options.gt_mesh
     if options.tolerance is None:
         from sklearn.neighbors import KDTree
@@ -461,7 +333,7 @@ def yongs_algorithm(sdf_points, sdf_values, options : Options):
         tolerance = Tolerance(clamp_sdf_tol=clamp_sdf_tol)
         options.tolerance = tolerance
 
-    """ step 1: initial gradient estimation using MES and degenerate points """
+    """ step 1: initial gradient estimation using degenerate points """
     # collect visible arcs for each point, which will be used to clamp the gradients later
     batch, degenerate_pts, ngbrs_list = get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8)
     if options.turn_off_short_arcs:
@@ -469,30 +341,12 @@ def yongs_algorithm(sdf_points, sdf_values, options : Options):
     interpolator = PUInterpolator('cubic', overlap=options.interp_overlap, partition=options.interp_partition)  # use PU for better extrapolation, which is important for the initial gradient estimation. We can switch to Duchon for faster fitting in the optimization loop since we only need to evaluate gradients at given points instead of sampling new points.
     if options.interpolator_type == 'Duchon':
         interpolator = DuchonInterpolator('cubic')
-    init_grads = init_gradients_interp(sdf_points, sdf_values, interpolator, degenerate_pts, batch, ngbrs_list, options)
+    init_grads = init_gradients_by_degenerate_pts(sdf_points, sdf_values, interpolator, degenerate_pts, batch, ngbrs_list, options)
     
     if options.use_gt_gradients and gt_gradients is not None:
         init_grads = gt_gradients
-    
-    # """ step 2: filter invalid points """
-    # valid_mask = ~np.isnan(init_grads).any(axis=1)
-    # num_valid_points = np.sum(valid_mask)
-    """ step 2: project onto surface, then filter invisible points """
-    init_projections = sdf_points - sdf_values[:, np.newaxis] * init_grads
-    mask = are_points_visible(init_projections, sdf_points, sdf_values, epsilon=tolerance.float_tol)
-    # mask = np.ones(len(sdf_points), dtype=bool)
-    num_visible_points = np.sum(mask)
-    # new_points = np.vstack([sdf_points, init_projections[mask]])
-    # new_values = np.concatenate([sdf_values, np.zeros(num_visible_points)])
 
-    """ step 3: fit the interpolator with the original points + projected points """
-    interpolator.fit(sdf_points, sdf_values, init_grads, mask)  # refit the interpolator with the initial gradients to get better predictions for the degenerate points
-    print(f"======== third fit done with input {num_visible_points + len(sdf_points)} points")
-    print(f"Number of visible projected points: {num_visible_points} out of {len(sdf_points)}. percent: {np.mean(mask) * 100:.2f}%")
-
-    # init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
-
-    """ step 4: iterative optimization """
+    """ step 2: iterative optimization """
     # For iterative_projection_3d, we need to pass the degenerate points, batch, and neighbors list for clamping inside the optimization loop
     options.degenerate_pts = degenerate_pts
     options.batch = batch
@@ -501,10 +355,10 @@ def yongs_algorithm(sdf_points, sdf_values, options : Options):
     gradients, interpolator = opt.iterative_projection_3d(sdf_points, sdf_values, init_grads, interpolator, options, num_iter=max_iters, gt_gradients=gt_gradients)
 
     # interpolator.fit(sdf_points, sdf_values, gradients, force_recompute=True, use_projection=True)
-    init_projections = sdf_points - sdf_values[:, np.newaxis] * gradients
-    return interpolator, init_projections, mask
+    projections = sdf_points - sdf_values[:, np.newaxis] * gradients
+    return interpolator, projections, are_points_visible(projections, sdf_points, sdf_values)  # return whether there are invisible points in the initial projection (which may cause issues in later optimization)
 
-def export_projection_visualization(sdf_points, init_projections, mask, recon_mesh, output_path='out/projection_debug.glb'):
+def export_projection_visualization(sdf_points, projections, mask, recon_mesh, output_path='out/projection_debug.glb'):
     """
     Export a GLB visualization showing SDF points -> projections with visibility filtering.
     
@@ -522,7 +376,7 @@ def export_projection_visualization(sdf_points, init_projections, mask, recon_me
         mesh_copy = recon_mesh.copy()
         mesh_copy.visual.material = PBRMaterial(
             baseColorFactor=[200, 200, 200, 255], alphaMode='OPAQUE')
-        scene.add_geometry(mesh_copy)
+        scene.add_geometry(mesh_copy, "recon_mesh")
     
     num_visible = np.sum(mask)
     num_invisible = np.sum(~mask)
@@ -530,7 +384,7 @@ def export_projection_visualization(sdf_points, init_projections, mask, recon_me
     
     for i in range(len(sdf_points)):
         sdf_pt = sdf_points[i]
-        proj_pt = init_projections[i]
+        proj_pt = projections[i]
         is_visible = mask[i]
         
         # SDF point (always gray sphere)
@@ -596,7 +450,7 @@ def test_our_method(options : Options, save_npz=False):
 
     # Create and fit the interpolator
     timer = time.perf_counter()
-    interpolator, init_projections, mask = yongs_algorithm(points, distances, options)
+    interpolator, projections, mask = main_algorithm(points, distances, options)
     print(f"  ⏱  {'Interpolator fitted':<30} {time.perf_counter() - timer:>7.2f} s")
 
     # visualize results using marching cubes to extract isosurface
@@ -638,9 +492,9 @@ def test_our_method(options : Options, save_npz=False):
         out_path = f'out/projections_{options.name}_{options.grid_len}_{options.max_iters}.glb'
         if options.use_gt_gradients:
             out_path = f'out/projections_{options.name}_{options.grid_len}_gtmesh.glb'
-            export_projection_visualization(points, init_projections, mask, mesh, output_path=out_path)
+            export_projection_visualization(points, projections, mask, mesh, output_path=out_path)
             out_path = f'out/projections_{options.name}_{options.grid_len}_gt.glb'
-        export_projection_visualization(points, init_projections, mask, recon, output_path=out_path)
+        export_projection_visualization(points, projections, mask, recon, output_path=out_path)
 
     trimesh.Trimesh(vertices=verts2, faces=faces2).export(f'{out_dir}/sample_points_{grid_len}.obj')    
     print(f"Exported: {out_dir}/{fname}, {out_dir}/sample_points_{grid_len}.obj")
@@ -684,8 +538,8 @@ if __name__ == "__main__":
                         plt = test_our_method(options)
             test_rfta(options)
     else:
-        options = Options(name='horse', grid_len=20, max_iters=10, clamp=True, 
-                        export_short_arcs=True, export_projections=False, 
+        options = Options(name='eiffel', grid_len=25, max_iters=12, clamp=True, 
+                        export_short_arcs=True, export_projections=True, 
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
                         overlap=0.2)
         # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
