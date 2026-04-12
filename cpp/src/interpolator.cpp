@@ -1,6 +1,13 @@
 #include "interpolator.h"
+#include <cassert>  // libigl's march_cube.cpp uses assert() without including <cassert>
+#include <igl/marching_cubes.h>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <stdexcept>
+#include <vector>
+#include <chrono>
+#include <iostream>
 
 namespace sdf {
 
@@ -164,6 +171,209 @@ Eigen::MatrixXd Interpolator::sample_best_gradients(
     }
 
     return best_dirs;
+}
+
+// ── extract_surface (narrow-band marching cubes via libigl) ──────────
+//
+// Two-pass strategy:
+//   1. Coarse grid (~1/4 res per axis): one predict() call, builds a cheap
+//      SDF approximation over the whole bbox.
+//   2. Mark coarse cells that either straddle the iso level or sit within
+//      ~2× coarse-cell-diagonal of it (Lipschitz safety margin). These are
+//      the only cells that can produce triangles.
+//   3. Fill the fine S array with trilinear interpolation from the coarse
+//      values everywhere, then overwrite fine vertices inside active coarse
+//      cells with a real predict() call. Inactive regions keep smooth,
+//      same-sign interpolated values so libigl MC produces no spurious
+//      crossings there.
+//
+// Net effect: fine predict() only runs on the ~O(n²) vertices that actually
+// matter, cutting cost dramatically vs. a dense O(n³) predict.
+
+void Interpolator::extract_surface(
+    const Eigen::Vector3d& bbox_min,
+    const Eigen::Vector3d& bbox_max,
+    int nx, int ny, int nz,
+    double iso,
+    Eigen::MatrixXd& V,
+    Eigen::MatrixXi& F,
+    int chunk_size) const
+{
+    if (nx < 2 || ny < 2 || nz < 2)
+        throw std::invalid_argument("extract_surface: nx, ny, nz must each be >= 2");
+
+    using clk = std::chrono::steady_clock;
+    auto t_total = clk::now();
+    auto sec_since = [](const clk::time_point& t) {
+        return std::chrono::duration<double>(clk::now() - t).count();
+    };
+
+    const int N = nx * ny * nz;
+    const Eigen::Vector3d step(
+        (bbox_max.x() - bbox_min.x()) / (nx - 1),
+        (bbox_max.y() - bbox_min.y()) / (ny - 1),
+        (bbox_max.z() - bbox_min.z()) / (nz - 1));
+
+    auto fine_idx = [&](int xi, int yi, int zi) {
+        return xi + nx * (yi + ny * zi);
+    };
+
+    // libigl marching_cubes expects GV.row(x + nx*(y + ny*z))
+    auto t_gv = clk::now();
+    Eigen::MatrixXd GV(N, 3);
+    for (int zi = 0; zi < nz; zi++)
+        for (int yi = 0; yi < ny; yi++)
+            for (int xi = 0; xi < nx; xi++) {
+                int idx = fine_idx(xi, yi, zi);
+                GV(idx, 0) = bbox_min.x() + xi * step.x();
+                GV(idx, 1) = bbox_min.y() + yi * step.y();
+                GV(idx, 2) = bbox_min.z() + zi * step.z();
+            }
+
+    std::cout << "[extract_surface] build GV: " << sec_since(t_gv) << " s\n";
+
+    // ── Coarse pass ──────────────────────────────────────────────────
+    auto t_coarse = clk::now();
+    const int R = 4;
+    const int cnx = std::max(2, (nx + R - 1) / R);
+    const int cny = std::max(2, (ny + R - 1) / R);
+    const int cnz = std::max(2, (nz + R - 1) / R);
+    const int CN = cnx * cny * cnz;
+    const Eigen::Vector3d cstep(
+        (bbox_max.x() - bbox_min.x()) / (cnx - 1),
+        (bbox_max.y() - bbox_min.y()) / (cny - 1),
+        (bbox_max.z() - bbox_min.z()) / (cnz - 1));
+
+    auto cidx_at = [&](int ci, int cj, int ck) {
+        return ci + cnx * (cj + cny * ck);
+    };
+
+    Eigen::MatrixXd CGV(CN, 3);
+    for (int ck = 0; ck < cnz; ck++)
+        for (int cj = 0; cj < cny; cj++)
+            for (int ci = 0; ci < cnx; ci++) {
+                int idx = cidx_at(ci, cj, ck);
+                CGV(idx, 0) = bbox_min.x() + ci * cstep.x();
+                CGV(idx, 1) = bbox_min.y() + cj * cstep.y();
+                CGV(idx, 2) = bbox_min.z() + ck * cstep.z();
+            }
+    Eigen::VectorXd CS = this->predict(CGV, chunk_size);
+    std::cout << "[extract_surface] coarse predict (" << CN
+              << " pts): " << sec_since(t_coarse) << " s\n";
+
+    // ── Fill fine S by trilinear interpolation from coarse ───────────
+    auto t_tri = clk::now();
+    Eigen::VectorXd S(N);
+    for (int zi = 0; zi < nz; zi++) {
+        double fz = (zi * step.z()) / cstep.z();
+        int ck = std::min((int)fz, cnz - 2);
+        double tz = fz - ck;
+        for (int yi = 0; yi < ny; yi++) {
+            double fy = (yi * step.y()) / cstep.y();
+            int cj = std::min((int)fy, cny - 2);
+            double ty = fy - cj;
+            for (int xi = 0; xi < nx; xi++) {
+                double fx = (xi * step.x()) / cstep.x();
+                int ci = std::min((int)fx, cnx - 2);
+                double tx = fx - ci;
+                double c000 = CS(cidx_at(ci  , cj  , ck  ));
+                double c100 = CS(cidx_at(ci+1, cj  , ck  ));
+                double c010 = CS(cidx_at(ci  , cj+1, ck  ));
+                double c110 = CS(cidx_at(ci+1, cj+1, ck  ));
+                double c001 = CS(cidx_at(ci  , cj  , ck+1));
+                double c101 = CS(cidx_at(ci+1, cj  , ck+1));
+                double c011 = CS(cidx_at(ci  , cj+1, ck+1));
+                double c111 = CS(cidx_at(ci+1, cj+1, ck+1));
+                double c00 = c000*(1-tx) + c100*tx;
+                double c10 = c010*(1-tx) + c110*tx;
+                double c01 = c001*(1-tx) + c101*tx;
+                double c11 = c011*(1-tx) + c111*tx;
+                double c0  = c00 *(1-ty) + c10 *ty;
+                double c1  = c01 *(1-ty) + c11 *ty;
+                S(fine_idx(xi, yi, zi)) = c0*(1-tz) + c1*tz;
+            }
+        }
+    }
+
+    std::cout << "[extract_surface] trilinear fill S: " << sec_since(t_tri) << " s\n";
+
+    // ── Narrow-band detection ────────────────────────────────────────
+    auto t_nb = clk::now();
+    // Active = sign change across cell OR any corner within `tau` of iso.
+    // tau = 2 × coarse cell diagonal: a Lipschitz-1 safety margin wide
+    // enough to catch features that slightly undershoot the coarse grid.
+    const double tau = 2.0 * cstep.norm();
+
+    std::vector<uint8_t> need_refine(N, 0);
+    for (int ck = 0; ck < cnz - 1; ck++)
+    for (int cj = 0; cj < cny - 1; cj++)
+    for (int ci = 0; ci < cnx - 1; ci++) {
+        double vmin =  std::numeric_limits<double>::infinity();
+        double vmax = -std::numeric_limits<double>::infinity();
+        double amin =  std::numeric_limits<double>::infinity();
+        for (int dc = 0; dc < 8; dc++) {
+            int ci2 = ci + (dc & 1);
+            int cj2 = cj + ((dc >> 1) & 1);
+            int ck2 = ck + ((dc >> 2) & 1);
+            double v = CS(cidx_at(ci2, cj2, ck2));
+            vmin = std::min(vmin, v);
+            vmax = std::max(vmax, v);
+            amin = std::min(amin, std::abs(v - iso));
+        }
+        bool has_cross = (vmin - iso) * (vmax - iso) <= 0.0;
+        bool near_iso  = amin < tau;
+        if (!has_cross && !near_iso) continue;
+
+        // Fine-vertex range covering this coarse cell (inclusive, so a shared
+        // boundary vertex is marked active by whichever neighbor is active).
+        double xs =  ci      * cstep.x() / step.x();
+        double xe = (ci + 1) * cstep.x() / step.x();
+        double ys =  cj      * cstep.y() / step.y();
+        double ye = (cj + 1) * cstep.y() / step.y();
+        double zs =  ck      * cstep.z() / step.z();
+        double ze = (ck + 1) * cstep.z() / step.z();
+        int xi0 = std::max(0,      (int)std::floor(xs - 1e-9));
+        int xi1 = std::min(nx - 1, (int)std::ceil (xe + 1e-9));
+        int yi0 = std::max(0,      (int)std::floor(ys - 1e-9));
+        int yi1 = std::min(ny - 1, (int)std::ceil (ye + 1e-9));
+        int zi0 = std::max(0,      (int)std::floor(zs - 1e-9));
+        int zi1 = std::min(nz - 1, (int)std::ceil (ze + 1e-9));
+        for (int zi = zi0; zi <= zi1; zi++)
+        for (int yi = yi0; yi <= yi1; yi++)
+        for (int xi = xi0; xi <= xi1; xi++)
+            need_refine[fine_idx(xi, yi, zi)] = 1;
+    }
+
+    std::cout << "[extract_surface] narrow-band mark: " << sec_since(t_nb) << " s\n";
+
+    // ── Fine predict on narrow band ──────────────────────────────────
+    auto t_fine = clk::now();
+    std::vector<int> refine_idx;
+    refine_idx.reserve(N / 4);
+    for (int i = 0; i < N; i++)
+        if (need_refine[i]) refine_idx.push_back(i);
+
+    if (!refine_idx.empty()) {
+        const int M = (int)refine_idx.size();
+        Eigen::MatrixXd RGV(M, 3);
+        for (int k = 0; k < M; k++)
+            RGV.row(k) = GV.row(refine_idx[k]);
+        Eigen::VectorXd RS = this->predict(RGV, chunk_size);
+        for (int k = 0; k < M; k++)
+            S(refine_idx[k]) = RS(k);
+    }
+
+    std::cout << "[extract_surface] fine predict ("
+              << refine_idx.size() << " pts): "
+              << sec_since(t_fine) << " s\n";
+
+    // ── Marching cubes ───────────────────────────────────────────────
+    auto t_mc = clk::now();
+    igl::marching_cubes(S, GV,
+                        (unsigned)nx, (unsigned)ny, (unsigned)nz,
+                        iso, V, F);
+    std::cout << "[extract_surface] marching_cubes: " << sec_since(t_mc) << " s\n";
+    std::cout << "[extract_surface] total: " << sec_since(t_total) << " s\n";
 }
 
 }  // namespace sdf

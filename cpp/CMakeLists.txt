@@ -24,6 +24,20 @@ find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 # Or just download the single header nanoflann.hpp into third_party/nanoflann/include/
 set(NANOFLANN_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nanoflann/include)
 
+# libigl (header-only; we only need igl/marching_cubes.h).
+# Fetched via CMake FetchContent — no build steps, just the include tree.
+include(FetchContent)
+FetchContent_Declare(
+    libigl
+    GIT_REPOSITORY https://github.com/libigl/libigl.git
+    GIT_TAG        v2.5.0
+)
+FetchContent_GetProperties(libigl)
+if(NOT libigl_POPULATED)
+    FetchContent_Populate(libigl)
+endif()
+set(LIBIGL_INCLUDE_DIR ${libigl_SOURCE_DIR}/include)
+
 # OpenMP
 if(USE_OPENMP)
     find_package(OpenMP)
@@ -78,6 +92,7 @@ add_library(sdf_core STATIC
 target_include_directories(sdf_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${NANOFLANN_INCLUDE_DIR}
+    ${LIBIGL_INCLUDE_DIR}
     ${BENCH_DIR}
     ${ROOT_DIR}
 )

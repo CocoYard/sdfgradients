@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
+#include <chrono>
 
 // ── Interface to existing C++ pybind modules ────────────────────────
 // These functions mirror the pybind11 wrappers in bench/sphere_intersect.cpp
@@ -75,7 +76,8 @@ Eigen::MatrixXd init_gradients_by_degenerate_pts(
 {
     int N = (int)sdf_points.rows();
     auto& degenerate_pts = options.degenerate_pts;
-
+    std::cout << "Initializing gradients using " << degenerate_pts.size()
+              << " degenerate points...\n";
     // 1. Initial fit without gradients
     interpolator.fit(sdf_points, sdf_values);
     std::cout << "======== first fit done with input " << N << " points\n";
@@ -148,27 +150,34 @@ void get_visible_arcs(
     int N = (int)sdf_points.rows();
     Eigen::VectorXd radii = sdf_values.cwiseAbs();
 
-    // 1. Find sphere-sphere neighbors
-    // Eigen default is column-major; C functions expect row-major (centers[i*3+k])
-    Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor> pts_rm = sdf_points;
-    std::vector<int> offsets, neighbors;
-    sphere_intersect_core::find_intersections(
-        pts_rm.data(), radii.data(), N, offsets, neighbors);
+    // Scope block: row-major copy + flat CSR arrays are only needed for the two C
+    // function calls.  Wrapping them here releases ~(24N + M·4) bytes before the
+    // heavier degenerate-pts extraction below.
+    {
+        // Eigen default is column-major; C functions expect row-major (centers[i*3+k])
+        Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor> pts_rm = sdf_points;
+        std::vector<int> offsets, neighbors;
+        sphere_intersect_core::find_intersections(
+            pts_rm.data(), radii.data(), N, offsets, neighbors);
 
-    // Build neighbor lists
-    options.ngbrs_list.resize(N);
-    for (int i = 0; i < N; i++) {
-        options.ngbrs_list[i].assign(
-            neighbors.begin() + offsets[i],
-            neighbors.begin() + offsets[i + 1]);
-    }
+        // Call compute_exposed_batch while neighbors/offsets are still alive.
+        // This avoids keeping pts_rm + neighbors alive past their last use.
+        sphere_exposed_core::compute_exposed_batch(
+            pts_rm.data(), radii.data(), N,
+            neighbors.data(), offsets.data(),
+            1e-4, 1e-6, 1e-12, 1e-8,
+            options.batch);
 
-    // 2. Compute exposed arcs/caps/degenerate points
-    sphere_exposed_core::compute_exposed_batch(
-        pts_rm.data(), radii.data(), N,
-        neighbors.data(), offsets.data(),
-        1e-4, 1e-6, 1e-12, 1e-8,
-        options.batch);
+        // Build per-sphere neighbor lists from the CSR arrays before they are freed.
+        // ngbrs_list[i] is the only copy of neighbor data that persists beyond this
+        // block; the flat neighbors + offsets vectors are freed at end of scope.
+        options.ngbrs_list.resize(N);
+        for (int i = 0; i < N; i++) {
+            options.ngbrs_list[i].assign(
+                neighbors.begin() + offsets[i],
+                neighbors.begin() + offsets[i + 1]);
+        }
+    }  // pts_rm, offsets, neighbors freed here
 
     // Count fully covered spheres
     int fully_covered = 0;
@@ -199,29 +208,21 @@ MainResult main_algorithm(
 {
     int N = (int)sdf_points.rows();
 
-    // Auto-set tolerance if not initialized
-    if (!options.tolerance_initialized) {
-        KDTree3D tree(sdf_points);
-        double median_spacing = 0.0;
-        std::vector<double> spacings(N);
-        for (int i = 0; i < N; i++) {
-            std::vector<double> dists_sq;
-            std::vector<int> indices;
-            tree.query(sdf_points.row(i), 2, dists_sq, indices);
-            spacings[i] = std::sqrt(dists_sq[1]);
-        }
-        std::nth_element(spacings.begin(), spacings.begin() + N / 2, spacings.end());
-        median_spacing = spacings[N / 2];
-        options.tolerance.clamp_sdf_tol = median_spacing * 0.5;
-        options.tolerance_initialized = true;
-    }
+    using clk = std::chrono::steady_clock;
+    auto t0 = clk::now();
+    auto ms_since = [](const clk::time_point& t) {
+        return std::chrono::duration<double, std::milli>(clk::now() - t).count();
+    };
 
     // Step 1: Compute visible arcs + degenerate points
+    auto t1 = clk::now();
     get_visible_arcs(sdf_points, sdf_values, options);
     if (options.turn_off_short_arcs)
         options.degenerate_pts.clear();
+    std::cout << "[main_algorithm] get_visible_arcs: " << ms_since(t1)/1000.0 << " s\n";
 
     // Create interpolator
+    auto t2 = clk::now();
     std::shared_ptr<Interpolator> interpolator;
     if (options.interpolator_type == "Duchon") {
         interpolator = std::make_shared<DuchonInterpolator>("cubic");
@@ -230,24 +231,35 @@ MainResult main_algorithm(
             "cubic", options.interp_overlap,
             10, 200, options.interp_partition);
     }
+    std::cout << "[main_algorithm] interpolator ctor: " << ms_since(t2)/1000.0 << " s\n";
 
     // Step 1b: Initial gradient estimation using degenerate points
+    auto t3 = clk::now();
     Eigen::MatrixXd init_grads = init_gradients_by_degenerate_pts(
         sdf_points, sdf_values, *interpolator, options);
+    std::cout << "[main_algorithm] init_gradients_by_degenerate_pts: "
+              << ms_since(t3)/1000.0 << " s\n";
 
     // Step 2: Iterative optimization
+    auto t4 = clk::now();
     Eigen::MatrixXd gradients = iterative_projection_3d(
         sdf_points, sdf_values, init_grads,
         *interpolator, options,
         options.max_iters);
+    std::cout << "[main_algorithm] iterative_projection_3d: "
+              << ms_since(t4)/1000.0 << " s\n";
 
     // Final projection + visibility check
+    auto t5 = clk::now();
     Eigen::MatrixXd projections(N, 3);
     for (int i = 0; i < N; i++)
         projections.row(i) = sdf_points.row(i) - sdf_values(i) * gradients.row(i);
 
     Eigen::VectorXi vis = are_points_visible(
         projections, sdf_points, sdf_values, options.ngbrs_list);
+    std::cout << "[main_algorithm] final projection + visibility: "
+              << ms_since(t5)/1000.0 << " s\n";
+    std::cout << "[main_algorithm] total: " << ms_since(t0)/1000.0 << " s\n";
 
     return {projections, vis, interpolator};
 }

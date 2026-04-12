@@ -49,6 +49,25 @@ public:
         int num_refine   = 5,
         const Eigen::MatrixXd* initial_guess = nullptr,
         int chunk_size   = 200) const;
+
+    /// Extract an isosurface of this interpolator via libigl's marching cubes.
+    /// Samples the implicit field on a regular (nx × ny × nz) grid covering
+    /// [bbox_min, bbox_max] and meshes the iso = `iso` level set.
+    ///
+    /// @param bbox_min / bbox_max  world-space AABB to sample
+    /// @param nx, ny, nz           grid vertex counts per axis (≥ 2)
+    /// @param iso                  isovalue (typically 0 for SDFs)
+    /// @param V                    out: (#V, 3) vertices
+    /// @param F                    out: (#F, 3) triangle indices
+    /// @param chunk_size           batch size for predict() calls
+    void extract_surface(
+        const Eigen::Vector3d& bbox_min,
+        const Eigen::Vector3d& bbox_max,
+        int nx, int ny, int nz,
+        double iso,
+        Eigen::MatrixXd& V,
+        Eigen::MatrixXi& F,
+        int chunk_size = 5000) const;
 };
 
 }  // namespace sdf

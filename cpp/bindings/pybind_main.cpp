@@ -39,11 +39,29 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def_readonly("interpolator", &sdf::MainResult::interpolator);
 
     // ── Interpolators ───────────────────────────────────────────────
+    auto extract_surface_wrapper = [](const sdf::Interpolator& self,
+                                      const Eigen::Vector3d& bbox_min,
+                                      const Eigen::Vector3d& bbox_max,
+                                      int nx, int ny, int nz,
+                                      double iso,
+                                      int chunk_size) {
+        Eigen::MatrixXd V;
+        Eigen::MatrixXi F;
+        self.extract_surface(bbox_min, bbox_max, nx, ny, nz, iso, V, F, chunk_size);
+        return py::make_tuple(V, F);
+    };
+
     py::class_<sdf::Interpolator, std::shared_ptr<sdf::Interpolator>>(m, "Interpolator")
         .def("predict", &sdf::Interpolator::predict,
              py::arg("x_new"), py::arg("chunk_size") = 5000)
         .def("predict_gradients", &sdf::Interpolator::predict_gradients,
-             py::arg("x_new"), py::arg("chunk_size") = 5000);
+             py::arg("x_new"), py::arg("chunk_size") = 5000)
+        .def("extract_surface", extract_surface_wrapper,
+             py::arg("bbox_min"), py::arg("bbox_max"),
+             py::arg("nx"), py::arg("ny"), py::arg("nz"),
+             py::arg("iso") = 0.0, py::arg("chunk_size") = 5000,
+             "Extract an isosurface via libigl marching cubes. "
+             "Returns (V, F) as numpy arrays.");
 
     // Helper lambda for fit() with optional pointer args
     auto fit_wrapper = [](sdf::Interpolator& self,
@@ -92,7 +110,10 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def("is_trained", &sdf::PUInterpolator::is_trained);
 
     // ── Functions ───────────────────────────────────────────────────
-    m.def("are_points_visible", &sdf::are_points_visible,
+    m.def("are_points_visible",
+          static_cast<Eigen::VectorXi (*)(
+              const Eigen::MatrixXd&, const Eigen::MatrixXd&,
+              const Eigen::VectorXd&, double)>(&sdf::are_points_visible),
           py::arg("query_points"), py::arg("sdf_points"),
           py::arg("sdf_values"), py::arg("epsilon") = 1e-8);
 

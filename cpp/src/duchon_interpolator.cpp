@@ -147,28 +147,25 @@ Eigen::VectorXd DuchonInterpolator::predict(const Eigen::MatrixXd& x_new,
 
     int N = (int)points_.rows();
 
-    // Compute pairwise distance matrix: dist(i,j) = ||x_new[i] - points_[j]||
-    // Using ||a-b||^2 = ||a||^2 + ||b||^2 - 2*a.b
+    // Compute pairwise squared-distance matrix (M×N), then convert in-place to
+    // kernel values.  Peak allocation is 1×(M×N) instead of the previous 3×(M×N).
+    //   cubic:      r³  = (r²)^(3/2)
+    //   thin_plate: r²·log(r+ε) = dist2 · log(√dist2 + ε)
     Eigen::VectorXd x_sq = x_new.rowwise().squaredNorm();          // (M,)
     Eigen::VectorXd p_sq = points_.rowwise().squaredNorm();         // (N,)
     Eigen::MatrixXd dist2 = x_sq.replicate(1, N) + p_sq.transpose().replicate(M, 1)
                             - 2.0 * x_new * points_.transpose();   // (M, N)
-    // Clamp negatives from numerical error
     dist2 = dist2.cwiseMax(0.0);
-    Eigen::MatrixXd dist = dist2.cwiseSqrt();                      // (M, N)
 
-    // Apply kernel elementwise
-    Eigen::MatrixXd K(M, N);
+    // Overwrite dist2 with kernel values in-place (no extra M×N matrix)
     if (kernel_type_ == "thin_plate") {
-        // r^2 * log(r + eps)
-        K = dist2.array() * (dist.array() + 1e-10).log();
+        dist2.array() *= (dist2.array().sqrt() + 1e-10).log();
     } else {
-        // cubic: r^3
-        K = dist.array() * dist2.array();
+        dist2 = dist2.array().pow(1.5);
     }
 
-    // result = K * alpha + x_new * p + q
-    Eigen::VectorXd result = K * alpha_ + x_new * p_ + Eigen::VectorXd::Constant(M, q_);
+    // result = K * alpha + x_new * p + q  (dist2 now holds K)
+    Eigen::VectorXd result = dist2 * alpha_ + x_new * p_ + Eigen::VectorXd::Constant(M, q_);
 
     return result;
 }
@@ -190,35 +187,36 @@ Eigen::MatrixXd DuchonInterpolator::predict_gradients(const Eigen::MatrixXd& x_n
     int N = (int)points_.rows();
     int dim = (int)points_.cols();
 
-    // dist2(i,j) = ||x_new[i] - points_[j]||^2
+    // Compute squared distances (M×N), then overwrite in-place with the per-(i,j)
+    // gradient weight W(i,j) = alpha_j · (d kernel/dr).
+    // Peak allocation is 1×(M×N) instead of the previous 3×(M×N).
+    //
+    // Gradient weights (d kernel/dr, as a function of r = sqrt(dist2)):
+    //   cubic:      d(r³)/dr = 3r      → W = 3·sqrt(dist2)
+    //   thin_plate: d(r²·log r)/dr = r·(2·log r + 1)
+    //               The actual gradient vector is W·(x-p)/r, so the scalar
+    //               factor per diff component is (2·log r + 1) = W/r.
+    //               Since we factor out /r later via the rowsum trick,
+    //               we store (2·log r + 1) directly.
     Eigen::VectorXd x_sq = x_new.rowwise().squaredNorm();
     Eigen::VectorXd p_sq = points_.rowwise().squaredNorm();
     Eigen::MatrixXd dist2 = x_sq.replicate(1, N) + p_sq.transpose().replicate(M, 1)
                             - 2.0 * x_new * points_.transpose();
     dist2 = dist2.cwiseMax(0.0);
-    Eigen::MatrixXd dist = dist2.cwiseSqrt().cwiseMax(1e-10);  // (M, N)
 
-    // kernel gradient scalar: d kernel / d r
-    // cubic: d/dr(r^3) = 3r^2, so d/dx = 3r^2 * (diff/r) = 3r * diff
-    //   => weight per (i,j) = alpha_j * 3 * r
-    // thin_plate: d/dr(r^2 log r) = 2r log r + r = r(2 log r + 1)
-    //   => weight per (i,j) = alpha_j * (2 log r + 1)
-    Eigen::MatrixXd W(M, N);  // W(i,j) = alpha_j * (d kernel/dr / r)
+    // Overwrite dist2 with W (no extra M×N allocation)
     if (kernel_type_ == "thin_plate") {
-        // (2*log(r) + 1) * diff => per-component: weight = alpha_j * (2*log(r)+1)
-        W = (2.0 * dist.array().log() + 1.0).matrix();
+        dist2 = (2.0 * dist2.array().sqrt().cwiseMax(1e-10).log() + 1.0).matrix();
     } else {
-        // 3*r * diff => per-component: weight = alpha_j * 3 * r
-        W = 3.0 * dist;
+        dist2 = (3.0 * dist2.array().sqrt().cwiseMax(1e-10)).matrix();
     }
-    // Multiply each column j by alpha_j
-    W = W * alpha_.asDiagonal();  // (M, N)
+    // W = dist2; scale each column j by alpha_j
+    dist2 = dist2 * alpha_.asDiagonal();
 
-    // grads(i, k) = p_(k) + sum_j W(i,j) * (x_new(i,k) - points_(j,k))
-    // = p_(k) + x_new(i,k) * sum_j W(i,j) - (W * points_)(i,k)
-    Eigen::VectorXd W_rowsum = W.rowwise().sum();  // (M,)
+    // grads(i,k) = p_(k) + x(i,k)·Σ_j W(i,j) − (W·points_)(i,k)
+    Eigen::VectorXd W_rowsum = dist2.rowwise().sum();
     Eigen::MatrixXd scaled_x = (x_new.array().colwise() * W_rowsum.array()).matrix();
-    Eigen::MatrixXd grads = scaled_x - W * points_;
+    Eigen::MatrixXd grads = scaled_x - dist2 * points_;
     grads.rowwise() += p_.transpose();
 
     return grads;

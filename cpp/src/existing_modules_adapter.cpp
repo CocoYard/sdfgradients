@@ -10,6 +10,10 @@
 #include <algorithm>
 #include <unordered_map>
 
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
+
 // ═══════════════════════════════════════════════════════════════════
 // sphere_intersect_core
 // ═══════════════════════════════════════════════════════════════════
@@ -633,23 +637,17 @@ void compute_exposed_batch(
     out.n_arcs.resize(n);
     out.n_points.resize(n);
 
-    // Growable flat storage
-    std::vector<int>    fa_sphere, fa_cap;
-    std::vector<double> fa_s, fa_e;
-    std::vector<int>    fc_sphere;
-    std::vector<double> fc_normal, fc_d, fc_center, fc_radius, fc_u, fc_v;
-    std::vector<int>    fp_sphere;
-    std::vector<double> fp_pos;
+    // Per-sphere local results (computed in parallel, then concatenated).
+    struct SphereLocal {
+        int narcs = 0, nkept_caps = 0, npts = 0;
+        std::vector<int>    arc_cap;
+        std::vector<double> arc_s, arc_e;
+        std::vector<Cap>    caps;   // only kept (remapped) caps, in remap order
+        std::vector<Vec3>   pts;
+    };
+    std::vector<SphereLocal> locals(n);
 
-    // Per-sphere scratch
-    int    _ac[MAX_ARCS];
-    double _as[MAX_ARCS], _ae[MAX_ARCS];
-    Vec3   _dp[MAX_DEGEN_PTS];
-    Cap    _caps[MAX_CAPS];
-
-    // Neighbor gather buffer
-    std::vector<double> oc_buf_v, or_buf_v;
-
+    #pragma omp parallel for schedule(dynamic, 16)
     for (int i = 0; i < n; i++) {
         int n_nbrs = nbr_offsets[i+1] - nbr_offsets[i];
         if (n_nbrs == 0) {
@@ -658,9 +656,14 @@ void compute_exposed_batch(
             continue;
         }
 
-        oc_buf_v.resize(n_nbrs * 3);
-        or_buf_v.resize(n_nbrs);
+        // Thread-local scratch (stack-allocated).
+        int    _ac[MAX_ARCS];
+        double _as[MAX_ARCS], _ae[MAX_ARCS];
+        Vec3   _dp[MAX_DEGEN_PTS];
+        Cap    _caps[MAX_CAPS];
+        int    remap[MAX_CAPS];
 
+        std::vector<double> oc_buf_v(n_nbrs * 3), or_buf_v(n_nbrs);
         const int* nb = nbr_indices + nbr_offsets[i];
         for (int j = 0; j < n_nbrs; j++) {
             int idx = nb[j];
@@ -672,7 +675,6 @@ void compute_exposed_batch(
 
         int ncaps, narcs, npts, n_pcaps;
         double total_arc;
-        int remap[MAX_CAPS];
         compute_one(
             {centers[i*3], centers[i*3+1], centers[i*3+2]}, radii[i],
             oc_buf_v.data(), or_buf_v.data(), n_nbrs, tol,
@@ -683,87 +685,101 @@ void compute_exposed_batch(
         out.n_arcs[i] = narcs;
         out.n_points[i] = npts;
 
-        // Append caps
+        SphereLocal& L = locals[i];
+        L.narcs = narcs;
+        L.npts  = npts;
+
+        // Collect kept caps in remap order (matches original serial append order).
+        L.caps.reserve(ncaps);
         for (int c = 0; c < ncaps; c++) {
             int orig = -1;
             for (int k = 0; k < n_pcaps; k++) {
                 if (remap[k] == c) { orig = k; break; }
             }
             if (orig < 0) continue;
-            fc_sphere.push_back(i);
-            fc_normal.push_back(_caps[orig].normal.x);
-            fc_normal.push_back(_caps[orig].normal.y);
-            fc_normal.push_back(_caps[orig].normal.z);
-            fc_d.push_back(_caps[orig].d);
-            fc_center.push_back(_caps[orig].circle_center.x);
-            fc_center.push_back(_caps[orig].circle_center.y);
-            fc_center.push_back(_caps[orig].circle_center.z);
-            fc_radius.push_back(_caps[orig].circle_radius);
-            fc_u.push_back(_caps[orig].local_u.x);
-            fc_u.push_back(_caps[orig].local_u.y);
-            fc_u.push_back(_caps[orig].local_u.z);
-            fc_v.push_back(_caps[orig].local_v.x);
-            fc_v.push_back(_caps[orig].local_v.y);
-            fc_v.push_back(_caps[orig].local_v.z);
+            L.caps.push_back(_caps[orig]);
         }
+        L.nkept_caps = (int)L.caps.size();
 
-        // Append arcs
-        for (int a = 0; a < narcs; a++) {
-            fa_sphere.push_back(i);
-            fa_cap.push_back(_ac[a]);
-            fa_s.push_back(_as[a]);
-            fa_e.push_back(_ae[a]);
-        }
+        L.arc_cap.assign(_ac, _ac + narcs);
+        L.arc_s.assign(_as, _as + narcs);
+        L.arc_e.assign(_ae, _ae + narcs);
 
-        // Append degen points
-        for (int p = 0; p < npts; p++) {
-            fp_sphere.push_back(i);
-            fp_pos.push_back(_dp[p].x);
-            fp_pos.push_back(_dp[p].y);
-            fp_pos.push_back(_dp[p].z);
-        }
+        L.pts.assign(_dp, _dp + npts);
     }
 
-    // Pack into BatchData
-    out.arc_sphere_idx = std::move(fa_sphere);
-    out.arc_cap_idx    = std::move(fa_cap);
-    out.arc_start      = std::move(fa_s);
-    out.arc_end        = std::move(fa_e);
+    // Serial concat pass: prefix-sum counts, then fill flat arrays in parallel.
+    std::vector<int> arc_off(n+1, 0), cap_off(n+1, 0), pt_off(n+1, 0);
+    for (int i = 0; i < n; i++) {
+        arc_off[i+1] = arc_off[i] + locals[i].narcs;
+        cap_off[i+1] = cap_off[i] + locals[i].nkept_caps;
+        pt_off[i+1]  = pt_off[i]  + locals[i].npts;
+    }
+    int total_arcs = arc_off[n];
+    int total_caps = cap_off[n];
+    int total_pts  = pt_off[n];
 
-    out.cap_sphere_idx = std::move(fc_sphere);
+    std::vector<int>    fa_sphere(total_arcs), fa_cap(total_arcs);
+    std::vector<double> fa_s(total_arcs), fa_e(total_arcs);
+    std::vector<int>    fc_sphere(total_caps);
+    std::vector<int>    fp_sphere(total_pts);
 
-    int total_caps = (int)fc_d.size();
     out.cap_normals.resize(total_caps, 3);
     out.cap_d.resize(total_caps);
     out.cap_centers.resize(total_caps, 3);
     out.cap_radii.resize(total_caps);
     out.cap_u.resize(total_caps, 3);
     out.cap_v.resize(total_caps, 3);
-    for (int c = 0; c < total_caps; c++) {
-        out.cap_normals(c, 0) = fc_normal[c*3];
-        out.cap_normals(c, 1) = fc_normal[c*3+1];
-        out.cap_normals(c, 2) = fc_normal[c*3+2];
-        out.cap_d(c) = fc_d[c];
-        out.cap_centers(c, 0) = fc_center[c*3];
-        out.cap_centers(c, 1) = fc_center[c*3+1];
-        out.cap_centers(c, 2) = fc_center[c*3+2];
-        out.cap_radii(c) = fc_radius[c];
-        out.cap_u(c, 0) = fc_u[c*3];
-        out.cap_u(c, 1) = fc_u[c*3+1];
-        out.cap_u(c, 2) = fc_u[c*3+2];
-        out.cap_v(c, 0) = fc_v[c*3];
-        out.cap_v(c, 1) = fc_v[c*3+1];
-        out.cap_v(c, 2) = fc_v[c*3+2];
+    out.point_positions.resize(total_pts, 3);
+
+    #pragma omp parallel for schedule(dynamic, 64)
+    for (int i = 0; i < n; i++) {
+        const SphereLocal& L = locals[i];
+
+        int ao = arc_off[i];
+        for (int a = 0; a < L.narcs; a++) {
+            fa_sphere[ao + a] = i;
+            fa_cap[ao + a]    = L.arc_cap[a];
+            fa_s[ao + a]      = L.arc_s[a];
+            fa_e[ao + a]      = L.arc_e[a];
+        }
+
+        int co = cap_off[i];
+        for (int c = 0; c < L.nkept_caps; c++) {
+            const Cap& cp = L.caps[c];
+            fc_sphere[co + c]      = i;
+            out.cap_normals(co+c, 0) = cp.normal.x;
+            out.cap_normals(co+c, 1) = cp.normal.y;
+            out.cap_normals(co+c, 2) = cp.normal.z;
+            out.cap_d(co+c)          = cp.d;
+            out.cap_centers(co+c, 0) = cp.circle_center.x;
+            out.cap_centers(co+c, 1) = cp.circle_center.y;
+            out.cap_centers(co+c, 2) = cp.circle_center.z;
+            out.cap_radii(co+c)      = cp.circle_radius;
+            out.cap_u(co+c, 0)       = cp.local_u.x;
+            out.cap_u(co+c, 1)       = cp.local_u.y;
+            out.cap_u(co+c, 2)       = cp.local_u.z;
+            out.cap_v(co+c, 0)       = cp.local_v.x;
+            out.cap_v(co+c, 1)       = cp.local_v.y;
+            out.cap_v(co+c, 2)       = cp.local_v.z;
+        }
+
+        int po = pt_off[i];
+        for (int p = 0; p < L.npts; p++) {
+            fp_sphere[po + p]            = i;
+            out.point_positions(po+p, 0) = L.pts[p].x;
+            out.point_positions(po+p, 1) = L.pts[p].y;
+            out.point_positions(po+p, 2) = L.pts[p].z;
+        }
     }
 
+    // Pack flat index arrays into BatchData (cap/point matrices already filled).
+    out.arc_sphere_idx   = std::move(fa_sphere);
+    out.arc_cap_idx      = std::move(fa_cap);
+    out.arc_start        = std::move(fa_s);
+    out.arc_end          = std::move(fa_e);
+    out.cap_sphere_idx   = std::move(fc_sphere);
     out.point_sphere_idx = std::move(fp_sphere);
-    int total_pts = (int)out.point_sphere_idx.size();
-    out.point_positions.resize(total_pts, 3);
-    for (int p = 0; p < total_pts; p++) {
-        out.point_positions(p, 0) = fp_pos[p*3];
-        out.point_positions(p, 1) = fp_pos[p*3+1];
-        out.point_positions(p, 2) = fp_pos[p*3+2];
-    }
 }
 
 }  // namespace sphere_exposed_core

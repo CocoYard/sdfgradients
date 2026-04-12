@@ -2,6 +2,7 @@
 
 #include "interpolator.h"
 #include "duchon_interpolator.h"
+#include "kdtree.h"
 #include <memory>
 #include <vector>
 
@@ -53,8 +54,7 @@ private:
         std::vector<int> ext_idx;
     };
 
-    // Forward declaration of KDTree3D used in partition
-    std::vector<PatchInfo> kdtree_partition(const Eigen::MatrixXd& pts, class KDTree3D& tree);
+    std::vector<PatchInfo> kdtree_partition(const Eigen::MatrixXd& pts, KDTree3D& tree);
 
     std::string kernel_;
     std::string partition_type_;
@@ -68,9 +68,27 @@ private:
     bool use_box_ = false;
     double dist_threshold_ = 0.2;
 
-    // For fallback nearest-patch lookup
+    // For fallback nearest-patch lookup (tree cached after fit(), reused every predict())
     Eigen::MatrixXd patch_centers_;
     Eigen::VectorXd patch_radii_;
+    std::unique_ptr<KDTree3D> patch_tree_;
+
+    // BVH over patch AABBs for fast point→containing-patches queries.
+public:
+    struct PatchBVHNode {
+        double lo[3], hi[3];
+        int left, right;           // -1 if leaf
+        int leaf_start, leaf_count;
+    };
+private:
+    std::vector<PatchBVHNode> patch_bvh_nodes_;
+    std::vector<int> patch_bvh_leaves_;
+    std::vector<double> patch_aabb_lo_, patch_aabb_hi_;  // flat 3*np
+
+    void build_patch_bvh();
+    void query_patches_containing(
+        const Eigen::Vector3d& pt,
+        std::vector<int>& out) const;
 };
 
 }  // namespace sdf
