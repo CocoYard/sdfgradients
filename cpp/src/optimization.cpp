@@ -37,10 +37,20 @@ Eigen::MatrixXd iterative_projection_3d(
 
         // ── Clamp to arcs ──────────────────────────────────────────
         if (options.clamp) {
-            clamp_gradients_to_arcs(
-                points, values, new_gradients,
-                options.degenerate_pts, options.batch,
-                options.ngbrs_list, options.tolerance);
+            Eigen::MatrixXd pre_clamp_gradients = new_gradients;
+            int clamped_cnt = 0;
+            while (true) {
+                new_gradients = pre_clamp_gradients;
+                clamped_cnt = clamp_gradients_to_arcs(
+                    points, values, new_gradients,
+                    options.degenerate_pts, options.batch,
+                    options.ngbrs_list, options.tolerance);
+                if (1. * clamped_cnt / N > .3) {
+                    options.tolerance.clamp_sdf_tol /= 2;
+                } else {
+                    break;
+                }
+            }
         }
 
         // ── Visibility checks ──────────────────────────────────────
@@ -79,7 +89,7 @@ Eigen::MatrixXd iterative_projection_3d(
         Eigen::VectorXi vis_mask(N);
         int visible_num = 0;
         for (int i = 0; i < N; i++) {
-            vis_mask(i) = vis_new(i) || vis_old(i);
+            vis_mask(i) = (vis_new(i) || vis_old(i)) && !options.ngbrs_list[i].empty();
             if (vis_mask(i)) visible_num++;
         }
         std::cout << "Number of visible projected points: " << visible_num

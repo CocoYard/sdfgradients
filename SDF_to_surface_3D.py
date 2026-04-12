@@ -30,7 +30,7 @@ class Options:
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
 
-        self.tolerance = None
+        self.tolerance = Tolerance()  # set it manually if you want to adjust the tolerance for clamping, e.g. based on the mean spacing of the input points
         self.degenerate_pts = None  # set it after get_visible_arcs, which is a dictionary: point index -> list of degenerate points (the angle points for short arcs)
         self.batch = None
         self.ngbrs_list = None
@@ -50,7 +50,7 @@ class Options:
               f" interp_overlap={self.interp_overlap}")
 
 class Tolerance:
-    def __init__(self, clamp_radius_ratio=0.2, clamp_sdf_tol=1e-2, angle_tol=np.radians(15)):
+    def __init__(self, clamp_radius_ratio=0.2, clamp_sdf_tol=1e-3, angle_tol=np.radians(15)):
         # 0.2 means gradient rotates 11.5 degrees at most
         # 0.1 means gradient rotates 5.7 degrees at most
         self.clamp_radius_ratio = clamp_radius_ratio # for clamping to the nearest arc point
@@ -324,15 +324,6 @@ def get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8):
 
 def main_algorithm(sdf_points, sdf_values, options : Options):
     gt_gradients, max_iters, gt_mesh = options.gt_gradients, options.max_iters, options.gt_mesh
-    if options.tolerance is None:
-        from sklearn.neighbors import KDTree
-        tree = KDTree(sdf_points)
-        dists, _ = tree.query(sdf_points, k=2)  # k=2, 0 distance for k=0 (the point itself)
-        mean_spacing = np.median(dists[:, 1])
-        clamp_sdf_tol = mean_spacing * 0.5
-        tolerance = Tolerance(clamp_sdf_tol=clamp_sdf_tol)
-        options.tolerance = tolerance
-
     """ step 1: initial gradient estimation using degenerate points """
     # collect visible arcs for each point, which will be used to clamp the gradients later
     batch, degenerate_pts, ngbrs_list = get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8)
@@ -378,8 +369,8 @@ def export_projection_visualization(sdf_points, projections, mask, recon_mesh, o
             baseColorFactor=[200, 200, 200, 255], alphaMode='OPAQUE')
         scene.add_geometry(mesh_copy, "recon_mesh")
     
-    num_visible = np.sum(mask)
-    num_invisible = np.sum(~mask)
+    num_visible = np.sum(mask != 0)
+    num_invisible = np.sum(mask == 0)
     print(f"\nBuilding GLB scene: {num_visible} visible + {num_invisible} invisible projections...")
     
     for i in range(len(sdf_points)):
@@ -450,7 +441,39 @@ def test_our_method(options : Options, save_npz=False):
 
     # Create and fit the interpolator
     timer = time.perf_counter()
-    interpolator, projections, mask = main_algorithm(points, distances, options)
+    use_cpp = True
+    if use_cpp:
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
+        import sdf_cpp
+        cpp_opts = sdf_cpp.Options()
+        cpp_opts.grid_len = options.grid_len
+        cpp_opts.max_iters = options.max_iters
+        cpp_opts.clamp = options.clamp
+        cpp_opts.turn_off_short_arcs = options.turn_off_short_arcs
+        cpp_opts.interpolator_type = options.interpolator_type
+        cpp_opts.interp_partition = options.interp_partition
+        cpp_opts.interp_overlap = options.interp_overlap
+        if options.tolerance is not None:
+            cpp_opts.tolerance.clamp_radius_ratio = options.tolerance.clamp_radius_ratio
+            cpp_opts.tolerance.clamp_sdf_tol = options.tolerance.clamp_sdf_tol
+            cpp_opts.tolerance.angle_tol = options.tolerance.angle_tol
+        result = sdf_cpp.main_algorithm(points, distances, cpp_opts)
+        # Wrap C++ interpolator so it has extract_zero_level_set
+        class _CppInterpolatorWrapper(Interpolator):
+            def __init__(self, cpp_interp):
+                self._cpp = cpp_interp
+            def fit(self, points, values, gradients=None, **kwargs):
+                pass
+            def predict(self, x_new, chunk_size=5000):
+                return self._cpp.predict(x_new, chunk_size)
+            def predict_gradients(self, x_new, chunk_size=5000):
+                return self._cpp.predict_gradients(x_new, chunk_size)
+        interpolator = _CppInterpolatorWrapper(result.interpolator)
+        projections = result.projections
+        mask = result.visibility_mask
+    else:
+        interpolator, projections, mask = main_algorithm(points, distances, options)
     print(f"  ⏱  {'Interpolator fitted':<30} {time.perf_counter() - timer:>7.2f} s")
 
     # visualize results using marching cubes to extract isosurface
@@ -525,27 +548,26 @@ if __name__ == "__main__":
     t0 = time.perf_counter()
     batch = False
     if batch:
-        for grid_len in [20, 25]:  # 20^3=8000 points, 30^3=27000 points
-            for max_iters in [0, 10]:  # 0 means no optimization, only initial gradient estimation and projection
-                for interp_partition in ['sphere', 'box']:
-                    for overlap in [0.2, 0.5]:
-                        ext = 1 if interp_partition == 'sphere' else 2
-                        options = Options(name='horse', grid_len=grid_len, max_iters=max_iters, clamp=True, 
-                                        export_short_arcs=True, export_projections=False, 
-                                        use_gt_gradients=False, interpolator_type='PU', interp_partition=interp_partition, 
-                                        overlap=overlap*ext)
-                        # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
-                        plt = test_our_method(options)
-            test_rfta(options)
+        for name in ['eiffel', 'archer', 'horse', 'bunny', 'denker']:
+            for grid_len in [20, 25]:  # 20^3=8000 points, 30^3=27000 points
+                for max_iters in [0, 13]:  # 0 means no optimization, only initial gradient estimation and projection
+                    options = Options(name=name, grid_len=grid_len, max_iters=max_iters, clamp=True, 
+                                    export_short_arcs=True, export_projections=False, 
+                                    use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
+                                overlap=0.2)
+                    # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
+                    plt = test_our_method(options)
+                # test_rfta(options)
+            check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
     else:
-        options = Options(name='eiffel', grid_len=25, max_iters=12, clamp=True, 
-                        export_short_arcs=True, export_projections=True, 
+        options = Options(name='archer', grid_len=100, max_iters=13, clamp=True, 
+                        export_short_arcs=True, export_projections=False, 
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
                         overlap=0.2)
-        # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
+        # # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
         plt = test_our_method(options)
         # test_rfta(options)
-    check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
+        check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0
     print(f"  ⏱  {'Total execution time':<30} {elapsed:>7.2f} s")

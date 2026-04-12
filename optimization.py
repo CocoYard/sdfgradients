@@ -453,6 +453,7 @@ def clamp_gradients_to_arcs(points, values, gradients, degenerate_pts, batch, ng
     ratio = tolerance.clamp_radius_ratio
     float_tol = tolerance.float_tol
     debug_cnt = 0
+    clamp_cnt = 0
     for i in range(len(points)):
         if i in degenerate_pts:
             continue    # skip clamping for points with degenerate arcs, since we will set their gradients directly toward the angle later
@@ -463,9 +464,11 @@ def clamp_gradients_to_arcs(points, values, gradients, degenerate_pts, batch, ng
             continue    # no neighbor contains the projection, skip clamping
         # 1. if it is close to some arc, clamp to the closest point on that arc
         closest, distances = util.query_closest_on_arcs(projections[i:i+1], i, batch)
-        if distances[0] < ratio * np.abs(values[i]):
+        # if distances[0] < ratio * np.abs(values[i]):
+        if distances[0] < tolerance.clamp_sdf_tol:
             pt = closest[0]
             gradients[i] = (points[i] - pt) / (values[i] + 1e-10)  # clamp to the closest point on the arc, with a slightly relaxed denominator to avoid over-shooting
+            clamp_cnt += 1
             continue
 
         # # 2. otherwise, if some point on the arc has a low function value, clamp to that point
@@ -480,41 +483,11 @@ def clamp_gradients_to_arcs(points, values, gradients, degenerate_pts, batch, ng
         #     gradients[i] = grads[0]
         #     continue
         # 3. if no suitable arc point found, keep the original gradient (which is outside visible arcs, filtered out later)
-        """ --- Visualization for debugging --- """
-        """
-        # 可视化采样点
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        # 绘制当前球的点（加粗）
-        ax.scatter(points[i, 0], points[i, 1], points[i, 2], 
-                  c='red', marker='*', s=500, label=f'Sphere {i}')
-        
-        # 绘制该球的前5个邻居
-        if i < len(ngbrs_list):
-            ngbrs_indices = ngbrs_list[i][:5]  # 只取前5个邻居
-            if len(ngbrs_indices) > 0:
-                ax.scatter(points[ngbrs_indices, 0], points[ngbrs_indices, 1], points[ngbrs_indices, 2],
-                          c='orange', marker='s', s=100, alpha=0.7, label=f'Neighbors (first {len(ngbrs_indices)})')
-        
-        # 绘制采样点
-        if len(sample_pts) > 0:
-            ax.scatter(sample_pts[:, 0], sample_pts[:, 1], sample_pts[:, 2], 
-                      c='green', marker='.', s=50, alpha=0.8, label=f'Arc samples ({len(sample_pts)} pts)')
-        
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        ax.set_title(f'Sphere {i}: Arc Sampling Visualization')
-        ax.legend()
-        plt.tight_layout()
-        plt.show()
-        
-        if len(sample_pts) == 0:
-            continue
-        """
     if debug_cnt > 0:
         print(f"\n there are {debug_cnt} samples without any arcs\n")
+    if clamp_cnt > 0:
+        print(f"\n clamped {clamp_cnt} samples to their closest arcs\n")
+    return clamp_cnt
 
 def iterative_projection_3d(points, values, init_gradients, interpolator : Interpolator, options : Options, num_iter=10,
                          num_coarse=24, refine_steps=4, num_refine=5, gt_gradients=None):
@@ -562,11 +535,12 @@ def iterative_projection_3d(points, values, init_gradients, interpolator : Inter
     values = np.asarray(values, dtype=np.float64).ravel()
     gradients = np.array(init_gradients, dtype=np.float64, copy=True)
     MES_used = False
+    MES_used = True
 
     # interpolator.fit(points, values, gradients, force_recompute=False)
     if gt_gradients is not None:
             print(f"cos_sim mean to the ground truth gradients: {np.mean(np.sum(gt_gradients * gradients, axis=1)):.6f}")
-
+    no_neighbor_mask = np.array([len(options.ngbrs_list[i]) == 0 for i in range(len(points))], dtype=bool)
     for it in range(num_iter):
         # ----- Step 1: Find best gradient via angular search on the interpolant -----
         new_gradients = interpolator.sample_best_gradients(
@@ -577,7 +551,14 @@ def iterative_projection_3d(points, values, init_gradients, interpolator : Inter
             initial_guess=gradients
         )
         if options.clamp:
-            clamp_gradients_to_arcs(points, values, new_gradients, options.degenerate_pts, options.batch, options.ngbrs_list, interpolator, options.tolerance)
+            pre_clamp_gradients = new_gradients.copy()
+            while True:
+                new_gradients = pre_clamp_gradients.copy()
+                clamped_cnt = clamp_gradients_to_arcs(points, values, new_gradients, options.degenerate_pts, options.batch, options.ngbrs_list, interpolator, options.tolerance)
+                if clamped_cnt / len(points) > .3:
+                    options.tolerance.clamp_sdf_tol /= 2
+                else:
+                    break
 
         # zero_level_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=600)
         # _, nearest_pts = _point_to_polylines_min_dist(points, zero_level_contours)
@@ -605,6 +586,7 @@ def iterative_projection_3d(points, values, init_gradients, interpolator : Inter
         print(f"Iter {it+1:3d} | mean cos_sim: {mean_cos:.6f}  "
               f"max angle change: {max_angle_deg:.2f}\u00b0  ")
         visible_mask = visible_mask_new | visible_mask_old
+        visible_mask = visible_mask & ~no_neighbor_mask # remove no neighbor sdf projections since they are not reliable for guiding interpolation
         visible_num = visible_mask.sum()
         print(f"Number of visible projected points: {visible_num} out of {len(points)}. Percentage: {visible_num / len(points) * 100:.2f}%")
 

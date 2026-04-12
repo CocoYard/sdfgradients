@@ -21,7 +21,8 @@ namespace sdf {
 /// @param batch          batch arc/cap data from compute_exposed_batch
 /// @param ngbrs_list     neighbor lists per sphere
 /// @param tolerance      clamping tolerance parameters
-void clamp_gradients_to_arcs(
+/// @return number of clamped gradients
+int clamp_gradients_to_arcs(
     const Eigen::MatrixXd& points,
     const Eigen::VectorXd& values,
     Eigen::MatrixXd& gradients,

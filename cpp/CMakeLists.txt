@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
 # ── Options ──────────────────────────────────────────────────────────
 option(BUILD_PYTHON_BINDINGS "Build pybind11 Python module" ON)
 option(USE_OPENMP            "Enable OpenMP parallelism"    ON)
@@ -79,6 +83,15 @@ target_include_directories(sdf_core PUBLIC
 )
 
 target_link_libraries(sdf_core PUBLIC Eigen3::Eigen)
+
+# Use Apple Accelerate for BLAS/LAPACK (matches numpy's backend)
+if(APPLE)
+    find_library(ACCELERATE_FRAMEWORK Accelerate)
+    if(ACCELERATE_FRAMEWORK)
+        target_link_libraries(sdf_core PUBLIC ${ACCELERATE_FRAMEWORK})
+        target_compile_definitions(sdf_core PUBLIC EIGEN_USE_BLAS)
+    endif()
+endif()
 
 if(OpenMP_CXX_FOUND)
     if(APPLE AND NOT TARGET OpenMP::OpenMP_CXX)

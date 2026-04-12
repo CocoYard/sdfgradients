@@ -116,72 +116,11 @@ static void subdivide_recursive(const Eigen::MatrixXd& points,
     subdivide_recursive(points, right, max_points, leaves);
 }
 
-// ── fit ─────────────────────────────────────────────────────────────
+// ── kdtree_partition ────────────────────────────────────────────────
 
-void PUInterpolator::fit(const Eigen::MatrixXd& points,
-                          const Eigen::VectorXd& values,
-                          const Eigen::MatrixXd* gradients,
-                          const Eigen::VectorXi* mask) {
-    Eigen::MatrixXd pts;
-    Eigen::VectorXd vals;
-
-    // Add projection points if gradients given
-    if (gradients) {
-        Eigen::MatrixXd projections;
-        if (mask) {
-            int count = mask->sum();
-            projections.resize(count, points.cols());
-            int k = 0;
-            for (int i = 0; i < (int)points.rows(); i++) {
-                if ((*mask)(i))
-                    projections.row(k++) = points.row(i) - values(i) * gradients->row(i);
-            }
-        } else {
-            projections.resize(points.rows(), points.cols());
-            for (int i = 0; i < (int)points.rows(); i++)
-                projections.row(i) = points.row(i) - values(i) * gradients->row(i);
-        }
-        pts.resize(points.rows() + projections.rows(), points.cols());
-        pts << points, projections;
-        vals.resize(values.size() + projections.rows());
-        vals << values, Eigen::VectorXd::Zero(projections.rows());
-    } else {
-        pts = points;
-        vals = values;
-    }
-
-    // Filter by distance if too many
-    if (vals.size() > 5000) {
-        std::vector<int> keep;
-        for (int i = 0; i < (int)vals.size(); i++)
-            if (std::abs(vals(i)) < dist_threshold_) keep.push_back(i);
-        Eigen::MatrixXd pf(keep.size(), pts.cols());
-        Eigen::VectorXd vf(keep.size());
-        for (int i = 0; i < (int)keep.size(); i++) {
-            pf.row(i) = pts.row(keep[i]);
-            vf(i) = vals(keep[i]);
-        }
-        std::cout << "Warning: too many points, only keeping " << keep.size()
-                  << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";
-        pts = pf;
-        vals = vf;
-    }
-
-    // Deduplicate
-    deduplicate(pts, vals);
-    int dim = (int)pts.cols();
-    int min_pts = std::max(min_points_, dim + 2);
-
-    using clock = std::chrono::high_resolution_clock;
-    auto t0 = clock::now();
-
-    // Build KDTree for partitioning
-    KDTree3D tree(pts);
-    auto t1 = clock::now();
-    std::cout << "  [PU fit] build KDTree: "
-              << std::chrono::duration<double>(t1-t0).count() << "s\n";
-
-    // ── Partition ───────────────────────────────────────────────────
+std::vector<PUInterpolator::PatchInfo> PUInterpolator::kdtree_partition(
+    const Eigen::MatrixXd& pts, KDTree3D& tree)
+{
     int n = (int)pts.rows();
     std::vector<int> all_idx(n);
     std::iota(all_idx.begin(), all_idx.end(), 0);
@@ -189,13 +128,7 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     std::vector<std::vector<int>> leaves;
     subdivide_recursive(pts, all_idx, max_points_, leaves);
 
-    struct PatchInfo {
-        Eigen::Vector3d center;
-        Eigen::Vector3d half_ext;
-        std::vector<int> ext_idx;
-    };
     std::vector<PatchInfo> patches_info;
-
     std::deque<std::vector<int>> queue(leaves.begin(), leaves.end());
 
     while (!queue.empty()) {
@@ -260,7 +193,6 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
             patches_info.push_back({center, half_ext, ext_idx});
 
         } else {
-            // Sphere partition
             Eigen::Vector3d center = Eigen::Vector3d::Zero();
             for (int i : leaf_idx) center += pts.row(i).transpose();
             center /= (double)leaf_idx.size();
@@ -346,6 +278,77 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
             if (keep[i]) filtered.push_back(std::move(patches_info[i]));
         patches_info = std::move(filtered);
     }
+
+    return patches_info;
+}
+
+// ── fit ─────────────────────────────────────────────────────────────
+
+void PUInterpolator::fit(const Eigen::MatrixXd& points,
+                          const Eigen::VectorXd& values,
+                          const Eigen::MatrixXd* gradients,
+                          const Eigen::VectorXi* mask) {
+    Eigen::MatrixXd pts;
+    Eigen::VectorXd vals;
+
+    // Add projection points if gradients given
+    if (gradients) {
+        Eigen::MatrixXd projections;
+        if (mask) {
+            int count = mask->sum();
+            projections.resize(count, points.cols());
+            int k = 0;
+            for (int i = 0; i < (int)points.rows(); i++) {
+                if ((*mask)(i))
+                    projections.row(k++) = points.row(i) - values(i) * gradients->row(i);
+            }
+        } else {
+            projections.resize(points.rows(), points.cols());
+            for (int i = 0; i < (int)points.rows(); i++)
+                projections.row(i) = points.row(i) - values(i) * gradients->row(i);
+        }
+        pts.resize(points.rows() + projections.rows(), points.cols());
+        pts << points, projections;
+        vals.resize(values.size() + projections.rows());
+        vals << values, Eigen::VectorXd::Zero(projections.rows());
+    } else {
+        pts = points;
+        vals = values;
+    }
+
+    // Filter by distance if too many
+    if (vals.size() > 5000) {
+        std::vector<int> keep;
+        for (int i = 0; i < (int)vals.size(); i++)
+            if (std::abs(vals(i)) < dist_threshold_) keep.push_back(i);
+        Eigen::MatrixXd pf(keep.size(), pts.cols());
+        Eigen::VectorXd vf(keep.size());
+        for (int i = 0; i < (int)keep.size(); i++) {
+            pf.row(i) = pts.row(keep[i]);
+            vf(i) = vals(keep[i]);
+        }
+        std::cout << "Warning: too many points, only keeping " << keep.size()
+                  << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";
+        pts = pf;
+        vals = vf;
+    }
+
+    // Deduplicate
+    deduplicate(pts, vals);
+    int dim = (int)pts.cols();
+    int min_pts = std::max(min_points_, dim + 2);
+
+    using clock = std::chrono::high_resolution_clock;
+    auto t0 = clock::now();
+
+    // Build KDTree for partitioning
+    KDTree3D tree(pts);
+    auto t1 = clock::now();
+    std::cout << "  [PU fit] build KDTree: "
+              << std::chrono::duration<double>(t1-t0).count() << "s\n";
+
+    // ── Partition ───────────────────────────────────────────────────
+    auto patches_info = kdtree_partition(pts, tree);
 
     auto t2 = clock::now();
     std::cout << "  [PU fit] greedy cover: "

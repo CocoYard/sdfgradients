@@ -47,6 +47,15 @@ private:
 
     static void deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values, double tol = 1e-8);
 
+    struct PatchInfo {
+        Eigen::Vector3d center;
+        Eigen::Vector3d half_ext;
+        std::vector<int> ext_idx;
+    };
+
+    // Forward declaration of KDTree3D used in partition
+    std::vector<PatchInfo> kdtree_partition(const Eigen::MatrixXd& pts, class KDTree3D& tree);
+
     std::string kernel_;
     std::string partition_type_;
     double overlap_;

@@ -1,5 +1,6 @@
 #include "duchon_interpolator.h"
 #include <cmath>
+#include <chrono>
 #include <iostream>
 
 namespace sdf {
@@ -83,35 +84,47 @@ void DuchonInterpolator::compute_coefficients(const Eigen::MatrixXd& pts,
     int d = (int)pts.cols();
     int size = n + d + 1;
 
-    // Compute pairwise distance matrix
+    auto t0 = std::chrono::high_resolution_clock::now();
+
+    // Compute pairwise distance matrix (vectorized)
     Eigen::MatrixXd K = Eigen::MatrixXd::Zero(size, size);
-    for (int i = 0; i < n; i++) {
-        for (int j = i + 1; j < n; j++) {
-            double r = (pts.row(i) - pts.row(j)).norm();
-            double v = kernel_eval(r);
-            K(i, j) = v;
-            K(j, i) = v;
+    {
+        Eigen::VectorXd sq = pts.rowwise().squaredNorm();                  // (n,)
+        Eigen::MatrixXd dist2 = sq.replicate(1, n) + sq.transpose().replicate(n, 1)
+                                - 2.0 * pts * pts.transpose();            // (n, n)
+        dist2 = dist2.cwiseMax(0.0);
+
+        if (kernel_type_ == "thin_plate") {
+            Eigen::MatrixXd dist = dist2.cwiseSqrt();
+            K.topLeftCorner(n, n) = dist2.array() * (dist.array() + 1e-10).log();
+        } else {
+            // cubic: r^3 = sqrt(dist2)^3 = dist2 * sqrt(dist2)
+            Eigen::MatrixXd dist = dist2.cwiseSqrt();
+            K.topLeftCorner(n, n) = dist.array() * dist2.array();
         }
-        // diagonal = 0 (kernel(0) = 0 for cubic and thin_plate after fill_diagonal(0))
     }
 
     // P = [points | 1]  shape: (n, d+1)
     // K[:n, n:] = P;  K[n:, :n] = P.T
-    for (int i = 0; i < n; i++) {
-        for (int k = 0; k < d; k++) {
-            K(i, n + k) = pts(i, k);
-            K(n + k, i) = pts(i, k);
-        }
-        K(i, n + d) = 1.0;
-        K(n + d, i) = 1.0;
-    }
+    K.block(0, n, n, d) = pts;
+    K.block(n, 0, d, n) = pts.transpose();
+    K.block(0, n + d, n, 1).setOnes();
+    K.block(n + d, 0, 1, n).setOnes();
+
+    auto t1 = std::chrono::high_resolution_clock::now();
 
     // RHS
     Eigen::VectorXd y = Eigen::VectorXd::Zero(size);
     y.head(n) = vals;
 
-    // Solve via lstsq (SVD)
-    Eigen::VectorXd coeffs = Eigen::BDCSVD<Eigen::MatrixXd, Eigen::ComputeThinU | Eigen::ComputeThinV>(K).solve(y);
+    // Solve system via PartialPivLU decomposition
+    Eigen::VectorXd coeffs = K.partialPivLu().solve(y);
+
+    auto t2 = std::chrono::high_resolution_clock::now();
+    double build_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    double solve_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+    // std::cout << "[Duchon] n=" << n << "  build K: " << build_ms
+    //           << "ms  solve: " << solve_ms << "ms\n";
 
     alpha_ = coeffs.head(n);
     p_ = coeffs.segment(n, d);

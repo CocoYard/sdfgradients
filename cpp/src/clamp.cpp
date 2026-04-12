@@ -104,7 +104,7 @@ static void query_closest_fast(
 
 // ── clamp_gradients_to_arcs ──────────────────────────────────────────
 
-void clamp_gradients_to_arcs(
+int clamp_gradients_to_arcs(
     const Eigen::MatrixXd& points,
     const Eigen::VectorXd& values,
     Eigen::MatrixXd& gradients,
@@ -114,7 +114,7 @@ void clamp_gradients_to_arcs(
     const Tolerance& tolerance)
 {
     int N = (int)points.rows();
-    double ratio = tolerance.clamp_radius_ratio;
+    double clamp_tol = tolerance.clamp_sdf_tol;
     double float_tol = tolerance.float_tol;
 
     // Precompute per-sphere cap mapping for fast arc queries
@@ -127,6 +127,7 @@ void clamp_gradients_to_arcs(
         projections.row(i) = points.row(i) - values(i) * gradients.row(i);
 
     int debug_cnt = 0;
+    int clamped_cnt = 0;
     for (int i = 0; i < N; i++) {
         // Skip degenerate-arc points
         if (degenerate_pts.count(i)) continue;
@@ -148,8 +149,9 @@ void clamp_gradients_to_arcs(
         double distance;
         query_closest_fast(projections.row(i).transpose(), batch, i, cap_map, closest, distance);
 
-        if (distance < ratio * std::abs(values(i))) {
+        if (distance < clamp_tol) {
             gradients.row(i) = (points.row(i).transpose() - closest).transpose() / (values(i) + 1e-10);
+            clamped_cnt++;
             continue;
         }
         // Otherwise keep original gradient
@@ -157,6 +159,9 @@ void clamp_gradients_to_arcs(
 
     if (debug_cnt > 0)
         std::cout << "\n there are " << debug_cnt << " samples without any arcs\n";
+    if (clamped_cnt > 0)
+        std::cout << " there are " << clamped_cnt << " samples clamped to arcs\n";
+    return clamped_cnt;
 }
 
 }  // namespace sdf

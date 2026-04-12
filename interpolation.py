@@ -1365,7 +1365,7 @@ class PUInterpolator(Interpolator):
         self.trained = True
         if DEBUG_TIME:
             print(f"  [PU fit] total: {time.perf_counter()-t0:.3f}s  ({len(self.patches)} patches)")
-            self._visualize_patches(points, d)
+            # self._visualize_patches(points, d)
 
     def _visualize_patches(self, points, d):
         """Visualize patches: 2D uses matplotlib, 3D exports a .glb file."""

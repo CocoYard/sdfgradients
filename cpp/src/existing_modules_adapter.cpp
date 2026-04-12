@@ -127,6 +127,9 @@ void find_intersections(const double* centers, const double* radii, int n,
     int total = offsets[n];
     neighbors.resize(total);
     for (int i = 0; i < n; i++) {
+        // Sort neighbors by absolute radius descending (largest first)
+        std::sort(result[i].begin(), result[i].end(),
+                  [&](int a, int b) { return std::abs(radii[a]) > std::abs(radii[b]); });
         int base = offsets[i];
         for (int k = 0; k < (int)result[i].size(); k++)
             neighbors[base + k] = result[i][k];

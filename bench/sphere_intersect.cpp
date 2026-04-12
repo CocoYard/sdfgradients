@@ -20,18 +20,18 @@
  * at most ~27 cells per grid. With ~5 levels, that's ≤ 5*27 = 135 inserts.
  *
  * Compile (macOS):
- *   c++ -O3 -shared -fPIC -undefined dynamic_lookup \
+ * c++ -O3 -shared -fPIC -undefined dynamic_lookup \
  *     -Xpreprocessor -fopenmp \
  *     -I/opt/homebrew/opt/libomp/include \
  *     -L/opt/homebrew/opt/libomp/lib -lomp \
- *     $(python3 -m pybind11 --includes) \
- *     -o sphere_intersect$(python3-config --extension-suffix) \
+ *     $(../.venv/bin/python3 -m pybind11 --includes) \
+ *     -o sphere_intersect$(../.venv/bin/python3 -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))") \
  *     sphere_intersect.cpp
  *
  * Without OpenMP (single-threaded):
  *   c++ -O3 -shared -fPIC -undefined dynamic_lookup \
- *     $(python3 -m pybind11 --includes) \
- *     -o sphere_intersect$(python3-config --extension-suffix) \
+ *     $(../.venv/bin/python3 -m pybind11 --includes) \
+ *     -o sphere_intersect$(../.venv/bin/python3-config --extension-suffix) \
  *     sphere_intersect.cpp
  *
  * Linux:
@@ -202,6 +202,9 @@ py::tuple find_intersections(
 
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; i++) {
+        // Sort neighbors by absolute radius descending (largest first)
+        std::sort(result[i].begin(), result[i].end(),
+                  [&](int a, int b) { return std::abs(r(a)) > std::abs(r(b)); });
         int base = offsets[i];
         for (int k = 0; k < (int)result[i].size(); k++)
             pnbr(base + k) = result[i][k];
