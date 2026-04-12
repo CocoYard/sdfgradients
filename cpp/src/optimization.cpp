@@ -32,8 +32,13 @@ Eigen::MatrixXd iterative_projection_3d(
 
     for (int it = 0; it < num_iter; it++) {
         // ── Step 1: Find best gradient via angular search ──────────
+        auto t_sbg0 = std::chrono::high_resolution_clock::now();
         Eigen::MatrixXd new_gradients = interpolator.sample_best_gradients(
             points, values, num_coarse, refine_steps, num_refine, &gradients);
+        std::cout << "  [sample_best_gradients] "
+                  << std::chrono::duration<double>(
+                         std::chrono::high_resolution_clock::now() - t_sbg0).count()
+                  << "s\n";
 
         // ── Clamp to arcs ──────────────────────────────────────────
         if (options.clamp) {
@@ -59,9 +64,9 @@ Eigen::MatrixXd iterative_projection_3d(
             proj_new.row(i) = points.row(i) - values(i) * new_gradients.row(i);
             proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
         }
-
-        Eigen::VectorXi vis_new = are_points_visible(proj_new, points, values);
-        Eigen::VectorXi vis_old = are_points_visible(proj_old, points, values);
+        std::cout << "Checking visibility of new and old projections...\n";
+        Eigen::VectorXi vis_new = are_points_visible(proj_new, points, values, options.ngbrs_list);
+        Eigen::VectorXi vis_old = are_points_visible(proj_old, points, values, options.ngbrs_list);
 
         // Don't update gradients that would make visible projections invisible
         // Don't update degenerate-arc points

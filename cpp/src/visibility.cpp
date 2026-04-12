@@ -163,4 +163,34 @@ Eigen::VectorXi are_points_visible(
     return result;
 }
 
+// Overload using a precomputed candidate list per query point.
+Eigen::VectorXi are_points_visible(
+    const Eigen::MatrixXd& query_points,
+    const Eigen::MatrixXd& sdf_points,
+    const Eigen::VectorXd& sdf_values,
+    const std::vector<std::vector<int>>& ngbrs_list,
+    double epsilon)
+{
+    int N = (int)query_points.rows();
+    Eigen::VectorXi result = Eigen::VectorXi::Ones(N);
+    if (N == 0) return result;
+
+    #pragma omp parallel for schedule(dynamic, 256)
+    for (int i = 0; i < N; i++) {
+        if (query_points.row(i).array().isNaN().any()) {
+            result(i) = 0;
+            continue;
+        }
+        const Eigen::RowVector3d q = query_points.row(i);
+        const auto& cands = ngbrs_list[i];
+        for (int j : cands) {
+            double r = std::abs(sdf_values(j)) - epsilon;
+            if (r <= 0.0) continue;
+            double d2 = (q - sdf_points.row(j)).squaredNorm();
+            if (d2 < r * r) { result(i) = 0; break; }
+        }
+    }
+    return result;
+}
+
 }  // namespace sdf

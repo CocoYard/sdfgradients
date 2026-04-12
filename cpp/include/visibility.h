@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <vector>
 
 namespace sdf {
 
@@ -18,6 +19,17 @@ Eigen::VectorXi are_points_visible(
     const Eigen::MatrixXd& query_points,
     const Eigen::MatrixXd& sdf_points,
     const Eigen::VectorXd& sdf_values,
+    double epsilon = 1e-8);
+
+/// Overload: when the caller already knows, for each query point i, the
+/// set of candidate spheres that could possibly contain it (typically the
+/// intersecting-neighbor list of sphere i), this skips the BVH and checks
+/// only those candidates. Requires query_points.rows() == ngbrs_list.size().
+Eigen::VectorXi are_points_visible(
+    const Eigen::MatrixXd& query_points,
+    const Eigen::MatrixXd& sdf_points,
+    const Eigen::VectorXd& sdf_values,
+    const std::vector<std::vector<int>>& ngbrs_list,
     double epsilon = 1e-8);
 
 }  // namespace sdf

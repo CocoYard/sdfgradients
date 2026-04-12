@@ -246,7 +246,8 @@ MainResult main_algorithm(
     for (int i = 0; i < N; i++)
         projections.row(i) = sdf_points.row(i) - sdf_values(i) * gradients.row(i);
 
-    Eigen::VectorXi vis = are_points_visible(projections, sdf_points, sdf_values);
+    Eigen::VectorXi vis = are_points_visible(
+        projections, sdf_points, sdf_values, options.ngbrs_list);
 
     return {projections, vis, interpolator};
 }
