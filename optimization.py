@@ -24,7 +24,7 @@ def iterative_gradient_alignment(points, values, init_gradients, interpolator : 
     points = np.asarray(points, dtype=np.float64)
     values = np.asarray(values, dtype=np.float64).ravel()
     gradients = np.array(init_gradients, dtype=np.float64, copy=True)
-    interpolator.fit(points, values, gradients, force_recompute=True)
+    interpolator.fit(points, values, gradients)
     if gt is not None:
             print_shape_distances("Before refinement", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     for it in range(num_iter):
@@ -57,7 +57,7 @@ def iterative_gradient_alignment(points, values, init_gradients, interpolator : 
               f"max angle change: {max_angle_deg:.2f}\u00b0  "
               f"proj RMSE: {proj_rmse:.6e}")
         gradients = new_gradients
-        interpolator.fit(points, values, gradients, force_recompute=True)
+        interpolator.fit(points, values, gradients)
         # if gt is not None:
         #     print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     return gradients
@@ -399,7 +399,8 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-12)
     init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
-    interpolator.fit(points, values, gradients, force_recompute=False)
+    # no intersection with other circles, so we should not trust the gradient
+    full_arc_mask = np.array([len(arcs) == 1 and arcs[0][1] - arcs[0][0] >= 2 * np.pi - 1e-8 for arcs in visible_arcs])
     if gt is not None:
         print_shape_distances("Before refinement", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
     for it in range(num_iter):
@@ -411,11 +412,6 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
             num_refine=num_refine,
             initial_guess=init_angles
         )
-        # zero_level_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=600)
-        # _, nearest_pts = _point_to_polylines_min_dist(points, zero_level_contours)
-        # dir = np.where(values[:, np.newaxis] < 0, nearest_pts - points, points - nearest_pts)
-        # new_gradients = dir / np.linalg.norm(dir, axis=1, keepdims=True)
-
         # skip points with short visible arcs or the dir is not in visible arcs, keep original gradients for them
         angle = np.where(values < 0, np.arctan2(new_gradients[:, 1], new_gradients[:, 0]), np.arctan2(-new_gradients[:, 1], -new_gradients[:, 0]))
         skip_mask = np.zeros(len(points), dtype=bool)
@@ -441,7 +437,7 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
         gradients = new_gradients
         init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
         # ----- Step 2: Fit interpolant with current gradients -----
-        interpolator.fit(points, values, gradients, force_recompute=True)
+        interpolator.fit(points, values, gradients, mask=~full_arc_mask&~np.isnan(gradients).any(axis=1))  # optionally skip fitting points with full arcs since they are less reliable
         # if gt is not None:
         #     print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=500), gt)
 
@@ -586,7 +582,7 @@ def iterative_projection_3d(points, values, init_gradients, interpolator : Inter
         print(f"Iter {it+1:3d} | mean cos_sim: {mean_cos:.6f}  "
               f"max angle change: {max_angle_deg:.2f}\u00b0  ")
         visible_mask = visible_mask_new | visible_mask_old
-        visible_mask = visible_mask & ~no_neighbor_mask # remove no neighbor sdf projections since they are not reliable for guiding interpolation
+        # visible_mask = visible_mask & ~no_neighbor_mask # remove no neighbor sdf projections since they are not reliable for guiding interpolation
         visible_num = visible_mask.sum()
         print(f"Number of visible projected points: {visible_num} out of {len(points)}. Percentage: {visible_num / len(points) * 100:.2f}%")
 
