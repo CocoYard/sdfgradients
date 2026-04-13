@@ -229,9 +229,10 @@ MainResult main_algorithm(
     if (options.interpolator_type == "Duchon") {
         interpolator = std::make_shared<DuchonInterpolator>("cubic");
     } else {
+        std::cout << "Using regularization " << options.reg << " for PUInterpolator\n";
         interpolator = std::make_shared<PUInterpolator>(
             "cubic", options.interp_overlap,
-            10, 200, options.interp_partition);
+            10, 200, options.reg, options.interp_partition);
     }
     std::cout << "[main_algorithm] interpolator ctor: " << ms_since(t2)/1000.0 << " s\n";
 

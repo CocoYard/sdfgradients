@@ -25,6 +25,8 @@ struct Options {
     int max_iters      = 10;
     bool clamp         = true;
     bool turn_off_short_arcs = false;
+    double reg = 1e-5;  // regularization for DuchonInterpolator
+    bool use_MES = false;  // whether to use MES normals for invisible points with small visibility gain
 
     std::string interpolator_type = "PU";     // "PU" or "Duchon"
     std::string interp_partition  = "box";    // "box" or "sphere"

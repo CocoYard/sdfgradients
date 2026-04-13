@@ -11,9 +11,9 @@ from bench import sphere_intersect
 
 class Options:
     def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', 
-                 turn_off_short_arcs=False, export_short_arcs=True, export_projections=True,
+                 turn_off_short_arcs=False, export_short_arcs=True, export_projections=True, reg=1e-4,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='box', overlap=0.5, 
-                 turn_off_projection=False):
+                 turn_off_projection=False, use_MES=False):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -26,6 +26,8 @@ class Options:
         self.interpolator_type = interpolator_type  # 'Duchon' or 'PU'
         self.interp_partition = interp_partition  # 'box' or 'fps' or 'sphere', only for PU interpolator
         self.interp_overlap = overlap
+        self.use_MES = use_MES
+        self.reg = reg
         
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
@@ -450,6 +452,8 @@ def test_our_method(options : Options, save_npz=False):
         cpp_opts.grid_len = options.grid_len
         cpp_opts.max_iters = options.max_iters
         cpp_opts.clamp = options.clamp
+        cpp_opts.reg = options.reg
+        cpp_opts.use_MES = options.use_MES
         cpp_opts.turn_off_short_arcs = options.turn_off_short_arcs
         cpp_opts.interpolator_type = options.interpolator_type
         cpp_opts.interp_partition = options.interp_partition
@@ -478,10 +482,18 @@ def test_our_method(options : Options, save_npz=False):
 
     # visualize results using marching cubes to extract isosurface
     timer = time.perf_counter()
-    verts, faces = interpolator.extract_zero_level_set(bounds=((points[:, 0].min(), points[:, 0].max()),
-                                                (points[:, 1].min(), points[:, 1].max()),
-                                                (points[:, 2].min(), points[:, 2].max())),
-                                                resolution=100)
+    if use_cpp:
+        bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
+        bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
+        verts, faces = result.interpolator.extract_surface(
+            bbox_min=bbox_min, bbox_max=bbox_max,
+            nx=200, ny=200, nz=200, iso=0.0, chunk_size=5000)
+    else:
+        verts, faces = interpolator.extract_zero_level_set(
+            bounds=((points[:, 0].min(), points[:, 0].max()),
+                    (points[:, 1].min(), points[:, 1].max()),
+                    (points[:, 2].min(), points[:, 2].max())),
+            resolution=100)
     print(f"  ⏱  {'Grid evaluation':<30} {time.perf_counter() - timer:>7.2f} s")
     # Extract isosurface at value 0 using marching cubes
 
@@ -505,9 +517,12 @@ def test_our_method(options : Options, save_npz=False):
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
     os.makedirs(out_dir, exist_ok=True)
     recon = trimesh.Trimesh(vertices=verts, faces=faces)
-    fname = f'interpolant_{grid_len}_{iters}_clamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}.obj'
+    # fname = f'interpolant_{grid_len}_{iters}_clamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
+    clamp_str = 'clamp' if options.clamp else 'noclamp'
+    mes_str = 'MES' if options.use_MES else 'noMES'
+    fname = f'interpolant_{grid_len}_{iters}_{clamp_str}_{mes_str}_{options.interpolator_type}_reg{options.reg}.obj'
     if options.use_gt_gradients:
-        fname = f'interpolant_{grid_len}_gtgrad_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}.obj'
+        fname = f'interpolant_{grid_len}_gtgrad_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
     
     # Export projection visualization GLB
@@ -542,7 +557,7 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
             mesh = trimesh.load(os.path.join(dir_to_meshes, mesh_file))
             haus, chamfer = mesh_distances(mesh, gt_mesh)
             print(f"{mesh_file:<50} against ground truth...", end='')
-            print(f"  Hausdorff: {haus:.8f}  Chamfer: {chamfer:.4f}")
+            print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}")
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
@@ -554,16 +569,16 @@ if __name__ == "__main__":
                     options = Options(name=name, grid_len=grid_len, max_iters=max_iters, clamp=True, 
                                     export_short_arcs=True, export_projections=False, 
                                     use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                                overlap=0.2)
+                                overlap=0.2, reg=1e-6, use_MES=False)
                     # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
                     plt = test_our_method(options)
                 # test_rfta(options)
             check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
     else:
-        options = Options(name='archer', grid_len=100, max_iters=13, clamp=True, 
-                        export_short_arcs=True, export_projections=False, 
+        options = Options(name='horse', grid_len=50, max_iters=15, clamp=False,
+                        export_short_arcs=True, export_projections=False, turn_off_short_arcs=False,
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                        overlap=0.2)
+                        overlap=0.2, reg=1e-7, use_MES=False)
         # # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
         plt = test_our_method(options)
         # test_rfta(options)

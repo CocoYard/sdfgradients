@@ -110,21 +110,23 @@ Eigen::MatrixXd iterative_projection_3d(
         // visibility gain < 1% of N. For points that are still invisible
         // and have a valid MES normal, override new_gradients with that
         // normal. vis_mask above is the union of old/new visibility.
-        int vis_old_sum = vis_old.sum();
-        double gain = (double)(visible_num - vis_old_sum) / N;
-        if (!MES_used && gain < 0.01) {
-            std::cout << "========= Using MES points... =========\n";
-            Eigen::MatrixXd contact_pts, mes_normals;
-            mes_contact_core::contact_points_from_sdf(
-                points, values, /*filter_bbox=*/true, /*debug_level=*/1,
-                contact_pts, mes_normals);
-            for (int i = 0; i < N; i++) {
-                bool valid = !std::isnan(mes_normals(i, 0));
-                bool not_visible = !vis_mask(i);
-                if (valid && not_visible)
-                    new_gradients.row(i) = mes_normals.row(i);
+        if (options.use_MES) {
+            int vis_old_sum = vis_old.sum();
+            double gain = (double)(visible_num - vis_old_sum) / N;
+            if (!MES_used && gain < 0.01) {
+                std::cout << "========= Using MES points... =========\n";
+                Eigen::MatrixXd contact_pts, mes_normals;
+                mes_contact_core::contact_points_from_sdf(
+                    points, values, /*filter_bbox=*/true, /*debug_level=*/1,
+                    contact_pts, mes_normals);
+                for (int i = 0; i < N; i++) {
+                    bool valid = !std::isnan(mes_normals(i, 0));
+                    bool not_visible = !vis_mask(i);
+                    if (valid && not_visible)
+                        new_gradients.row(i) = mes_normals.row(i);
+                }
+                MES_used = true;
             }
-            MES_used = true;
         }
 
         gradients = new_gradients;

@@ -122,7 +122,7 @@ class Interpolator(ABC):
         self.zero_contours = contours
         return contours
 
-    def _extract_zero_level_set_3d(self, bounds, grid_resolution=64, use_dual_contouring=False):
+    def _extract_zero_level_set_3d(self, bounds, grid_resolution=64, use_dual_contouring=True):
         if use_dual_contouring:
             from occupancy_dual_contouring import occupancy_dual_contouring
             import torch
@@ -186,18 +186,53 @@ class Interpolator(ABC):
                                   refine_steps=4, num_refine=12, initial_guess=None, chunk_size=200):
         batch_size = x_new.shape[0]
         sdf_flat = sdf.ravel()
+        finite_rows = np.isfinite(x_new).all(axis=1) & np.isfinite(sdf_flat)
+        sdf_work = np.where(finite_rows, sdf_flat, 0.0)
         sign = np.where(sdf_flat > 0, 1.0, -1.0)
 
+        def eval_objective(samples, sample_sign):
+            """Evaluate sign * predict(samples), treating non-finite samples as +inf objective."""
+            n_rows, n_dirs, _ = samples.shape
+            flat_samples = samples.reshape(-1, 2)
+            finite_flat = np.isfinite(flat_samples).all(axis=1)
+            obj_flat = np.full(flat_samples.shape[0], np.inf)
+            if np.any(finite_flat):
+                preds = self.predict(flat_samples[finite_flat], chunk_size=chunk_size)
+                obj_flat[finite_flat] = np.repeat(sample_sign, n_dirs)[finite_flat] * preds
+            return obj_flat.reshape(n_rows, n_dirs)
+
         if initial_guess is not None:
-            best_angles = initial_guess
+            guess = np.asarray(initial_guess)
+            best_angles = np.zeros(batch_size)
+            valid_mask = np.zeros(batch_size, dtype=bool)
+
+            if guess.ndim == 2 and guess.shape[1] == 2:
+                norms = np.linalg.norm(guess, axis=1)
+                valid_mask = np.isfinite(guess).all(axis=1) & (norms > 1e-12)
+                best_angles[valid_mask] = np.arctan2(guess[valid_mask, 1], guess[valid_mask, 0])
+            else:
+                guess_flat = guess.reshape(-1)
+                if guess_flat.shape[0] == batch_size:
+                    valid_mask = np.isfinite(guess_flat)
+                    best_angles[valid_mask] = guess_flat[valid_mask]
+
+            if np.any(~valid_mask):
+                angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)
+                dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+                fallback_mask = (~valid_mask) & finite_rows
+                samples = x_new[fallback_mask, None, :] - sdf_work[fallback_mask, None, None] * dirs[None, :, :]
+                obj = eval_objective(samples, sign[fallback_mask])
+                best_idx = np.argmin(obj, axis=1)
+                best_angles[fallback_mask] = angles[best_idx]
         else:
             angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)
             dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)
-            samples = x_new[:, None, :] - sdf_flat[:, None, None] * dirs[None, :, :]
-            preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_coarse)
-            obj = preds * sign[:, None]
+            samples = x_new[:, None, :] - sdf_work[:, None, None] * dirs[None, :, :]
+            obj = eval_objective(samples, sign)
             best_idx = np.argmin(obj, axis=1)
             best_angles = angles[best_idx]
+
+        best_angles = np.where(np.isfinite(best_angles), best_angles, 0.0)
 
         half_range = np.pi / num_coarse
         for _ in range(refine_steps):
@@ -205,14 +240,15 @@ class Interpolator(ABC):
             local_angles = best_angles[:, None] + half_range * offsets
             cos_a = np.cos(local_angles)
             sin_a = np.sin(local_angles)
-            samples = x_new[:, None, :] - sdf_flat[:, None, None] * np.stack([cos_a, sin_a], axis=2)
-            preds = self.predict(samples.reshape(-1, 2)).reshape(batch_size, num_refine)
-            obj = preds * sign[:, None]
+            samples = x_new[:, None, :] - sdf_work[:, None, None] * np.stack([cos_a, sin_a], axis=2)
+            obj = eval_objective(samples, sign)
             best_local = np.argmin(obj, axis=1)
             best_angles = local_angles[np.arange(batch_size), best_local]
+            best_angles = np.where(np.isfinite(best_angles), best_angles, 0.0)
             half_range = 2.0 * half_range / (num_refine - 1)
 
         best_dirs = np.stack([np.cos(best_angles), np.sin(best_angles)], axis=1)
+        best_dirs[~finite_rows] = np.array([1.0, 0.0])
         return best_dirs
 
     def _sample_best_gradients_3d(self, x_new, sdf, num_coarse=64,
@@ -1475,12 +1511,19 @@ class PUInterpolator(Interpolator):
         # Fallback: for uncovered points, use nearest patch by surface distance
         uncovered = ~safe
         if np.any(uncovered):
-            uncov_pts = x_new[uncovered]
-            _, nearest = self._patch_tree.query(uncov_pts)
-            for pi in np.unique(nearest):
-                pts_mask = nearest == pi
-                _, _, interp = self.patches[pi]
-                result[np.where(uncovered)[0][pts_mask]] = interp.predict(uncov_pts[pts_mask])
+            uncov_idx = np.where(uncovered)[0]
+            uncov_pts = x_new[uncov_idx]
+            finite_uncov = np.isfinite(uncov_pts).all(axis=1)
+            if np.any(finite_uncov):
+                _, nearest = self._patch_tree.query(uncov_pts[finite_uncov])
+                finite_indices = uncov_idx[finite_uncov]
+                for pi in np.unique(nearest):
+                    pts_mask = nearest == pi
+                    _, _, interp = self.patches[pi]
+                    result[finite_indices[pts_mask]] = interp.predict(uncov_pts[finite_uncov][pts_mask])
+            if np.any(~finite_uncov):
+                # Non-finite query locations get a finite fallback value.
+                result[uncov_idx[~finite_uncov]] = 0.0
 
         if DEBUG_COVER:
             if np.sum(uncovered) > 200 and len(x_new) < chunk_size:
@@ -1552,12 +1595,19 @@ class PUInterpolator(Interpolator):
         # Fallback: for uncovered points, use nearest patch to predict
         uncovered = ~safe
         if np.any(uncovered):
-            uncov_pts = x_new[uncovered]
-            _, nearest = self._patch_tree.query(uncov_pts)
-            for patch_idx in np.unique(nearest):
-                pts_mask = nearest == patch_idx
-                _, _, interp = self.patches[patch_idx]
-                result[np.where(uncovered)[0][pts_mask]] = interp.predict_gradients(uncov_pts[pts_mask])
+            uncov_idx = np.where(uncovered)[0]
+            uncov_pts = x_new[uncov_idx]
+            finite_uncov = np.isfinite(uncov_pts).all(axis=1)
+            if np.any(finite_uncov):
+                _, nearest = self._patch_tree.query(uncov_pts[finite_uncov])
+                finite_indices = uncov_idx[finite_uncov]
+                for patch_idx in np.unique(nearest):
+                    pts_mask = nearest == patch_idx
+                    _, _, interp = self.patches[patch_idx]
+                    result[finite_indices[pts_mask]] = interp.predict_gradients(uncov_pts[finite_uncov][pts_mask])
+            if np.any(~finite_uncov):
+                # Non-finite query locations get a finite fallback gradient.
+                result[uncov_idx[~finite_uncov]] = 0.0
 
         return result
 

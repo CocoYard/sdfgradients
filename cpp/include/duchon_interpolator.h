@@ -14,7 +14,7 @@ namespace sdf {
 /// predict(x) = sum_j alpha_j * kernel(||x - x_j||) + x . p + q
 class DuchonInterpolator : public Interpolator {
 public:
-    explicit DuchonInterpolator(const std::string& kernel = "cubic");
+    explicit DuchonInterpolator(const std::string& kernel = "cubic", double reg = 1e-5);
 
     void fit(const Eigen::MatrixXd& points,
              const Eigen::VectorXd& values,
@@ -40,6 +40,7 @@ private:
     double q_ = 0.0;
     bool trained_ = false;
     double dist_threshold_ = 0.2;
+    double reg_ = 1e-5; // regularization
 };
 
 }  // namespace sdf

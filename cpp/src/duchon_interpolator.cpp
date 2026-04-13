@@ -5,8 +5,8 @@
 
 namespace sdf {
 
-DuchonInterpolator::DuchonInterpolator(const std::string& kernel)
-    : kernel_type_(kernel) {}
+DuchonInterpolator::DuchonInterpolator(const std::string& kernel, double reg)
+    : kernel_type_(kernel), reg_(reg) {}
 
 double DuchonInterpolator::kernel_eval(double r) const {
     if (kernel_type_ == "thin_plate") {
@@ -110,6 +110,7 @@ void DuchonInterpolator::compute_coefficients(const Eigen::MatrixXd& pts,
     K.block(n, 0, d, n) = pts.transpose();
     K.block(0, n + d, n, 1).setOnes();
     K.block(n + d, 0, 1, n).setOnes();
+    K.topLeftCorner(n, n).diagonal().array() += reg_;
 
     auto t1 = std::chrono::high_resolution_clock::now();
 

@@ -11,9 +11,9 @@ namespace sdf {
 
 PUInterpolator::PUInterpolator(const std::string& kernel, double overlap,
                                  int min_points, int max_points,
-                                 const std::string& partition)
+                                 double reg, const std::string& partition)
     : kernel_(kernel), partition_type_(partition), overlap_(overlap),
-      min_points_(min_points), max_points_(max_points)
+      min_points_(min_points), max_points_(max_points), reg_(reg)
 {
     use_box_ = (partition == "box");
 }
@@ -373,7 +373,7 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
         patch_sizes.push_back((int)pi.ext_idx.size());
 
         auto tf0 = clock::now();
-        auto interp = std::make_unique<DuchonInterpolator>(kernel_);
+        auto interp = std::make_unique<DuchonInterpolator>(kernel_, reg_);
         interp->fit(local_pts, local_vals);
         t_local_fit += std::chrono::duration<double>(clock::now() - tf0).count();
 

@@ -20,6 +20,7 @@ public:
                    double overlap = 0.25,
                    int min_points = 10,
                    int max_points = 200,
+                   double reg=1e-5,
                    const std::string& partition = "box");
 
     void fit(const Eigen::MatrixXd& points,
@@ -84,6 +85,7 @@ private:
     std::vector<PatchBVHNode> patch_bvh_nodes_;
     std::vector<int> patch_bvh_leaves_;
     std::vector<double> patch_aabb_lo_, patch_aabb_hi_;  // flat 3*np
+    double reg_ = 1e-5;
 
     void build_patch_bvh();
     void query_patches_containing(

@@ -20,11 +20,25 @@ struct SphereCapMap {
     }
 };
 
+// For efficiency, precompute a mapping: sphere_idx -> list of arc rows
+// so query_closest_fast doesn't need to scan all arcs each time.
+struct SphereArcMap {
+    std::unordered_map<int, std::vector<int>> arc_rows;
+
+    void build(const Options::BatchData& batch) {
+        arc_rows.clear();
+        int n = (int)batch.arc_sphere_idx.size();
+        for (int a = 0; a < n; a++)
+            arc_rows[batch.arc_sphere_idx[a]].push_back(a);
+    }
+};
+
 static void query_closest_fast(
     const Eigen::Vector3d& query_pt,
     const Options::BatchData& batch,
     int sphere_idx,
     const SphereCapMap& cap_map,
+    const SphereArcMap& arc_map,
     Eigen::Vector3d& closest_out,
     double& dist_out)
 {
@@ -42,10 +56,15 @@ static void query_closest_fast(
     }
     const auto& sphere_cap_rows = it->second;
 
-    int n_arcs = (int)batch.arc_sphere_idx.size();
-    for (int a = 0; a < n_arcs; a++) {
-        if (batch.arc_sphere_idx[a] != sphere_idx) continue;
+    auto arc_it = arc_map.arc_rows.find(sphere_idx);
+    if (arc_it == arc_map.arc_rows.end()) {
+        closest_out = best_pt;
+        dist_out = std::sqrt(best_dist2);
+        return;
+    }
+    const auto& sphere_arc_rows = arc_it->second;
 
+    for (int a : sphere_arc_rows) {
         int arc_cap = batch.arc_cap_idx[a];
         if (arc_cap < 0 || arc_cap >= (int)sphere_cap_rows.size()) continue;
         int cap_row = sphere_cap_rows[arc_cap];
@@ -117,9 +136,11 @@ int clamp_gradients_to_arcs(
     double clamp_tol = tolerance.clamp_sdf_tol;
     double float_tol = tolerance.float_tol;
 
-    // Precompute per-sphere cap mapping for fast arc queries
+    // Precompute per-sphere cap/arc mappings for fast arc queries
     SphereCapMap cap_map;
     cap_map.build(batch);
+    SphereArcMap arc_map;
+    arc_map.build(batch);
 
     // Compute all projections
     Eigen::MatrixXd projections(N, 3);
@@ -147,7 +168,7 @@ int clamp_gradients_to_arcs(
         // Try clamping to closest arc point
         Eigen::Vector3d closest;
         double distance;
-        query_closest_fast(projections.row(i).transpose(), batch, i, cap_map, closest, distance);
+        query_closest_fast(projections.row(i).transpose(), batch, i, cap_map, arc_map, closest, distance);
 
         if (distance < clamp_tol) {
             gradients.row(i) = (points.row(i).transpose() - closest).transpose() / (values(i) + 1e-10);

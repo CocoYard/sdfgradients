@@ -27,6 +27,8 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def_readwrite("max_iters", &sdf::Options::max_iters)
         .def_readwrite("clamp", &sdf::Options::clamp)
         .def_readwrite("turn_off_short_arcs", &sdf::Options::turn_off_short_arcs)
+        .def_readwrite("use_MES", &sdf::Options::use_MES)
+        .def_readwrite("reg", &sdf::Options::reg)
         .def_readwrite("interpolator_type", &sdf::Options::interpolator_type)
         .def_readwrite("interp_partition", &sdf::Options::interp_partition)
         .def_readwrite("interp_overlap", &sdf::Options::interp_overlap)
@@ -91,9 +93,10 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def("is_trained", &sdf::DuchonInterpolator::is_trained);
 
     py::class_<sdf::PUInterpolator, sdf::Interpolator, std::shared_ptr<sdf::PUInterpolator>>(m, "PUInterpolator")
-        .def(py::init<const std::string&, double, int, int, const std::string&>(),
+           .def(py::init<const std::string&, double, int, int, double, const std::string&>(),
              py::arg("kernel") = "cubic", py::arg("overlap") = 0.25,
              py::arg("min_points") = 10, py::arg("max_points") = 200,
+               py::arg("reg") = 1e-5,
              py::arg("partition") = "box")
         .def("fit", [&fit_wrapper](sdf::PUInterpolator& self,
                                     const Eigen::MatrixXd& points,

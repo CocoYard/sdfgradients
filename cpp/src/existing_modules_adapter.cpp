@@ -9,9 +9,43 @@
 #include <cfloat>
 #include <algorithm>
 #include <unordered_map>
+#include <cstdio>
+#include <atomic>
+#include <climits>
 
 #ifdef USE_OPENMP
 #include <omp.h>
+#endif
+
+#if defined(__APPLE__)
+  #include <mach/mach.h>
+  static size_t mem_rss_bytes() {
+      mach_task_basic_info_data_t info;
+      mach_msg_type_number_t cnt = MACH_TASK_BASIC_INFO_COUNT;
+      if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                    (task_info_t)&info, &cnt) != KERN_SUCCESS) return 0;
+      return (size_t)info.resident_size;
+  }
+#elif defined(__linux__)
+  #include <cstdio>
+  static size_t mem_rss_bytes() {
+      FILE* f = std::fopen("/proc/self/statm", "r");
+      if (!f) return 0;
+      long pages = 0, rss = 0;
+      if (std::fscanf(f, "%ld %ld", &pages, &rss) != 2) { std::fclose(f); return 0; }
+      std::fclose(f);
+      return (size_t)rss * (size_t)sysconf(_SC_PAGESIZE);
+  }
+#else
+  static size_t mem_rss_bytes() { return 0; }
+#endif
+
+#ifdef CHECK_MEM
+#  define MEM_MARK(tag) std::fprintf(stderr, "[RSS] %-28s %7.2f GB\n", tag, mem_rss_bytes()/1.0e9)
+#  define MEM_LOG(...) std::fprintf(stderr, __VA_ARGS__)
+#else
+#  define MEM_MARK(tag) ((void)0)
+#  define MEM_LOG(...)  ((void)0)
 #endif
 
 // ═══════════════════════════════════════════════════════════════════
@@ -260,28 +294,11 @@ static bool compute_cap(Vec3 mc, double mr, Vec3 oc, double or_, int idx, Cap &o
     return true;
 }
 
-static int compute_all_caps(Vec3 mc, double mr,
-                            const double *oc, const double *or_,
-                            int n_others, Cap caps[], double tol) {
-    int nc = 0;
-    for (int i = 0; i < n_others && nc < MAX_CAPS; i++) {
-        Cap cap;
-        if (!compute_cap(mc, mr, {oc[i*3], oc[i*3+1], oc[i*3+2]}, or_[i], i, cap))
-            continue;
-
-        bool dup = false;
-        for (int e = nc - 1; e >= 0; e--) {
-            double d = dot(cap.normal, caps[e].normal);
-            if (d > 1 - tol) {
-                if (std::fabs(cap.d - caps[e].d) < tol) { dup = true; break; }
-                else if (cap.d > caps[e].d)             { dup = true; break; }
-                else { caps[e] = caps[--nc]; break; }
-            }
-        }
-        if (!dup) caps[nc++] = cap;
-    }
-    return nc;
-}
+// Hard safety cap on how many neighbors the incremental loop in compute_one
+// will scan per sphere. Our per-sphere loop prunes dead caps aggressively, but
+// pathological cases (>30k neighbors, observed) would still waste time scanning
+// neighbors that contribute nothing. Kept as a safety net.
+static constexpr int MAX_NEIGHBORS_SCANNED = 2048;
 
 static inline Vec3 point_on_circle(const Cap &cap, double t) {
     return cap.circle_center + cap.circle_radius * (std::cos(t) * cap.local_u + std::sin(t) * cap.local_v);
@@ -529,6 +546,10 @@ static int find_degen_pts(Vec3 mc, double mr, const Cap caps[], int nc,
 
 // ── compute_one: per-sphere exposed region computation ───────────
 
+// Single-pass incremental version: per neighbor, compute its cap, dedup,
+// clip existing arcs, compute the new cap's own arcs, and prune caps whose
+// arcs have all been eaten. Avoids the old two-phase pattern of building a
+// full caps[] up-front and iterating again for arcs.
 static void compute_one(
     Vec3 mc, double mr, const double *oc, const double *or_, int n_others,
     const Tolerances &tol,
@@ -539,71 +560,139 @@ static void compute_one(
     Cap *out_caps, int *out_nc,
     int *out_remap)
 {
-    Cap caps[MAX_CAPS];
-    int nc = compute_all_caps(mc, mr, oc, or_, n_others, caps, tol.tol);
-    *out_ncaps = 0;
-    *out_total_arc = 0;
-    *out_narcs = 0;
-    *out_npts = 0;
-    *out_nc = nc;
-
-    if (out_caps)  std::memcpy(out_caps, caps, nc * sizeof(Cap));
-    if (out_remap) std::memset(out_remap, -1, nc * sizeof(int));
-
-    if (nc == 0) return;
-
-    for (int i = 0; i < nc; i++) {
-        if (caps[i].phi >= PI - EPS10) {
-            if (caps[i].containment_gap <= tol.tangent_tol && *out_npts < MAX_DEGEN_PTS) {
-                out_pts[(*out_npts)++] = mc - mr * caps[i].normal;
-            }
-            return;
-        }
-    }
-
-    int valid_caps[MAX_CAPS];
-    int n_valid = 0;
-    for (int i = 0; i < nc; i++) {
-        if (caps[i].circle_radius >= EPS)
-            valid_caps[n_valid++] = i;
-    }
-    if (n_valid == 0) return;
+    Cap  caps[MAX_CAPS];
+    int  nc = 0;
+    int  arc_count[MAX_CAPS] = {};
+    int  active_caps[MAX_CAPS];
+    int  n_active = 0;
+    bool in_active[MAX_CAPS] = {};
 
     std::vector<BoundaryArc> all_arcs;
-    all_arcs.reserve(n_valid * 4);
+    std::vector<BoundaryArc> new_arcs;
+    all_arcs.reserve(16);
+    new_arcs.reserve(16);
 
-    int active_caps[MAX_CAPS];
-    int n_active = 0;
+    *out_ncaps = 0;
+    *out_narcs = 0;
+    *out_npts = 0;
+    *out_total_arc = 0;
+    *out_nc = 0;
 
-    for (int vi = 0; vi < n_valid; vi++) {
-        int cap_idx = valid_caps[vi];
+    int scan_limit = n_others < MAX_NEIGHBORS_SCANNED ? n_others : MAX_NEIGHBORS_SCANNED;
 
-        std::vector<BoundaryArc> new_arcs;
-        new_arcs.reserve(all_arcs.size() + 4);
-        for (const auto &arc : all_arcs)
-            clip_arc_by_cap(arc, caps[cap_idx], caps, new_arcs);
+    for (int i = 0; i < scan_limit && nc < MAX_CAPS; i++) {
+        Cap cap;
+        if (!compute_cap(mc, mr, {oc[i*3], oc[i*3+1], oc[i*3+2]}, or_[i], i, cap))
+            continue;
 
-        Interval new_intervals[MAX_INTERVALS];
-        int n_new = compute_exposed_arcs_on_circle(cap_idx, caps,
+        // Containment (φ ≥ π): this neighbor swallows us. Emit tangent point if
+        // applicable and bail — exposed region is empty.
+        if (cap.phi >= PI - EPS10) {
+            if (cap.containment_gap <= tol.tangent_tol && *out_npts < MAX_DEGEN_PTS) {
+                out_pts[(*out_npts)++] = mc - mr * cap.normal;
+            }
+            *out_ncaps = 0;
+            *out_narcs = 0;
+            *out_nc = 0;
+            return;
+        }
+
+        // Dedup against existing caps (live and frozen small-radius ones),
+        // matching the original compute_all_caps logic. Dominating new replaces
+        // the old in-place; duplicates are skipped.
+        bool dup = false;
+        int replaced = -1;
+        for (int e = nc - 1; e >= 0; e--) {
+            double d = dot(cap.normal, caps[e].normal);
+            if (d > 1 - tol.tol) {
+                if (std::fabs(cap.d - caps[e].d) < tol.tol) { dup = true; break; }
+                else if (cap.d > caps[e].d)                 { dup = true; break; }
+                else { replaced = e; break; }
+            }
+        }
+        if (dup) continue;
+
+        int new_idx;
+        if (replaced >= 0) {
+            new_idx = replaced;
+            caps[new_idx] = cap;
+            // Drop any arcs hosted by the replaced cap; the new cap will compute
+            // its own arcs below.
+            if (arc_count[new_idx] > 0) {
+                all_arcs.erase(std::remove_if(all_arcs.begin(), all_arcs.end(),
+                    [&](const BoundaryArc& a){ return a.cap_idx == new_idx; }),
+                    all_arcs.end());
+                arc_count[new_idx] = 0;
+            }
+        } else {
+            new_idx = nc++;
+            caps[new_idx] = cap;
+        }
+
+        // Frozen small-radius caps: kept in caps[] so find_degen_pts can see
+        // them, but never participate in arc clipping.
+        if (cap.circle_radius < EPS) {
+            if (replaced >= 0 && in_active[new_idx]) {
+                // The replaced slot was active; remove it.
+                for (int k = 0; k < n_active; k++) {
+                    if (active_caps[k] == new_idx) {
+                        active_caps[k] = active_caps[--n_active];
+                        break;
+                    }
+                }
+                in_active[new_idx] = false;
+            }
+            continue;
+        }
+
+        // Clip all existing arcs by the new cap.
+        new_arcs.clear();
+        for (const auto& arc : all_arcs)
+            clip_arc_by_cap(arc, caps[new_idx], caps, new_arcs);
+
+        // Compute the new cap's own exposed arcs against currently active caps.
+        // compute_exposed_arcs_on_circle skips new_idx internally if present.
+        Interval ivs[MAX_INTERVALS];
+        int n_new = compute_exposed_arcs_on_circle(new_idx, caps,
                                                    active_caps, n_active,
-                                                   new_intervals, tol);
-        active_caps[n_active++] = cap_idx;
-
+                                                   ivs, tol);
         for (int a = 0; a < n_new; a++)
-            new_arcs.push_back({cap_idx, new_intervals[a].start, new_intervals[a].end});
-        all_arcs = std::move(new_arcs);
+            new_arcs.push_back({new_idx, ivs[a].start, ivs[a].end});
+
+        all_arcs.swap(new_arcs);
+
+        // Rebuild arc_count from the surviving arcs.
+        std::memset(arc_count, 0, sizeof(int) * nc);
+        for (const auto& a : all_arcs) arc_count[a.cap_idx]++;
+
+        if (!in_active[new_idx]) {
+            active_caps[n_active++] = new_idx;
+            in_active[new_idx] = true;
+        }
+
+        // Prune caps whose arcs have all been eaten.
+        int w = 0;
+        for (int k = 0; k < n_active; k++) {
+            int idx = active_caps[k];
+            if (arc_count[idx] > 0) {
+                active_caps[w++] = idx;
+            } else {
+                in_active[idx] = false;
+            }
+        }
+        n_active = w;
     }
 
-    int arc_count[MAX_CAPS] = {};
-    for (const auto &arc : all_arcs)
-        if (arc.cap_idx < MAX_CAPS) arc_count[arc.cap_idx]++;
-
+    // Build output: compact caps into kept order.
     int remap[MAX_CAPS];
     int kept = 0;
     for (int i = 0; i < nc; i++) {
         if (arc_count[i] > 0) remap[i] = kept++;
         else                  remap[i] = -1;
     }
+
+    *out_nc = nc;
+    if (out_caps)  std::memcpy(out_caps, caps, nc * sizeof(Cap));
     if (out_remap) std::memcpy(out_remap, remap, nc * sizeof(int));
 
     double total = 0;
@@ -634,6 +723,9 @@ void compute_exposed_batch(
 {
     Tolerances tol{tol_v, degen_tol, merge_tol, tangent_tol};
 
+    MEM_MARK("batch: enter");
+    MEM_LOG("[RSS] batch n=%d\n", n);
+
     out.n_arcs.resize(n);
     out.n_points.resize(n);
 
@@ -646,6 +738,40 @@ void compute_exposed_batch(
         std::vector<Vec3>   pts;
     };
     std::vector<SphereLocal> locals(n);
+    MEM_MARK("after locals(n) alloc");
+
+    // Neighbor list stats — catches pathological cases where some sphere
+    // has huge n_nbrs, which blows up compute_one internally.
+    {
+        int max_nb = 0, min_nb = INT_MAX;
+        long long sum_nb = 0, sum_sq = 0;
+        int hist[8] = {0};  // <=8, <=32, <=128, <=512, <=2k, <=8k, <=32k, >32k
+        int arg_max = -1;
+        for (int i = 0; i < n; i++) {
+            int k = nbr_offsets[i+1] - nbr_offsets[i];
+            if (k > max_nb) { max_nb = k; arg_max = i; }
+            if (k < min_nb) min_nb = k;
+            sum_nb += k;
+            sum_sq += (long long)k * k;
+            int b = 0;
+            int t = 8;
+            while (b < 7 && k > t) { b++; t *= 4; }
+            hist[b]++;
+        }
+        double mean = (double)sum_nb / n;
+        MEM_LOG("[RSS] nbr stats: min=%d max=%d(at i=%d) mean=%.1f"
+            " total=%lld (%.2f GB as int)\n",
+            min_nb, max_nb, arg_max, mean, sum_nb, sum_nb*4/1e9);
+        MEM_LOG("[RSS] nbr hist (<=8,32,128,512,2k,8k,32k,>32k): "
+            "%d %d %d %d %d %d %d %d\n",
+            hist[0],hist[1],hist[2],hist[3],hist[4],hist[5],hist[6],hist[7]);
+        // Rough upper bound if compute_one is O(n_nbrs^2) in memory:
+        MEM_LOG("[RSS] sum(n_nbrs^2)=%lld (~%.2f GB as double)\n",
+            sum_sq, sum_sq*8/1e9);
+    }
+
+    std::atomic<int> progress{0};
+    size_t rss_before_loop = mem_rss_bytes();
 
     #pragma omp parallel for schedule(dynamic, 16)
     for (int i = 0; i < n; i++) {
@@ -663,9 +789,20 @@ void compute_exposed_batch(
         Cap    _caps[MAX_CAPS];
         int    remap[MAX_CAPS];
 
-        std::vector<double> oc_buf_v(n_nbrs * 3), or_buf_v(n_nbrs);
+        // Thread-local reusable gather buffers — reallocating per iteration
+        // (with n_nbrs up to ~40k) was the main cause of RSS bloat, since the
+        // allocator holds the high-water mark and doesn't return pages to OS.
+        // compute_all_caps will only scan MAX_NEIGHBORS_SCANNED anyway, so cap
+        // the copy.
+        static thread_local std::vector<double> oc_buf_v;
+        static thread_local std::vector<double> or_buf_v;
+        int n_use = n_nbrs < MAX_NEIGHBORS_SCANNED ? n_nbrs : MAX_NEIGHBORS_SCANNED;
+        if ((int)or_buf_v.size() < n_use) {
+            oc_buf_v.resize(n_use * 3);
+            or_buf_v.resize(n_use);
+        }
         const int* nb = nbr_indices + nbr_offsets[i];
-        for (int j = 0; j < n_nbrs; j++) {
+        for (int j = 0; j < n_use; j++) {
             int idx = nb[j];
             oc_buf_v[j*3]   = centers[idx*3];
             oc_buf_v[j*3+1] = centers[idx*3+1];
@@ -677,7 +814,7 @@ void compute_exposed_batch(
         double total_arc;
         compute_one(
             {centers[i*3], centers[i*3+1], centers[i*3+2]}, radii[i],
-            oc_buf_v.data(), or_buf_v.data(), n_nbrs, tol,
+            oc_buf_v.data(), or_buf_v.data(), n_use, tol,
             &ncaps, &narcs, _ac, _as, _ae, MAX_ARCS,
             &total_arc, &npts, _dp,
             _caps, &n_pcaps, remap);
@@ -706,6 +843,43 @@ void compute_exposed_batch(
         L.arc_e.assign(_ae, _ae + narcs);
 
         L.pts.assign(_dp, _dp + npts);
+
+        int done = progress.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((done & 4095) == 0) {
+            #pragma omp critical
+            {
+                MEM_LOG("[RSS] loop progress %d/%d  (i=%d n_nbrs=%d ncaps=%d narcs=%d)"
+                    "  RSS=%.2f GB (+%.2f)\n",
+                    done, n, i, n_nbrs, ncaps, narcs,
+                    mem_rss_bytes()/1e9,
+                    (mem_rss_bytes() - rss_before_loop)/1e9);
+            }
+        }
+    }
+
+    MEM_MARK("after parallel compute");
+
+    // Tally locals capacity to see how much the intermediate copy costs.
+    {
+        size_t b_arc=0, b_caps=0, b_pts=0;
+        size_t tot_arcs=0, tot_caps=0, tot_pts=0;
+        for (int i = 0; i < n; i++) {
+            const SphereLocal& L = locals[i];
+            b_arc  += L.arc_cap.capacity()*sizeof(int)
+                    + L.arc_s.capacity()*sizeof(double)
+                    + L.arc_e.capacity()*sizeof(double);
+            b_caps += L.caps.capacity()*sizeof(Cap);
+            b_pts  += L.pts.capacity()*sizeof(Vec3);
+            tot_arcs += L.narcs;
+            tot_caps += L.nkept_caps;
+            tot_pts  += L.npts;
+        }
+        MEM_LOG("[RSS] locals bytes: arcs=%.2fGB caps=%.2fGB pts=%.2fGB"
+            " | totals arcs=%zu caps=%zu pts=%zu\n",
+            b_arc/1e9, b_caps/1e9, b_pts/1e9, tot_arcs, tot_caps, tot_pts);
+        MEM_LOG("[RSS] out.* projected: cap_mats=%.2fGB points=%.2fGB\n",
+            tot_caps*(3+1+3+1+3+3)*sizeof(double)/1e9,
+            tot_pts*3*sizeof(double)/1e9);
     }
 
     // Serial concat pass: prefix-sum counts, then fill flat arrays in parallel.
@@ -731,6 +905,7 @@ void compute_exposed_batch(
     out.cap_u.resize(total_caps, 3);
     out.cap_v.resize(total_caps, 3);
     out.point_positions.resize(total_pts, 3);
+    MEM_MARK("after out.* resize");
 
     #pragma omp parallel for schedule(dynamic, 64)
     for (int i = 0; i < n; i++) {
@@ -780,6 +955,8 @@ void compute_exposed_batch(
     out.arc_end          = std::move(fa_e);
     out.cap_sphere_idx   = std::move(fc_sphere);
     out.point_sphere_idx = std::move(fp_sphere);
+
+    MEM_MARK("batch: exit");
 }
 
 }  // namespace sphere_exposed_core
