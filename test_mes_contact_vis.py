@@ -7,6 +7,7 @@ import numpy as np
 import trimesh
 import mes_contact
 import igl
+import time
 
 def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False ):
     '''
@@ -80,7 +81,7 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False ):
     return mesh, points, distances, gradients
 
 # ── Input spheres ─────────────────────────────────────────────────────────────
-mesh, points, sdf_values, gradients = generate_test_mesh_data("examples/horse.obj", "horse", grid_len=20)
+mesh, points, sdf_values, gradients = generate_test_mesh_data("examples/archer.obj", "archer", grid_len=35)
 # points = np.array([
 #     [ 1.0,  1.0,  0],
 #     [ -1.0,  1.0,  0],
@@ -103,56 +104,80 @@ mesh, points, sdf_values, gradients = generate_test_mesh_data("examples/horse.ob
 # sdf_values = np.concatenate([sdf_values, -sdf_values])  # First 7 points outside, next 7 inside
 N = len(points)
 
+# Dump same input to CSV so the standalone reference binary / bench can read it
+np.savetxt("/tmp/mes_bench_input.csv",
+           np.concatenate([points, sdf_values[:, None]], axis=1),
+           delimiter=",")
+print(f"Dumped {len(points)} spheres to /tmp/mes_bench_input.csv")
+
 # ── Run mes_contact ───────────────────────────────────────────────────────────
-contact_pts, normals = mes_contact.contact_points_from_sdf(points, sdf_values, debug_level=1)
+t0 = time.time()
+contact_pts, normals = mes_contact.contact_points_from_sdf(points, sdf_values, debug_level=0)
 mask = ~np.isnan(contact_pts).any(axis=1)
 valid_idx = np.where(mask)[0]
 valid_cp = contact_pts[mask]
 
 print(f"Input points:        {N}")
 print(f"Points with contact: {mask.sum()}")
-# Check: how many contact points are inside another sphere?
-radii = np.abs(sdf_values)
-n_contained = 0
-for k, i in enumerate(valid_idx):
-    cp = valid_cp[k]
-    dists = np.linalg.norm(points - cp[None, :], axis=1)
-    dists[i] = np.inf  # skip self
-    if (dists < radii).any():
-        n_contained += 1
-print(f"Contact points contained by another sphere: {n_contained}/{len(valid_cp)}")
-exit(0)
-# ── Build GLB scene ───────────────────────────────────────────────────────────
-scene = trimesh.Scene()
-radii = np.abs(sdf_values)
+print(f"mes_contact time:    {time.time() - t0:.2f} seconds")
+if True:
+    # ── Compare with reference MESReconstruction from maximal-empty-spheres fork ──
+    import sys
+    sys.path.insert(0, '/Users/yongcheng/Documents/phd/research/sdf/maximal-empty-spheres/cgal')
+    from EmptySpheresReconstruction import MESReconstruction
 
-# Input spheres (transparent)
-for i in range(N):
-    sphere = trimesh.creation.icosphere(subdivisions=3, radius=radii[i])
-    sphere.apply_translation(points[i])
-    base_color = [68, 136, 204] if sdf_values[i] >= 0 else [204, 136, 68]
-    mat = trimesh.visual.material.PBRMaterial(
-        baseColorFactor=base_color + [80],
-        alphaMode='BLEND',
+    t0 = time.time()
+    mes_verts, mes_faces, mes_pts, mes_normals = MESReconstruction(
+        points, sdf_values,
+        screening_weight=1.0,
+        return_oriented_points=True,
+        save_folder='/tmp',
     )
-    sphere.visual = trimesh.visual.TextureVisuals(material=mat)
-    scene.add_geometry(sphere, node_name=f'sphere_{i}')
+    print(f"MESReconstruction time (incl. PSR): {time.time() - t0:.2f} seconds")
+    print(f"  oriented points from CGAL: {len(mes_pts)}")
 
-# Sphere centers (small red spheres)
-for i in range(N):
-    center = trimesh.creation.icosphere(subdivisions=2, radius=0.005)
-    center.apply_translation(points[i])
-    center.visual.face_colors = [0, 0, 0, 255]
-    scene.add_geometry(center, node_name=f'center_{i}')
+# # Check: how many contact points are inside another sphere?
+# radii = np.abs(sdf_values)
+# n_contained = 0
+# for k, i in enumerate(valid_idx):
+#     cp = valid_cp[k]
+#     dists = np.linalg.norm(points - cp[None, :], axis=1)
+#     dists[i] = np.inf  # skip self
+#     if (dists < radii).any():
+#         n_contained += 1
+# print(f"Contact points contained by another sphere: {n_contained}/{len(valid_cp)}")
+# exit(0)
+# # ── Build GLB scene ───────────────────────────────────────────────────────────
+# scene = trimesh.Scene()
+# radii = np.abs(sdf_values)
 
-# Contact points (red spheres)
-for k, i in enumerate(valid_idx):
-    cp = valid_cp[k]
-    pt = trimesh.creation.icosphere(subdivisions=2, radius=0.08)
-    pt.apply_translation(cp)
-    pt.visual.face_colors = [255, 0, 0, 255]
-    scene.add_geometry(pt, node_name=f'contact_{i}')
+# # Input spheres (transparent)
+# for i in range(N):
+#     sphere = trimesh.creation.icosphere(subdivisions=3, radius=radii[i])
+#     sphere.apply_translation(points[i])
+#     base_color = [68, 136, 204] if sdf_values[i] >= 0 else [204, 136, 68]
+#     mat = trimesh.visual.material.PBRMaterial(
+#         baseColorFactor=base_color + [80],
+#         alphaMode='BLEND',
+#     )
+#     sphere.visual = trimesh.visual.TextureVisuals(material=mat)
+#     scene.add_geometry(sphere, node_name=f'sphere_{i}')
 
-out = 'test_mes_contact_vis.glb'
-scene.export(out)
-print(f"Saved: {out}")
+# # Sphere centers (small red spheres)
+# for i in range(N):
+#     center = trimesh.creation.icosphere(subdivisions=2, radius=0.005)
+#     center.apply_translation(points[i])
+#     center.visual.face_colors = [0, 0, 0, 255]
+#     scene.add_geometry(center, node_name=f'center_{i}')
+
+# # Contact points (red spheres)
+# for k, i in enumerate(valid_idx):
+#     cp = valid_cp[k]
+#     pt = trimesh.creation.icosphere(subdivisions=2, radius=0.08)
+#     pt.apply_translation(cp)
+#     pt.visual.face_colors = [255, 0, 0, 255]
+#     scene.add_geometry(pt, node_name=f'contact_{i}')
+
+# out = 'test_mes_contact_vis.glb'
+# scene.export(out)
+# print(f"Saved: {out}")

@@ -37,7 +37,11 @@ namespace sphere_exposed_core {
 }
 
 namespace sdf {
+using clk = std::chrono::steady_clock;
 
+auto ms_since = [](const clk::time_point& t) {
+    return std::chrono::duration<double, std::milli>(clk::now() - t).count();
+};
 // ── filter_degenerate_pts ───────────────────────────────────────────
 
 static void filter_degenerate_pts(
@@ -157,8 +161,10 @@ void get_visible_arcs(
         // Eigen default is column-major; C functions expect row-major (centers[i*3+k])
         Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor> pts_rm = sdf_points;
         std::vector<int> offsets, neighbors;
+        auto t = clk::now();
         sphere_intersect_core::find_intersections(
             pts_rm.data(), radii.data(), N, offsets, neighbors);
+        std::cout << "[get_visible_arcs] find_intersections: " << ms_since(t)/1000.0 << " s\n";
 
         // Call compute_exposed_batch while neighbors/offsets are still alive.
         // This avoids keeping pts_rm + neighbors alive past their last use.
@@ -208,11 +214,7 @@ MainResult main_algorithm(
 {
     int N = (int)sdf_points.rows();
 
-    using clk = std::chrono::steady_clock;
     auto t0 = clk::now();
-    auto ms_since = [](const clk::time_point& t) {
-        return std::chrono::duration<double, std::milli>(clk::now() - t).count();
-    };
 
     // Step 1: Compute visible arcs + degenerate points
     auto t1 = clk::now();

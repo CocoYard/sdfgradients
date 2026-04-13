@@ -1,6 +1,7 @@
 #include "optimization.h"
 #include "visibility.h"
 #include "clamp.h"
+#include "mes_contact_core.h"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -22,6 +23,7 @@ Eigen::MatrixXd iterative_projection_3d(
 {
     int N = (int)points.rows();
     Eigen::MatrixXd gradients = init_gradients;
+    bool MES_used = false;
 
     if (gt_gradients) {
         double cos_sum = 0.0;
@@ -94,18 +96,36 @@ Eigen::MatrixXd iterative_projection_3d(
         Eigen::VectorXi vis_mask(N);
         int visible_num = 0;
         for (int i = 0; i < N; i++) {
-            vis_mask(i) = (vis_new(i) || vis_old(i)) && !options.ngbrs_list[i].empty();
+            vis_mask(i) = (vis_new(i) || vis_old(i));
+            // vis_mask(i) = (vis_new(i) || vis_old(i)) && !options.ngbrs_list[i].empty();
+            // vis_mask(i) = (vis_new(i) || vis_old(i)) && std::abs(values[i]) > 1e-2;
             if (vis_mask(i)) visible_num++;
         }
         std::cout << "Number of visible projected points: " << visible_num
                   << " out of " << N << ". Percentage: "
                   << (100.0 * visible_num / N) << "%\n";
 
-        // TODO: MES contact points integration
-        // In the Python version, when visibility improvement stalls,
-        // mes_contact.contact_points_from_sdf is called.
-        // This requires linking to the existing mes_contact C++ module.
-        // For now, this step is omitted.
+        // ── MES contact points: when visibility improvement stalls ─
+        // Mirrors optimization.py:589-594. Trigger once when new-vs-old
+        // visibility gain < 1% of N. For points that are still invisible
+        // and have a valid MES normal, override new_gradients with that
+        // normal. vis_mask above is the union of old/new visibility.
+        int vis_old_sum = vis_old.sum();
+        double gain = (double)(visible_num - vis_old_sum) / N;
+        if (!MES_used && gain < 0.01) {
+            std::cout << "========= Using MES points... =========\n";
+            Eigen::MatrixXd contact_pts, mes_normals;
+            mes_contact_core::contact_points_from_sdf(
+                points, values, /*filter_bbox=*/true, /*debug_level=*/1,
+                contact_pts, mes_normals);
+            for (int i = 0; i < N; i++) {
+                bool valid = !std::isnan(mes_normals(i, 0));
+                bool not_visible = !vis_mask(i);
+                if (valid && not_visible)
+                    new_gradients.row(i) = mes_normals.row(i);
+            }
+            MES_used = true;
+        }
 
         gradients = new_gradients;
 

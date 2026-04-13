@@ -121,8 +121,7 @@ void find_intersections(const double* centers, const double* radii, int n,
 
             std::sort(buf.begin(), buf.end());
             buf.erase(std::unique(buf.begin(), buf.end()), buf.end());
-            result[i] = buf;
-            buf = std::vector<int>();
+            result[i] = std::move(buf);
         }
     }
 
@@ -130,6 +129,7 @@ void find_intersections(const double* centers, const double* radii, int n,
     for (int i = 0; i < n; i++) offsets[i+1] = offsets[i] + (int)result[i].size();
     int total = offsets[n];
     neighbors.resize(total);
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; i++) {
         // Sort neighbors by absolute radius descending (largest first)
         std::sort(result[i].begin(), result[i].end(),

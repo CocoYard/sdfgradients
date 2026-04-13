@@ -5,8 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
 # ── Options ──────────────────────────────────────────────────────────
@@ -15,8 +15,45 @@ option(USE_OPENMP            "Enable OpenMP parallelism"    ON)
 
 # ── Dependencies ─────────────────────────────────────────────────────
 
-# Eigen3
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+# Eigen3 — use the fork's bundled Eigen 3.4.1 if available. find_package
+# picked up a foreign 3.4.90 dev build from an unrelated project, whose
+# SVD/matrix-product memory behavior blew up CGAL MES by ~100GB.
+set(FORK_EIGEN "${CMAKE_CURRENT_SOURCE_DIR}/../../sdf/maximal-empty-spheres/cgal/build/_deps/eigen-src")
+if(EXISTS "${FORK_EIGEN}/Eigen/Core")
+    add_library(Eigen3::Eigen INTERFACE IMPORTED)
+    set_target_properties(Eigen3::Eigen PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${FORK_EIGEN}")
+    message(STATUS "Using fork Eigen at ${FORK_EIGEN}")
+else()
+    find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+endif()
+
+# CGAL (header-only; needs GMP + MPFR at link time). Used by mes_contact_core.
+# The Maximal_empty_spheres package is unreleased — we include it from the
+# local fork at ../../sdf/maximal-empty-spheres/cgal. Core CGAL comes from brew.
+set(MES_FORK_BASE "${CMAKE_CURRENT_SOURCE_DIR}/../../sdf/maximal-empty-spheres/cgal"
+    CACHE PATH "Path to the maximal-empty-spheres CGAL fork")
+set(MES_FORK_INCLUDES "")
+if(EXISTS "${MES_FORK_BASE}/cgal")
+    file(GLOB MES_MODULES RELATIVE "${MES_FORK_BASE}/cgal" "${MES_FORK_BASE}/cgal/*")
+    foreach(m ${MES_MODULES})
+        if(IS_DIRECTORY "${MES_FORK_BASE}/cgal/${m}/include")
+            list(APPEND MES_FORK_INCLUDES "${MES_FORK_BASE}/cgal/${m}/include")
+        endif()
+    endforeach()
+endif()
+find_path(CGAL_INCLUDE_DIR CGAL/Epick_d.h
+    HINTS /opt/homebrew/include /usr/local/include)
+find_library(GMP_LIBRARY   NAMES gmp   HINTS /opt/homebrew/lib /usr/local/lib)
+find_library(GMPXX_LIBRARY NAMES gmpxx HINTS /opt/homebrew/lib /usr/local/lib)
+find_library(MPFR_LIBRARY  NAMES mpfr  HINTS /opt/homebrew/lib /usr/local/lib)
+if(CGAL_INCLUDE_DIR AND GMP_LIBRARY AND MPFR_LIBRARY)
+    set(HAVE_MES_CONTACT TRUE)
+    message(STATUS "MES contact enabled (CGAL at ${CGAL_INCLUDE_DIR})")
+else()
+    set(HAVE_MES_CONTACT FALSE)
+    message(STATUS "MES contact disabled (CGAL/GMP/MPFR not found)")
+endif()
 
 # nanoflann (header-only KDTree)
 # Put nanoflann in third_party/ via:
@@ -87,6 +124,7 @@ add_library(sdf_core STATIC
     src/optimization.cpp
     src/main_algorithm.cpp
     src/existing_modules_adapter.cpp
+    src/mes_contact_core.cpp
 )
 
 target_include_directories(sdf_core PUBLIC
@@ -98,6 +136,20 @@ target_include_directories(sdf_core PUBLIC
 )
 
 target_link_libraries(sdf_core PUBLIC Eigen3::Eigen)
+
+if(HAVE_MES_CONTACT)
+    # Fork's Maximal_empty_spheres headers MUST come before brew CGAL so the
+    # unreleased package is picked up; brew CGAL provides the rest.
+    target_include_directories(sdf_core SYSTEM PUBLIC
+        ${MES_FORK_INCLUDES} ${CGAL_INCLUDE_DIR})
+    target_compile_definitions(sdf_core PUBLIC HAVE_MES_CONTACT CGAL_USE_GMPXX=1)
+    target_link_libraries(sdf_core PUBLIC
+        ${GMPXX_LIBRARY} ${MPFR_LIBRARY} ${GMP_LIBRARY})
+    # EIGEN_USE_BLAS (Accelerate) interacts pathologically with CGAL MES's
+    # Eigen usage, blowing up memory. Undefine it for this TU only.
+    set_source_files_properties(src/mes_contact_core.cpp PROPERTIES
+        COMPILE_OPTIONS "-UEIGEN_USE_BLAS")
+endif()
 
 # Use Apple Accelerate for BLAS/LAPACK (matches numpy's backend)
 if(APPLE)
