@@ -124,14 +124,13 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False ):
 
     # save to file for reuse
     if save:
-        np.savez("out/" + outbase + "_sdf_" + str(grid_len**3) + ".npz",
-                 points=points,
-                 sdf_values=distances,
-                 gradients=gradients)
-        print("✅ Saved SDF data:", "out/" + outbase + "_sdf_" + str(grid_len**3) + ".npz")
+        import os
+        os.makedirs('normalized_examples', exist_ok=True)
+        mesh.export(f'normalized_examples/{outbase}.obj')
+
     return mesh, points, distances, gradients
 
-def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_npz=False):
+def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_gtmesh=True):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -143,7 +142,7 @@ def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_npz=False):
         distances = data['sdf_values']
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
-        mesh, points, distances, _ = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_npz)  # Generate new data with 4096 points
+        mesh, points, distances, _ = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
 
     # Create and fit the interpolator
     interpolator = Interpolator(kernel='cubic')
@@ -186,7 +185,7 @@ def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_npz=False):
     mesh_distances(recon, mesh, verbose=True)
     return plt
 
-def test_rfta(options, save_npz=False):
+def test_rfta(options, save_gtmesh=True):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -199,7 +198,7 @@ def test_rfta(options, save_npz=False):
         distances = data['sdf_values']
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
-        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_npz)  # Generate new data with 4096 points
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
     # Export meshes to out/
     import trimesh, os
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
@@ -269,21 +268,25 @@ def init_gradients_by_degenerate_pts(sdf_points, sdf_values, interpolator : Inte
         temp_mask = np.ones(len(origins), dtype=bool)
         out_path = f'out/shortArcs_{options.name}_{options.grid_len}.glb'
         export_projection_visualization(origins, projections, mask=temp_mask, recon_mesh=options.gt_mesh, output_path=out_path)
-    
-    init_grads = np.nan*np.ones_like(sdf_points)
-    to_train_points = sdf_points.copy()
-    to_train_sdf = sdf_values.copy()
-    # Add points for degenerate arcs.
-    degenerate_pts_to_add = []
-    for i, pts in degenerate_pts.items():
-        degenerate_pts_to_add.append(pts[0])
-        init_grads[i] = (sdf_points[i] - pts[0]) / (sdf_values[i] + 1e-10)
-    if len(degenerate_pts_to_add) > 0:
-        to_train_points = np.vstack([to_train_points, np.array(degenerate_pts_to_add)])
-        to_train_sdf = np.append(to_train_sdf, np.zeros(len(degenerate_pts_to_add)))  # The SDF value at the projected point should be 0
-    print(f"After adding points for degenerate arcs, total points: {len(to_train_points)}")
-    interpolator.fit(to_train_points, to_train_sdf)
-    print(f"======== second fit done with input {len(to_train_points)} points (including {len(degenerate_pts_to_add)} degenerate arc points)")
+    if options.use_gt_gradients and options.gt_gradients is not None:
+        init_grads = options.gt_gradients
+        interpolator.fit(sdf_points, sdf_values, init_grads)
+        print(f"======== second fit done with GT gradients for all points =========")
+    else:
+        init_grads = np.nan*np.ones_like(sdf_points)
+        to_train_points = sdf_points.copy()
+        to_train_sdf = sdf_values.copy()
+        # Add points for degenerate arcs.
+        degenerate_pts_to_add = []
+        for i, pts in degenerate_pts.items():
+            degenerate_pts_to_add.append(pts[0])
+            init_grads[i] = (sdf_points[i] - pts[0]) / (sdf_values[i] + 1e-10)
+        if len(degenerate_pts_to_add) > 0:
+            to_train_points = np.vstack([to_train_points, np.array(degenerate_pts_to_add)])
+            to_train_sdf = np.append(to_train_sdf, np.zeros(len(degenerate_pts_to_add)))  # The SDF value at the projected point should be 0
+        print(f"After adding points for degenerate arcs, total points: {len(to_train_points)}")
+        interpolator.fit(to_train_points, to_train_sdf)
+        print(f"======== second fit done with input {len(to_train_points)} points (including {len(degenerate_pts_to_add)} degenerate arc points)")
     print("initial gradient estimation done")
 
     # debug
@@ -335,9 +338,6 @@ def main_algorithm(sdf_points, sdf_values, options : Options):
     if options.interpolator_type == 'Duchon':
         interpolator = DuchonInterpolator('cubic')
     init_grads = init_gradients_by_degenerate_pts(sdf_points, sdf_values, interpolator, degenerate_pts, batch, ngbrs_list, options)
-    
-    if options.use_gt_gradients and gt_gradients is not None:
-        init_grads = gt_gradients
 
     """ step 2: iterative optimization """
     # For iterative_projection_3d, we need to pass the degenerate points, batch, and neighbors list for clamping inside the optimization loop
@@ -420,7 +420,7 @@ def export_projection_visualization(sdf_points, projections, mask, recon_mesh, o
     scene.export(output_path)
     print(f"Exported to {output_path}")
 
-def test_our_method(options : Options, save_npz=False):
+def test_our_method(options : Options, save_gtmesh=True):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -437,7 +437,7 @@ def test_our_method(options : Options, save_npz=False):
         distances = data['sdf_values']
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
-        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_npz)  # Generate new data with 4096 points
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
         options.gt_gradients = gt_gradients
         options.gt_mesh = mesh
 
@@ -458,6 +458,11 @@ def test_our_method(options : Options, save_npz=False):
         cpp_opts.interpolator_type = options.interpolator_type
         cpp_opts.interp_partition = options.interp_partition
         cpp_opts.interp_overlap = options.interp_overlap
+        cpp_opts.name = options.name
+        cpp_opts.export_projections = options.export_projections
+        cpp_opts.export_short_arcs  = options.export_short_arcs
+        if options.use_gt_gradients:
+            cpp_opts.gt_gradients = options.gt_gradients
         if options.tolerance is not None:
             cpp_opts.tolerance.clamp_radius_ratio = options.tolerance.clamp_radius_ratio
             cpp_opts.tolerance.clamp_sdf_tol = options.tolerance.clamp_sdf_tol
@@ -493,7 +498,7 @@ def test_our_method(options : Options, save_npz=False):
             bounds=((points[:, 0].min(), points[:, 0].max()),
                     (points[:, 1].min(), points[:, 1].max()),
                     (points[:, 2].min(), points[:, 2].max())),
-            resolution=100)
+            resolution=100, use_dual_contouring=False)
     print(f"  ⏱  {'Grid evaluation':<30} {time.perf_counter() - timer:>7.2f} s")
     # Extract isosurface at value 0 using marching cubes
 
@@ -526,7 +531,7 @@ def test_our_method(options : Options, save_npz=False):
     recon.export(f'{out_dir}/{fname}')
     
     # Export projection visualization GLB
-    if options.export_projections:
+    if not use_cpp and options.export_projections:
         out_path = f'out/projections_{options.name}_{options.grid_len}_{options.max_iters}.glb'
         if options.use_gt_gradients:
             out_path = f'out/projections_{options.name}_{options.grid_len}_gtmesh.glb'
@@ -572,15 +577,17 @@ if __name__ == "__main__":
                                 overlap=0.2, reg=1e-6, use_MES=False)
                     # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
                     plt = test_our_method(options)
+                    options.tolerance = Tolerance(clamp_sdf_tol=1e-3)
                 # test_rfta(options)
             check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
     else:
-        options = Options(name='horse', grid_len=50, max_iters=15, clamp=False,
-                        export_short_arcs=True, export_projections=False, turn_off_short_arcs=False,
+        options = Options(name='horse', grid_len=50, max_iters=10, clamp=True,
+                        export_short_arcs=True, export_projections=True, turn_off_short_arcs=False,
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
                         overlap=0.2, reg=1e-7, use_MES=False)
+        options.tolerance = Tolerance(clamp_sdf_tol=1e-3)
         # # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
-        plt = test_our_method(options)
+        plt = test_our_method(options, save_gtmesh=False)
         # test_rfta(options)
         check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
 

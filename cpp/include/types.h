@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <memory>
 #include <cmath>
+#include <optional>
 
 namespace sdf {
 
@@ -21,12 +22,15 @@ struct Tolerance {
 // ── Algorithm options ───────────────────────────────────────────────
 
 struct Options {
+    std::string name   = "default";
     int grid_len       = 20;
     int max_iters      = 10;
     bool clamp         = true;
     bool turn_off_short_arcs = false;
     double reg = 1e-5;  // regularization for DuchonInterpolator
     bool use_MES = false;  // whether to use MES normals for invisible points with small visibility gain
+    bool export_projections = true;   // write PLY visualization files after main_algorithm
+    bool export_short_arcs  = true;   // write PLY of degenerate-arc points after init
 
     std::string interpolator_type = "PU";     // "PU" or "Duchon"
     std::string interp_partition  = "box";    // "box" or "sphere"
@@ -65,6 +69,9 @@ struct Options {
 
     // Neighbor lists: ngbrs_list[i] = list of neighbor indices for sphere i
     std::vector<std::vector<int>> ngbrs_list;
+
+    // If set, skip iterative optimization and use these gradients directly
+    std::optional<Eigen::MatrixXd> gt_gradients;
 };
 
 // ── Result of main_algorithm ────────────────────────────────────────

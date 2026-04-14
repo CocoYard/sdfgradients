@@ -25,14 +25,14 @@ class Interpolator(ABC):
     def predict_gradients(self, x_new, chunk_size=500):
         pass
 
-    def extract_zero_level_set(self, bounds, resolution=256):
+    def extract_zero_level_set(self, bounds, resolution=256, use_dual_contouring=True):
         """
         Extract zero level set contours (Marching Squares for 2D / Marching Cubes for 3D)
         """
         if len(bounds) == 3:
             return self._extract_zero_level_set_3d(bounds, resolution)
         else:
-            return self._extract_zero_level_set_2d(bounds, resolution)
+            return self._extract_zero_level_set_2d(bounds, resolution, use_dual_contouring)
 
     def _extract_zero_level_set_2d(self, bounds, resolution=256):
         (xmin, xmax), (ymin, ymax) = bounds

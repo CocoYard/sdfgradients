@@ -23,16 +23,20 @@ PYBIND11_MODULE(sdf_cpp, m) {
     // ── Options ─────────────────────────────────────────────────────
     py::class_<sdf::Options>(m, "Options")
         .def(py::init<>())
+        .def_readwrite("name", &sdf::Options::name)
         .def_readwrite("grid_len", &sdf::Options::grid_len)
         .def_readwrite("max_iters", &sdf::Options::max_iters)
         .def_readwrite("clamp", &sdf::Options::clamp)
         .def_readwrite("turn_off_short_arcs", &sdf::Options::turn_off_short_arcs)
         .def_readwrite("use_MES", &sdf::Options::use_MES)
+        .def_readwrite("export_projections", &sdf::Options::export_projections)
+        .def_readwrite("export_short_arcs",  &sdf::Options::export_short_arcs)
         .def_readwrite("reg", &sdf::Options::reg)
         .def_readwrite("interpolator_type", &sdf::Options::interpolator_type)
         .def_readwrite("interp_partition", &sdf::Options::interp_partition)
         .def_readwrite("interp_overlap", &sdf::Options::interp_overlap)
-        .def_readwrite("tolerance", &sdf::Options::tolerance);
+        .def_readwrite("tolerance", &sdf::Options::tolerance)
+        .def_readwrite("gt_gradients", &sdf::Options::gt_gradients);
 
     // ── MainResult ──────────────────────────────────────────────────
     py::class_<sdf::MainResult>(m, "MainResult")

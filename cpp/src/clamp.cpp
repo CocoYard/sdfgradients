@@ -180,8 +180,7 @@ int clamp_gradients_to_arcs(
 
     if (debug_cnt > 0)
         std::cout << "\n there are " << debug_cnt << " samples without any arcs\n";
-    if (clamped_cnt > 0)
-        std::cout << " there are " << clamped_cnt << " samples clamped to arcs\n";
+    std::cout << " there are " << clamped_cnt << " samples clamped to arcs\n";
     return clamped_cnt;
 }
 
