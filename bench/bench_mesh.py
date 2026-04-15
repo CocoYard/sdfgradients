@@ -18,6 +18,8 @@ Compile:
 import numpy as np
 import time
 import sys
+import pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import sphere_intersect
 
 # Try to import pybind11 extension
@@ -111,7 +113,7 @@ def find_all_neighbors_batch(centers, radii, batch_size=500):
 
 def find_all_neighbors(centers, radii):
     try:
-        csr_offsets, csr_neighbors = sphere_intersect.find_intersections(centers, radii)
+        csr_offsets, csr_neighbors = sphere_intersect.find_intersections_bvh(centers, radii)
         nbr_list = [csr_neighbors[csr_offsets[i]:csr_offsets[i+1]]
                     for i in range(len(csr_offsets) - 1)]
         return nbr_list, csr_neighbors, csr_offsets
@@ -158,7 +160,7 @@ def benchmark(path_to_mesh=None, grid_len=20):
           f"(mean={nbr_counts.mean():.1f}, "
           f"median={np.median(nbr_counts):.0f}, "
           f"max={nbr_counts.max()})")
-
+    return
     # ── Compute exposed arcs ──
     t0 = time.perf_counter()
     pts_arr = [None] * n_spheres   # per-sphere exposed points (Python path only)

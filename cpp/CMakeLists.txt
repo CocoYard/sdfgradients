@@ -123,6 +123,7 @@ add_library(sdf_core STATIC
     src/clamp.cpp
     src/optimization.cpp
     src/main_algorithm.cpp
+    src/sphere_intersect_core.cpp
     src/existing_modules_adapter.cpp
     src/mes_contact_core.cpp
 )
@@ -136,6 +137,15 @@ target_include_directories(sdf_core PUBLIC
 )
 
 target_link_libraries(sdf_core PUBLIC Eigen3::Eigen)
+
+# Enable Apple-silicon-specific tuning. CMake's default `-arch arm64`
+# produces generic arm64 code; -mcpu=apple-m1+ unlocks NEON scheduling
+# tuned for the host CPU, which on M-series can be 2-3x faster on
+# hot integer/float loops (std::sort, std::unique, manual distance
+# checks in sphere_intersect_core).
+if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    target_compile_options(sdf_core PRIVATE -mcpu=apple-m1)
+endif()
 
 if(HAVE_MES_CONTACT)
     # Fork's Maximal_empty_spheres headers MUST come before brew CGAL so the
