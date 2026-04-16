@@ -50,6 +50,18 @@ public:
         const Eigen::MatrixXd* initial_guess = nullptr,
         int chunk_size   = 200) const;
 
+    /// Find best gradient directions via Fibonacci init + projected gradient
+    /// descent on S². Uses predict_gradients() for analytic ∇sdf instead of
+    /// sampling many directions per refinement step.
+    Eigen::MatrixXd optimize_best_gradients(
+        const Eigen::MatrixXd& points,
+        const Eigen::VectorXd& sdf_values,
+        int num_coarse   = 24,
+        int optim_steps  = 10,
+        double lr        = 1.0,
+        const Eigen::MatrixXd* initial_guess = nullptr,
+        int chunk_size   = 200) const;
+
     /// Extract an isosurface of this interpolator via libigl's marching cubes.
     /// Samples the implicit field on a regular (nx × ny × nz) grid covering
     /// [bbox_min, bbox_max] and meshes the iso = `iso` level set.

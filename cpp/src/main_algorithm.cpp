@@ -193,7 +193,7 @@ Eigen::MatrixXd init_gradients_by_degenerate_pts(
     std::cout << "======== first fit done with input " << N << " points\n";
 
     // Filter degenerate points
-    // filter_degenerate_pts(degenerate_pts, interpolator);
+    filter_degenerate_pts(degenerate_pts, interpolator);
 
     if (options.export_short_arcs)
         export_short_arcs_ply(sdf_points, options, "out/" + options.name);

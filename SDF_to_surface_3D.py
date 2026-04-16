@@ -13,7 +13,7 @@ class Options:
     def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', 
                  turn_off_short_arcs=False, export_short_arcs=True, export_projections=True, reg=1e-4,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='box', overlap=0.5, 
-                 turn_off_projection=False, use_MES=False, post_processing=True):
+                 turn_off_projection=False, use_MES=False, post_processing=True, iter_gradient_finding='optimize'):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -29,7 +29,8 @@ class Options:
         self.use_MES = use_MES
         self.post_processing = post_processing
         self.reg = reg
-        
+        self.iter_gradient_finding = iter_gradient_finding  # 'optimize' or 'sample'
+
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
 
@@ -462,6 +463,7 @@ def test_our_method(options : Options, save_gtmesh=True):
         cpp_opts.name = options.name
         cpp_opts.export_projections = options.export_projections
         cpp_opts.export_short_arcs  = options.export_short_arcs
+        cpp_opts.iter_gradient_finding = options.iter_gradient_finding
         if options.use_gt_gradients:
             cpp_opts.gt_gradients = options.gt_gradients
         if options.tolerance is not None:
@@ -528,7 +530,8 @@ def test_our_method(options : Options, save_gtmesh=True):
     clamp_str = 'clamp' if options.clamp else 'noclamp'
     mes_str = 'MES' if options.use_MES else 'noMES'
     post_str = 'post' if options.post_processing else 'nopost'
-    fname = f'interpolant_{grid_len}_{iters}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}.obj'
+    iter_grad_str = 'optproj' if options.iter_gradient_finding == 'optimize' else 'slowproj'
+    fname = f'interpolant_{grid_len}_{iters}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}_{iter_grad_str}.obj'
     if options.use_gt_gradients:
         fname = f'interpolant_{grid_len}_gtgrad_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
@@ -578,21 +581,21 @@ if __name__ == "__main__":
                     options = Options(name=name, grid_len=grid_len, max_iters=max_iters, clamp=True,
                         export_short_arcs=True, export_projections=False, turn_off_short_arcs=False,
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                        overlap=0.2, reg=0, use_MES=True, post_processing=True)
+                        overlap=0.2, reg=0, use_MES=True, post_processing=True, iter_gradient_finding='optimize')
                     options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
                     # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
                     plt = test_our_method(options, save_gtmesh=False)
                 # test_rfta(options)
             check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
     else:
-        options = Options(name='bunny', grid_len=50, max_iters=13, clamp=True,
-                        export_short_arcs=True, export_projections=False, turn_off_short_arcs=False,
+        options = Options(name='chair', grid_len=20, max_iters=13, clamp=True,
+                        export_short_arcs=False, export_projections=False, turn_off_short_arcs=False,
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                        overlap=0.2, reg=0, use_MES=True, post_processing=True)
+                        overlap=0.2, reg=0, use_MES=False, post_processing=True, iter_gradient_finding='optimize')
         options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
         # # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
         plt = test_our_method(options, save_gtmesh=False)
-        # test_rfta(options)
+        test_rfta(options)
         check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0

@@ -23,8 +23,8 @@ namespace sdf {
 /// @param options        algorithm options (includes batch, degenerate_pts, ngbrs_list)
 /// @param num_iter       number of projection-refit iterations
 /// @param num_coarse     Fibonacci directions for initial sweep
-/// @param refine_steps   cone-refinement iterations
-/// @param num_refine     directions per refinement step
+/// @param optim_steps    projected gradient descent steps per iteration
+/// @param lr             learning rate for projected gradient descent
 /// @param gt_gradients   optional ground truth for diagnostics
 /// @return               refined (N, 3) gradient directions
 Eigen::MatrixXd iterative_projection_3d(
@@ -35,8 +35,8 @@ Eigen::MatrixXd iterative_projection_3d(
     Options& options,
     int num_iter      = 10,
     int num_coarse    = 24,
-    int refine_steps  = 4,
-    int num_refine    = 5,
+    int optim_steps   = 10,
+    double lr         = 1.0,
     const Eigen::MatrixXd* gt_gradients = nullptr);
 
 }  // namespace sdf

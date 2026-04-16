@@ -17,8 +17,8 @@ Eigen::MatrixXd iterative_projection_3d(
     Options& options,
     int num_iter,
     int num_coarse,
-    int refine_steps,
-    int num_refine,
+    int optim_steps,
+    double lr,
     const Eigen::MatrixXd* gt_gradients)
 {
     int N = (int)points.rows();
@@ -35,9 +35,15 @@ Eigen::MatrixXd iterative_projection_3d(
     for (int it = 0; it < num_iter; it++) {
         // ── Step 1: Find best gradient via angular search ──────────
         auto t_sbg0 = std::chrono::high_resolution_clock::now();
-        Eigen::MatrixXd new_gradients = interpolator.sample_best_gradients(
-            points, values, num_coarse, refine_steps, num_refine, &gradients);
-        std::cout << "  [sample_best_gradients] "
+        Eigen::MatrixXd new_gradients;
+        if (options.iter_gradient_finding == "optimize") {
+            new_gradients = interpolator.optimize_best_gradients(
+                points, values, num_coarse, optim_steps, lr, &gradients);
+        } else {
+            new_gradients = interpolator.sample_best_gradients(
+                points, values, num_coarse, /*refine_steps=*/4, /*num_refine=*/5, &gradients);
+        }
+        std::cout << "  [" << options.iter_gradient_finding << "_best_gradients] "
                   << std::chrono::duration<double>(
                          std::chrono::high_resolution_clock::now() - t_sbg0).count()
                   << "s\n";

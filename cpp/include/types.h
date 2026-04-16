@@ -35,6 +35,7 @@ struct Options {
     std::string interpolator_type = "PU";     // "PU" or "Duchon"
     std::string interp_partition  = "box";    // "box" or "sphere"
     double interp_overlap         = 0.5;
+    std::string iter_gradient_finding = "optimize";  // "optimize" or "sample"
 
     Tolerance tolerance;
     bool tolerance_initialized = false;

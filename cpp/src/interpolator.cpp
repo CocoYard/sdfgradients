@@ -6,6 +6,7 @@
 #include <limits>
 #include <stdexcept>
 #include <vector>
+#include <set>
 #include <chrono>
 #include <iostream>
 
@@ -296,6 +297,95 @@ Eigen::MatrixXd Interpolator::sample_best_gradients(
     return best_dirs;
 }
 
+// ── optimize_best_gradients ─────────────────────────────────────────
+
+Eigen::MatrixXd Interpolator::optimize_best_gradients(
+    const Eigen::MatrixXd& points,
+    const Eigen::VectorXd& sdf_values,
+    int num_coarse,
+    int optim_steps,
+    double lr,
+    const Eigen::MatrixXd* initial_guess,
+    int chunk_size) const
+{
+    int N = (int)points.rows();
+    Eigen::VectorXd sgn(N);
+    for (int i = 0; i < N; i++)
+        sgn(i) = (sdf_values(i) > 0) ? 1.0 : -1.0;
+
+    std::vector<bool> valid_mask(N, false);
+    if (initial_guess) {
+        for (int i = 0; i < N; i++)
+            valid_mask[i] = !initial_guess->row(i).array().isNaN().any();
+    }
+
+    Eigen::MatrixXd dirs = Eigen::MatrixXd::Zero(N, 3);
+    if (initial_guess) {
+        for (int i = 0; i < N; i++)
+            if (valid_mask[i])
+                dirs.row(i) = initial_guess->row(i);
+    }
+
+    // Fibonacci coarse sweep for points without a valid initial guess
+    std::vector<int> invalid_idx;
+    for (int i = 0; i < N; i++)
+        if (!valid_mask[i]) invalid_idx.push_back(i);
+
+    if (!invalid_idx.empty()) {
+        int n_inv = (int)invalid_idx.size();
+        Eigen::MatrixXd fib = fibonacci_sphere(num_coarse);
+
+        Eigen::MatrixXd samples(n_inv * num_coarse, 3);
+        for (int ii = 0; ii < n_inv; ii++) {
+            int i = invalid_idx[ii];
+            for (int d = 0; d < num_coarse; d++)
+                samples.row(ii * num_coarse + d) =
+                    points.row(i) - sdf_values(i) * fib.row(d);
+        }
+        Eigen::VectorXd preds = predict(samples, chunk_size);
+
+        for (int ii = 0; ii < n_inv; ii++) {
+            int i = invalid_idx[ii];
+            double best_obj = std::numeric_limits<double>::max();
+            int best_idx = 0;
+            for (int d = 0; d < num_coarse; d++) {
+                double obj = preds(ii * num_coarse + d) * sgn(i);
+                if (obj < best_obj) { best_obj = obj; best_idx = d; }
+            }
+            dirs.row(i) = fib.row(best_idx);
+        }
+    }
+
+    // Projected gradient descent on S²
+    // obj_i = sgn(i) * sdf(p_i - s_i * g_i)   — minimize
+    // ∂obj/∂g = sgn(i) * (-s_i) * ∇sdf = -|s_i| * ∇sdf
+    // tangent projection: grad_tan = grad - (grad · g) * g
+    // retraction: g ← normalize(g - lr * grad_tan)
+    for (int step = 0; step < optim_steps; step++) {
+        Eigen::MatrixXd proj(N, 3);
+        for (int i = 0; i < N; i++)
+            proj.row(i) = points.row(i) - sdf_values(i) * dirs.row(i);
+
+        Eigen::MatrixXd sdf_grad = predict_gradients(proj, chunk_size);
+
+        for (int i = 0; i < N; i++) {
+            double abs_s = std::abs(sdf_values(i));
+            if (abs_s < 1e-15) continue;
+
+            Eigen::RowVector3d raw = -abs_s * sdf_grad.row(i);
+            double dot = raw.dot(dirs.row(i));
+            Eigen::RowVector3d grad_tan = raw - dot * dirs.row(i);
+
+            Eigen::RowVector3d updated = dirs.row(i) - lr * grad_tan;
+            double norm = updated.norm();
+            if (norm > 1e-15)
+                dirs.row(i) = updated / norm;
+        }
+    }
+
+    return dirs;
+}
+
 // ── extract_surface (narrow-band marching cubes via libigl) ──────────
 //
 // Two-pass strategy:
@@ -493,15 +583,14 @@ void Interpolator::extract_surface(
               << refine_idx.size() << " pts): "
               << sec_since(t_fine) << " s\n";
 
-    // ── Lipschitz post-fix: clamp predict() artifacts inside sample spheres ─
-    // For any fine vertex g strictly inside a sample sphere (dist<|s_k|), the
-    // true SDF must satisfy sign=sign(s_k) AND |SDF|≥ margin=|s_k|-dist. We
-    // walk a BVH over sample AABBs (KD-tree nearest is insufficient — a
-    // distant sample with large |s| can contain g while the nearest one does
-    // not) to find the tightest such bound and clamp predict() to it ONLY
-    // when it violates the bound: clean predictions pass through untouched,
-    // and we only repair sign flips / near-zero artifacts inside the interior.
-    int n_sign_flip = 0, n_mag_clamp = 0;
+    // ── Lipschitz post-fix on narrow band + adaptive expansion ──────
+    // Walk BVH over sample AABBs for each narrow-band vertex. If predict()
+    // violates the Lipschitz bound (wrong sign or magnitude too small),
+    // correct it. When a sign flip is detected, the true surface may have
+    // shifted outside the current narrow band, so we expand: mark the
+    // neighboring coarse cells as active, predict their fine vertices, and
+    // post-fix again. This prevents holes without scanning the whole grid.
+    int n_sign_flip = 0, n_mag_clamp = 0, n_expanded = 0;
     if (lipschitz_postfix && sample_points_.rows() > 0 && !refine_idx.empty()) {
         auto t_fix = clk::now();
         const int nS = (int)sample_points_.rows();
@@ -525,33 +614,123 @@ void Interpolator::extract_surface(
         for (int i = 0; i < nS; i++) idx_buf[i] = i;
         prefill_bvh::build(T, idx_buf.data(), 0, nS, 16);
 
-        const int M = (int)refine_idx.size();
-        const int* ridx = refine_idx.data();
-        double* Sp = S.data();
-        #pragma omp parallel for schedule(dynamic, 1024) \
-                reduction(+: n_sign_flip, n_mag_clamp)
-        for (int j = 0; j < M; j++) {
-            int idx = ridx[j];
-            float gx = (float)GV(idx, 0);
-            float gy = (float)GV(idx, 1);
-            float gz = (float)GV(idx, 2);
-            int hit;
-            float margin = prefill_bvh::query(T, gx, gy, gz, hit);
-            if (hit < 0) continue;
-            double s_sign = ssign[hit];
-            double cur = Sp[idx];
-            bool sign_ok = ((cur >= 0) ? 1.0 : -1.0) == s_sign;
-            double abs_cur = sign_ok ? std::abs(cur) : 0.0;
-            double fixed = s_sign * std::max(abs_cur, (double)margin);
-            if (fixed != cur) {
-                if (!sign_ok) n_sign_flip++;
-                else          n_mag_clamp++;
-                Sp[idx] = fixed;
+        // Lambda: post-fix a set of vertices, return indices where sign flipped
+        auto do_postfix = [&](const std::vector<int>& verts,
+                              int& flips, int& clamps) -> std::vector<int> {
+            const int M = (int)verts.size();
+            std::vector<uint8_t> is_flip(M, 0);
+            int local_flips = 0, local_clamps = 0;
+            #pragma omp parallel for schedule(dynamic, 1024) \
+                    reduction(+: local_flips, local_clamps)
+            for (int j = 0; j < M; j++) {
+                int idx = verts[j];
+                float gx = (float)GV(idx, 0);
+                float gy = (float)GV(idx, 1);
+                float gz = (float)GV(idx, 2);
+                int hit;
+                float margin = prefill_bvh::query(T, gx, gy, gz, hit);
+                if (hit < 0) continue;
+                double s_sign = ssign[hit];
+                double cur = S(idx);
+                bool sign_ok = ((cur >= 0) ? 1.0 : -1.0) == s_sign;
+                double abs_cur = sign_ok ? std::abs(cur) : 0.0;
+                double fixed = s_sign * std::max(abs_cur, (double)margin);
+                if (fixed != cur) {
+                    if (!sign_ok) {
+                        local_flips++;
+                        is_flip[j] = 1;
+                    } else {
+                        local_clamps++;
+                    }
+                    S(idx) = fixed;
+                }
+            }
+            flips += local_flips;
+            clamps += local_clamps;
+            std::vector<int> flip_verts;
+            for (int j = 0; j < M; j++)
+                if (is_flip[j]) flip_verts.push_back(verts[j]);
+            return flip_verts;
+        };
+
+        // First pass: post-fix on the original narrow band
+        auto flip_verts = do_postfix(refine_idx, n_sign_flip, n_mag_clamp);
+
+        // Expansion: for each sign-flipped vertex, activate neighboring coarse
+        // cells and predict + post-fix the newly added fine vertices.
+        if (!flip_verts.empty()) {
+            // Find coarse cells of flipped vertices and their neighbors
+            std::set<int> expand_cells;
+            const double inv_csx = 1.0 / cstep.x();
+            const double inv_csy = 1.0 / cstep.y();
+            const double inv_csz = 1.0 / cstep.z();
+            for (int idx : flip_verts) {
+                int ci = std::min((int)((GV(idx, 0) - bbox_min.x()) * inv_csx), cnx - 2);
+                int cj = std::min((int)((GV(idx, 1) - bbox_min.y()) * inv_csy), cny - 2);
+                int ck = std::min((int)((GV(idx, 2) - bbox_min.z()) * inv_csz), cnz - 2);
+                // Mark this cell and its 26 neighbors
+                for (int dz = -1; dz <= 1; dz++)
+                for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    int ni = ci + dx, nj = cj + dy, nk = ck + dz;
+                    if (ni >= 0 && ni < cnx-1 && nj >= 0 && nj < cny-1 &&
+                        nk >= 0 && nk < cnz-1)
+                        expand_cells.insert(cidx_at(ni, nj, nk));
+                }
+            }
+
+            // Collect new fine vertices from expanded cells
+            std::vector<int> new_verts;
+            for (int cell_id : expand_cells) {
+                // Decode coarse cell index back to (ci, cj, ck)
+                int ci = cell_id % cnx;
+                int cj = (cell_id / cnx) % cny;
+                int ck = cell_id / (cnx * cny);
+                double xs =  ci      * cstep.x() / step.x();
+                double xe = (ci + 1) * cstep.x() / step.x();
+                double ys =  cj      * cstep.y() / step.y();
+                double ye = (cj + 1) * cstep.y() / step.y();
+                double zs =  ck      * cstep.z() / step.z();
+                double ze = (ck + 1) * cstep.z() / step.z();
+                int xi0 = std::max(0,      (int)std::floor(xs - 1e-9));
+                int xi1 = std::min(nx - 1, (int)std::ceil (xe + 1e-9));
+                int yi0 = std::max(0,      (int)std::floor(ys - 1e-9));
+                int yi1 = std::min(ny - 1, (int)std::ceil (ye + 1e-9));
+                int zi0 = std::max(0,      (int)std::floor(zs - 1e-9));
+                int zi1 = std::min(nz - 1, (int)std::ceil (ze + 1e-9));
+                for (int zi = zi0; zi <= zi1; zi++)
+                for (int yi = yi0; yi <= yi1; yi++)
+                for (int xi = xi0; xi <= xi1; xi++) {
+                    int fidx = fine_idx(xi, yi, zi);
+                    if (!need_refine[fidx]) {
+                        need_refine[fidx] = 1;
+                        new_verts.push_back(fidx);
+                    }
+                }
+            }
+
+            // Predict on newly added vertices
+            if (!new_verts.empty()) {
+                n_expanded = (int)new_verts.size();
+                Eigen::MatrixXd EGV(n_expanded, 3);
+                for (int k = 0; k < n_expanded; k++)
+                    EGV.row(k) = GV.row(new_verts[k]);
+                Eigen::VectorXd ES = this->predict(EGV, chunk_size);
+                for (int k = 0; k < n_expanded; k++)
+                    S(new_verts[k]) = ES(k);
+
+                // Second pass post-fix on expanded vertices
+                int flip2 = 0, clamp2 = 0;
+                do_postfix(new_verts, flip2, clamp2);
+                n_sign_flip += flip2;
+                n_mag_clamp += clamp2;
             }
         }
+
         std::cout << "[extract_surface] lipschitz post-fix: "
                   << n_sign_flip << " sign flips, "
-                  << n_mag_clamp << " magnitude clamps ("
+                  << n_mag_clamp << " magnitude clamps, "
+                  << n_expanded << " expanded ("
                   << sec_since(t_fix) << " s)\n";
     }
 
