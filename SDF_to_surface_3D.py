@@ -1,3 +1,15 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "gpytoolbox",
+#   "libigl",
+#   "numpy",
+#   "matplotlib",
+#   "scipy",
+#   "torch",
+#   "trimesh",
+# ]
+# ///
 import gpytoolbox as gpy
 import igl
 import numpy as np
@@ -595,7 +607,7 @@ if __name__ == "__main__":
         options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
         # # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
         plt = test_our_method(options, save_gtmesh=False)
-        test_rfta(options)
+        # test_rfta(options)
         check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0

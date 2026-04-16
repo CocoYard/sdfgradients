@@ -28,6 +28,7 @@
   }
 #elif defined(__linux__)
   #include <cstdio>
+  #include <unistd.h>
   static size_t mem_rss_bytes() {
       FILE* f = std::fopen("/proc/self/statm", "r");
       if (!f) return 0;

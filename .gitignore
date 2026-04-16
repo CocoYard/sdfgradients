@@ -13,3 +13,4 @@ test.py
 *.so
 misc
 build
+third_party
