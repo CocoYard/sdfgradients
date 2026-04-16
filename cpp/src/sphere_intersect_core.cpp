@@ -7,7 +7,9 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
-
+#include <iostream>
+#include <limits>
+#include <cstdint>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -121,12 +123,9 @@ static void bvh_query(
 }
 
 void find_intersections(const double* centers, const double* radii, int n,
-                        std::vector<int>& offsets, std::vector<int>& neighbors) {
-    if (n == 0) {
-        offsets = {0};
-        neighbors.clear();
-        return;
-    }
+                        std::vector<std::vector<int>>& out_neighbors) {
+    out_neighbors.clear();
+    if (n == 0) return;
 
     std::vector<float> cx(n), cy(n), cz(n), ra(n);
     std::vector<float> s_lo_x(n), s_lo_y(n), s_lo_z(n);
@@ -140,7 +139,6 @@ void find_intersections(const double* centers, const double* radii, int n,
         s_lo_y[i] = cy[i] - ra[i]; s_hi_y[i] = cy[i] + ra[i];
         s_lo_z[i] = cz[i] - ra[i]; s_hi_z[i] = cz[i] + ra[i];
     }
-
     const int leaf_size = 16;
     std::vector<BVHNode> nodes;
     std::vector<int> leaf_indices;
@@ -176,9 +174,6 @@ void find_intersections(const double* centers, const double* radii, int n,
         }
     }
 
-    offsets.resize(n + 1, 0);
-    for (int i = 0; i < n; i++) offsets[i+1] = offsets[i] + (int)result[i].size();
-    neighbors.resize(offsets[n]);
     // Downstream compute_exposed_batch only scans the first MAX_NEIGHBORS_SCANNED
     // (=2048) neighbors per sphere, so we only need the top-K by descending
     // |radius| in sorted order — the tail can be left unordered. nth_element
@@ -198,9 +193,8 @@ void find_intersections(const double* centers, const double* radii, int n,
             std::nth_element(row.begin(), row.begin() + k, row.end(), cmp);
         }
         std::sort(row.begin(), row.begin() + k, cmp);
-        int base = offsets[i];
-        for (int j = 0; j < sz; j++) neighbors[base + j] = row[j];
     }
+    out_neighbors = std::move(result);
 }
 
 }  // namespace sphere_intersect_core

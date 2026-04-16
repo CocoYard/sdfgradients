@@ -25,14 +25,14 @@
 namespace sphere_intersect_core {
     // Find all sphere-sphere intersections. Returns CSR (offsets, neighbors).
     void find_intersections(const double* centers, const double* radii, int n,
-                            std::vector<int>& offsets, std::vector<int>& neighbors);
+                            std::vector<std::vector<int>>& out_neighbors);
 }
 
 namespace sphere_exposed_core {
     // Compute exposed arcs/caps/degenerate points for all spheres.
     void compute_exposed_batch(
         const double* centers, const double* radii, int n,
-        const int* nbr_indices, const int* nbr_offsets,
+        const std::vector<std::vector<int>>& nbrs,
         double tol, double degen_tol, double merge_tol, double tangent_tol,
         sdf::Options::BatchData& out);
 }
@@ -56,27 +56,78 @@ static void filter_degenerate_pts(
     const Interpolator& interpolator,
     double dist_tol = 0.1)
 {
+    constexpr double dedup_tol = 1e-4;
     std::vector<int> to_remove;
+
+    // Step 1: per-sphere dedup. Collapse clusters within dedup_tol. For still-
+    // ambiguous entries (>1 distinct cluster) we defer the "pick smallest |pred|"
+    // decision to a single batched predict() call below.
+    std::vector<int> ambig_idx;            // sphere ids with >1 distinct cluster
+    std::vector<std::vector<Eigen::Vector3d>> ambig_candidates;
+
     for (auto& [idx, pts] : degenerate_pts) {
-        if ((int)pts.size() != 1) {
-            to_remove.push_back(idx);
-            double max_dist = 0.0;
-            for (int a = 0; a < (int)pts.size(); a++)
-                for (int b = a + 1; b < (int)pts.size(); b++)
-                    max_dist = std::max(max_dist, (pts[a] - pts[b]).norm());
-            if (max_dist > 0.1)
-                std::cout << "Degenerate point " << idx << " has " << pts.size()
-                          << " pts, max pairwise dist = " << max_dist << "\n";
-            continue;
+        if (pts.empty()) { to_remove.push_back(idx); continue; }
+        if ((int)pts.size() == 1) continue;
+
+        std::vector<Eigen::Vector3d> uniq;
+        for (const auto& p : pts) {
+            bool dup = false;
+            for (const auto& u : uniq) {
+                if ((p - u).norm() < dedup_tol) { dup = true; break; }
+            }
+            if (!dup) uniq.push_back(p);
         }
-        Eigen::MatrixXd pt(1, 3);
-        pt.row(0) = pts[0].transpose();
-        double pred = interpolator.predict(pt)(0);
-        if (std::abs(pred) > dist_tol) {
-            std::cout << "Degenerate point " << idx
-                      << " is too far from the surface with predicted sdf " << pred
-                      << ", removing it.\n";
-            to_remove.push_back(idx);
+        if (uniq.size() == 1) {
+            pts = std::move(uniq);
+        } else {
+            ambig_idx.push_back(idx);
+            ambig_candidates.push_back(std::move(uniq));
+        }
+    }
+
+    // Step 2: resolve ambiguous entries in one batched predict().
+    if (!ambig_idx.empty()) {
+        int total = 0;
+        for (const auto& c : ambig_candidates) total += (int)c.size();
+        Eigen::MatrixXd P(total, 3);
+        int row = 0;
+        for (const auto& c : ambig_candidates)
+            for (const auto& p : c) P.row(row++) = p.transpose();
+        Eigen::VectorXd preds = interpolator.predict(P);
+
+        int off = 0;
+        for (size_t i = 0; i < ambig_idx.size(); i++) {
+            const auto& c = ambig_candidates[i];
+            int best = 0;
+            double best_abs = std::abs(preds(off));
+            for (int k = 1; k < (int)c.size(); k++) {
+                double a = std::abs(preds(off + k));
+                if (a < best_abs) { best_abs = a; best = k; }
+            }
+            degenerate_pts[ambig_idx[i]] = { c[best] };
+            off += (int)c.size();
+        }
+    }
+
+    // Step 3: batched surface-proximity check on the (now single) representative.
+    std::vector<int> keep_idx;
+    keep_idx.reserve(degenerate_pts.size());
+    for (const auto& [idx, pts] : degenerate_pts) {
+        if (std::find(to_remove.begin(), to_remove.end(), idx) == to_remove.end())
+            keep_idx.push_back(idx);
+    }
+    if (!keep_idx.empty()) {
+        Eigen::MatrixXd Q((int)keep_idx.size(), 3);
+        for (int i = 0; i < (int)keep_idx.size(); i++)
+            Q.row(i) = degenerate_pts[keep_idx[i]][0].transpose();
+        Eigen::VectorXd preds = interpolator.predict(Q);
+        for (int i = 0; i < (int)keep_idx.size(); i++) {
+            if (std::abs(preds(i)) > dist_tol) {
+                // std::cout << "Degenerate point " << keep_idx[i]
+                //           << " is too far from the surface with predicted sdf "
+                //           << preds(i) << ", removing it.\n";
+                to_remove.push_back(keep_idx[i]);
+            }
         }
     }
     for (int idx : to_remove) degenerate_pts.erase(idx);
@@ -218,30 +269,17 @@ void get_visible_arcs(
     {
         // Eigen default is column-major; C functions expect row-major (centers[i*3+k])
         Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor> pts_rm = sdf_points;
-        std::vector<int> offsets, neighbors;
         auto t = clk::now();
         sphere_intersect_core::find_intersections(
-            pts_rm.data(), radii.data(), N, offsets, neighbors);
+            pts_rm.data(), radii.data(), N, options.ngbrs_list);
         std::cout << "[get_visible_arcs] find_intersections: " << ms_since(t)/1000.0 << " s\n";
 
-        // Call compute_exposed_batch while neighbors/offsets are still alive.
-        // This avoids keeping pts_rm + neighbors alive past their last use.
         sphere_exposed_core::compute_exposed_batch(
             pts_rm.data(), radii.data(), N,
-            neighbors.data(), offsets.data(),
+            options.ngbrs_list,
             1e-4, 1e-6, 1e-12, 1e-8,
             options.batch);
-
-        // Build per-sphere neighbor lists from the CSR arrays before they are freed.
-        // ngbrs_list[i] is the only copy of neighbor data that persists beyond this
-        // block; the flat neighbors + offsets vectors are freed at end of scope.
-        options.ngbrs_list.resize(N);
-        for (int i = 0; i < N; i++) {
-            options.ngbrs_list[i].assign(
-                neighbors.begin() + offsets[i],
-                neighbors.begin() + offsets[i + 1]);
-        }
-    }  // pts_rm, offsets, neighbors freed here
+    }  // pts_rm freed here
 
     // Count fully covered spheres
     int fully_covered = 0;
@@ -273,6 +311,7 @@ MainResult main_algorithm(
     int N = (int)sdf_points.rows();
 
     auto t0 = clk::now();
+    std::cout << "Starting main_algorithm with " << N << " points\n";
 
     // Step 1: Compute visible arcs + degenerate points
     auto t1 = clk::now();

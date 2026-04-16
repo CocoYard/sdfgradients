@@ -589,7 +589,7 @@ static void compute_one(
 
 void compute_exposed_batch(
     const double* centers, const double* radii, int n,
-    const int* nbr_indices, const int* nbr_offsets,
+    const std::vector<std::vector<int>>& nbrs,
     double tol_v, double degen_tol, double merge_tol, double tangent_tol,
     sdf::Options::BatchData& out)
 {
@@ -620,7 +620,7 @@ void compute_exposed_batch(
         int hist[8] = {0};  // <=8, <=32, <=128, <=512, <=2k, <=8k, <=32k, >32k
         int arg_max = -1;
         for (int i = 0; i < n; i++) {
-            int k = nbr_offsets[i+1] - nbr_offsets[i];
+            int k = (int)nbrs[i].size();
             if (k > max_nb) { max_nb = k; arg_max = i; }
             if (k < min_nb) min_nb = k;
             sum_nb += k;
@@ -647,7 +647,7 @@ void compute_exposed_batch(
 
     #pragma omp parallel for schedule(dynamic, 16)
     for (int i = 0; i < n; i++) {
-        int n_nbrs = nbr_offsets[i+1] - nbr_offsets[i];
+        int n_nbrs = (int)nbrs[i].size();
         if (n_nbrs == 0) {
             out.n_arcs[i] = 0;
             out.n_points[i] = 0;
@@ -673,7 +673,7 @@ void compute_exposed_batch(
             oc_buf_v.resize(n_use * 3);
             or_buf_v.resize(n_use);
         }
-        const int* nb = nbr_indices + nbr_offsets[i];
+        const int* nb = nbrs[i].data();
         for (int j = 0; j < n_use; j++) {
             int idx = nb[j];
             oc_buf_v[j*3]   = centers[idx*3];

@@ -13,7 +13,7 @@ class Options:
     def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', 
                  turn_off_short_arcs=False, export_short_arcs=True, export_projections=True, reg=1e-4,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='box', overlap=0.5, 
-                 turn_off_projection=False, use_MES=False):
+                 turn_off_projection=False, use_MES=False, post_processing=True):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -27,6 +27,7 @@ class Options:
         self.interp_partition = interp_partition  # 'box' or 'fps' or 'sphere', only for PU interpolator
         self.interp_overlap = overlap
         self.use_MES = use_MES
+        self.post_processing = post_processing
         self.reg = reg
         
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
@@ -492,7 +493,8 @@ def test_our_method(options : Options, save_gtmesh=True):
         bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
         verts, faces = result.interpolator.extract_surface(
             bbox_min=bbox_min, bbox_max=bbox_max,
-            nx=200, ny=200, nz=200, iso=0.0, chunk_size=5000)
+            nx=200, ny=200, nz=200, iso=0.0, chunk_size=5000,
+            lipschitz_postfix=options.post_processing)
     else:
         verts, faces = interpolator.extract_zero_level_set(
             bounds=((points[:, 0].min(), points[:, 0].max()),
@@ -525,7 +527,8 @@ def test_our_method(options : Options, save_gtmesh=True):
     # fname = f'interpolant_{grid_len}_{iters}_clamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     clamp_str = 'clamp' if options.clamp else 'noclamp'
     mes_str = 'MES' if options.use_MES else 'noMES'
-    fname = f'interpolant_{grid_len}_{iters}_{clamp_str}_{mes_str}_{options.interpolator_type}_reg{options.reg}.obj'
+    post_str = 'post' if options.post_processing else 'nopost'
+    fname = f'interpolant_{grid_len}_{iters}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}.obj'
     if options.use_gt_gradients:
         fname = f'interpolant_{grid_len}_gtgrad_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
@@ -568,24 +571,25 @@ if __name__ == "__main__":
     t0 = time.perf_counter()
     batch = False
     if batch:
-        for name in ['eiffel', 'archer', 'horse', 'bunny', 'denker']:
-            for grid_len in [20, 25]:  # 20^3=8000 points, 30^3=27000 points
-                for max_iters in [0, 13]:  # 0 means no optimization, only initial gradient estimation and projection
-                    options = Options(name=name, grid_len=grid_len, max_iters=max_iters, clamp=True, 
-                                    export_short_arcs=True, export_projections=False, 
-                                    use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                                overlap=0.2, reg=1e-6, use_MES=False)
+        for name in ['bunny']:
+        # for name in ['eiffel', 'archer', 'horse', 'bunny', 'denker']:
+            for grid_len in [20, 50]:  # 20^3=8000 points, 30^3=27000 points
+                for max_iters in [13]:  # 0 means no optimization, only initial gradient estimation and projection
+                    options = Options(name=name, grid_len=grid_len, max_iters=max_iters, clamp=True,
+                        export_short_arcs=True, export_projections=False, turn_off_short_arcs=False,
+                        use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
+                        overlap=0.2, reg=0, use_MES=True, post_processing=True)
+                    options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
                     # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
-                    plt = test_our_method(options)
-                    options.tolerance = Tolerance(clamp_sdf_tol=1e-3)
+                    plt = test_our_method(options, save_gtmesh=False)
                 # test_rfta(options)
             check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
     else:
-        options = Options(name='horse', grid_len=50, max_iters=10, clamp=True,
-                        export_short_arcs=True, export_projections=True, turn_off_short_arcs=False,
+        options = Options(name='bunny', grid_len=50, max_iters=13, clamp=True,
+                        export_short_arcs=True, export_projections=False, turn_off_short_arcs=False,
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                        overlap=0.2, reg=1e-7, use_MES=False)
-        options.tolerance = Tolerance(clamp_sdf_tol=1e-3)
+                        overlap=0.2, reg=0, use_MES=True, post_processing=True)
+        options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
         # # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
         plt = test_our_method(options, save_gtmesh=False)
         # test_rfta(options)

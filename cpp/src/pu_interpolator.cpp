@@ -288,6 +288,9 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
                           const Eigen::VectorXd& values,
                           const Eigen::MatrixXd* gradients,
                           const Eigen::VectorXi* mask) {
+    sample_points_ = points;
+    sample_values_ = values;
+
     Eigen::MatrixXd pts;
     Eigen::VectorXd vals;
 

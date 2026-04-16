@@ -92,8 +92,15 @@ def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=F
     chamfer : float
         The Chamfer distance between the two meshes.
     """
-    _, d_r2g, _ = trimesh.proximity.closest_point(gt_mesh, recon.vertices)
-    _, d_g2r, _ = trimesh.proximity.closest_point(recon, gt_mesh.vertices)
+    import igl
+    gt_V = np.asarray(gt_mesh.vertices, dtype=np.float64)
+    gt_F = np.asarray(gt_mesh.faces, dtype=np.int32)
+    rc_V = np.asarray(recon.vertices, dtype=np.float64)
+    rc_F = np.asarray(recon.faces, dtype=np.int32)
+    sqrD_r2g, _, _ = igl.point_mesh_squared_distance(rc_V, gt_V, gt_F)
+    sqrD_g2r, _, _ = igl.point_mesh_squared_distance(gt_V, rc_V, rc_F)
+    d_r2g = np.sqrt(sqrD_r2g)
+    d_g2r = np.sqrt(sqrD_g2r)
     hausdorff = max(d_r2g.max(), d_g2r.max())
     chamfer = (d_r2g.mean() + d_g2r.mean()) / 2
     if verbose:

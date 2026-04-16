@@ -11,6 +11,129 @@
 
 namespace sdf {
 
+// ── Point-in-sphere BVH over sample AABBs ───────────────────────────
+// Finds the "best containing" sphere for a query point g: among all samples
+// k with dist(g, p_k) < |s_k|, returns the one maximizing margin |s_k|-dist.
+// KD-tree nearest is wrong here because a distant sample with large |s| can
+// contain g while the geometrically-nearest sample does not.
+namespace prefill_bvh {
+
+struct Node {
+    float lo[3], hi[3];
+    int left, right;       // -1 if leaf
+    int leaf_start, leaf_count;
+};
+
+struct Tree {
+    std::vector<Node> nodes;
+    std::vector<int> leaf_indices;
+    const float* px;
+    const float* py;
+    const float* pz;
+    const float* absv;   // |sample_values|
+    const float* absv2;  // |sample_values|^2  (pre-squared for leaf test)
+};
+
+static void build(Tree& T, int* idx_buf, int start, int count, int leaf_size) {
+    int nid = (int)T.nodes.size();
+    T.nodes.push_back(Node());
+
+    float lo0 = 1e30f, lo1 = 1e30f, lo2 = 1e30f;
+    float hi0 = -1e30f, hi1 = -1e30f, hi2 = -1e30f;
+    for (int k = start; k < start + count; k++) {
+        int i = idx_buf[k];
+        float r = T.absv[i];
+        float x = T.px[i], y = T.py[i], z = T.pz[i];
+        if (x - r < lo0) lo0 = x - r;  if (x + r > hi0) hi0 = x + r;
+        if (y - r < lo1) lo1 = y - r;  if (y + r > hi1) hi1 = y + r;
+        if (z - r < lo2) lo2 = z - r;  if (z + r > hi2) hi2 = z + r;
+    }
+    T.nodes[nid].lo[0] = lo0; T.nodes[nid].lo[1] = lo1; T.nodes[nid].lo[2] = lo2;
+    T.nodes[nid].hi[0] = hi0; T.nodes[nid].hi[1] = hi1; T.nodes[nid].hi[2] = hi2;
+
+    if (count <= leaf_size) {
+        T.nodes[nid].left = -1;
+        T.nodes[nid].right = -1;
+        T.nodes[nid].leaf_start = (int)T.leaf_indices.size();
+        T.nodes[nid].leaf_count = count;
+        for (int k = start; k < start + count; k++)
+            T.leaf_indices.push_back(idx_buf[k]);
+        return;
+    }
+
+    float ext0 = hi0 - lo0, ext1 = hi1 - lo1, ext2 = hi2 - lo2;
+    int axis = 0;
+    if (ext1 > ext0 && ext1 >= ext2) axis = 1;
+    else if (ext2 > ext0 && ext2 > ext1) axis = 2;
+    const float* axp = (axis == 0) ? T.px : (axis == 1) ? T.py : T.pz;
+    std::sort(idx_buf + start, idx_buf + start + count,
+              [axp](int a, int b) { return axp[a] < axp[b]; });
+
+    int mid = count / 2;
+    T.nodes[nid].leaf_start = -1;
+    T.nodes[nid].leaf_count = 0;
+    int left_id = (int)T.nodes.size();
+    build(T, idx_buf, start, mid, leaf_size);
+    int right_id = (int)T.nodes.size();
+    build(T, idx_buf, start + mid, count - mid, leaf_size);
+    T.nodes[nid].left = left_id;
+    T.nodes[nid].right = right_id;
+}
+
+// Walk the BVH, find the sample sphere containing g with the largest margin.
+// Returns best margin (|s_k|-dist) and the sample index via best_idx, or
+// (-1, -1) if no sphere contains g.
+static inline float query(const Tree& T, float gx, float gy, float gz,
+                          int& best_idx) {
+    best_idx = -1;
+    float best_margin = -1.0f;
+    if (T.nodes.empty()) return best_margin;
+    int stack[64];
+    int sp = 0;
+    stack[sp++] = 0;
+    const Node* nodes = T.nodes.data();
+    const int* leaves = T.leaf_indices.data();
+    const float* px = T.px; const float* py = T.py; const float* pz = T.pz;
+    const float* absv = T.absv; const float* absv2 = T.absv2;
+    // Track best_d2 so we can prune leaf tests via the squared comparison
+    // (margin > best ⇔ r - d > best ⇔ d < r - best ⇔ d² < (r-best)²).
+    float best_d2 = 0.0f;
+    while (sp > 0) {
+        int nid = stack[--sp];
+        const Node& nd = nodes[nid];
+        if (gx < nd.lo[0] || gx > nd.hi[0] ||
+            gy < nd.lo[1] || gy > nd.hi[1] ||
+            gz < nd.lo[2] || gz > nd.hi[2])
+            continue;
+        if (nd.left == -1) {
+            int end = nd.leaf_start + nd.leaf_count;
+            for (int k = nd.leaf_start; k < end; k++) {
+                int i = leaves[k];
+                float dx = gx - px[i];
+                float dy = gy - py[i];
+                float dz = gz - pz[i];
+                float d2 = dx*dx + dy*dy + dz*dz;
+                if (d2 < absv2[i]) {
+                    float r = absv[i];
+                    float margin = r - std::sqrt(d2);
+                    if (margin > best_margin) {
+                        best_margin = margin;
+                        best_d2 = d2;
+                        best_idx = i;
+                    }
+                }
+            }
+        } else {
+            stack[sp++] = nd.left;
+            stack[sp++] = nd.right;
+        }
+    }
+    (void)best_d2;
+    return best_margin;
+}
+
+}  // namespace prefill_bvh
+
 // ── Fibonacci sphere (uniform directions on S2) ────────────────────
 
 static Eigen::MatrixXd fibonacci_sphere(int n) {
@@ -197,7 +320,8 @@ void Interpolator::extract_surface(
     double iso,
     Eigen::MatrixXd& V,
     Eigen::MatrixXi& F,
-    int chunk_size) const
+    int chunk_size,
+    bool lipschitz_postfix) const
 {
     if (nx < 2 || ny < 2 || nz < 2)
         throw std::invalid_argument("extract_surface: nx, ny, nz must each be >= 2");
@@ -207,6 +331,8 @@ void Interpolator::extract_surface(
     auto sec_since = [](const clk::time_point& t) {
         return std::chrono::duration<double>(clk::now() - t).count();
     };
+
+#if 1  // plain marching cubes for speed comparison
 
     const int N = nx * ny * nz;
     const Eigen::Vector3d step(
@@ -367,6 +493,68 @@ void Interpolator::extract_surface(
               << refine_idx.size() << " pts): "
               << sec_since(t_fine) << " s\n";
 
+    // ── Lipschitz post-fix: clamp predict() artifacts inside sample spheres ─
+    // For any fine vertex g strictly inside a sample sphere (dist<|s_k|), the
+    // true SDF must satisfy sign=sign(s_k) AND |SDF|≥ margin=|s_k|-dist. We
+    // walk a BVH over sample AABBs (KD-tree nearest is insufficient — a
+    // distant sample with large |s| can contain g while the nearest one does
+    // not) to find the tightest such bound and clamp predict() to it ONLY
+    // when it violates the bound: clean predictions pass through untouched,
+    // and we only repair sign flips / near-zero artifacts inside the interior.
+    int n_sign_flip = 0, n_mag_clamp = 0;
+    if (lipschitz_postfix && sample_points_.rows() > 0 && !refine_idx.empty()) {
+        auto t_fix = clk::now();
+        const int nS = (int)sample_points_.rows();
+        std::vector<float> spx(nS), spy(nS), spz(nS), sabs(nS), sabs2(nS);
+        std::vector<signed char> ssign(nS);
+        for (int i = 0; i < nS; i++) {
+            spx[i] = (float)sample_points_(i, 0);
+            spy[i] = (float)sample_points_(i, 1);
+            spz[i] = (float)sample_points_(i, 2);
+            float a = std::abs((float)sample_values_(i));
+            sabs[i] = a;
+            sabs2[i] = a * a;
+            ssign[i] = (sample_values_(i) >= 0) ? 1 : -1;
+        }
+        prefill_bvh::Tree T;
+        T.px = spx.data(); T.py = spy.data(); T.pz = spz.data();
+        T.absv = sabs.data(); T.absv2 = sabs2.data();
+        T.nodes.reserve(2 * nS / 16 + 16);
+        T.leaf_indices.reserve(nS);
+        std::vector<int> idx_buf(nS);
+        for (int i = 0; i < nS; i++) idx_buf[i] = i;
+        prefill_bvh::build(T, idx_buf.data(), 0, nS, 16);
+
+        const int M = (int)refine_idx.size();
+        const int* ridx = refine_idx.data();
+        double* Sp = S.data();
+        #pragma omp parallel for schedule(dynamic, 1024) \
+                reduction(+: n_sign_flip, n_mag_clamp)
+        for (int j = 0; j < M; j++) {
+            int idx = ridx[j];
+            float gx = (float)GV(idx, 0);
+            float gy = (float)GV(idx, 1);
+            float gz = (float)GV(idx, 2);
+            int hit;
+            float margin = prefill_bvh::query(T, gx, gy, gz, hit);
+            if (hit < 0) continue;
+            double s_sign = ssign[hit];
+            double cur = Sp[idx];
+            bool sign_ok = ((cur >= 0) ? 1.0 : -1.0) == s_sign;
+            double abs_cur = sign_ok ? std::abs(cur) : 0.0;
+            double fixed = s_sign * std::max(abs_cur, (double)margin);
+            if (fixed != cur) {
+                if (!sign_ok) n_sign_flip++;
+                else          n_mag_clamp++;
+                Sp[idx] = fixed;
+            }
+        }
+        std::cout << "[extract_surface] lipschitz post-fix: "
+                  << n_sign_flip << " sign flips, "
+                  << n_mag_clamp << " magnitude clamps ("
+                  << sec_since(t_fix) << " s)\n";
+    }
+
     // ── Marching cubes ───────────────────────────────────────────────
     auto t_mc = clk::now();
     igl::marching_cubes(S, GV,
@@ -374,6 +562,81 @@ void Interpolator::extract_surface(
                         iso, V, F);
     std::cout << "[extract_surface] marching_cubes: " << sec_since(t_mc) << " s\n";
     std::cout << "[extract_surface] total: " << sec_since(t_total) << " s\n";
+
+#else  // plain marching cubes
+
+    const int N = nx * ny * nz;
+    const Eigen::Vector3d step(
+        (bbox_max.x() - bbox_min.x()) / (nx - 1),
+        (bbox_max.y() - bbox_min.y()) / (ny - 1),
+        (bbox_max.z() - bbox_min.z()) / (nz - 1));
+
+    Eigen::MatrixXd GV(N, 3);
+    for (int zi = 0; zi < nz; zi++)
+        for (int yi = 0; yi < ny; yi++)
+            for (int xi = 0; xi < nx; xi++) {
+                int idx = xi + nx * (yi + ny * zi);
+                GV(idx, 0) = bbox_min.x() + xi * step.x();
+                GV(idx, 1) = bbox_min.y() + yi * step.y();
+                GV(idx, 2) = bbox_min.z() + zi * step.z();
+            }
+
+    // ── Lipschitz pre-fill ───────────────────────────────────────────
+    // For each grid point g, find nearest hint point p_i (value s_i).
+    // If |s_i| > dist(g, p_i), the zero level set cannot reach g,
+    // so fill S(g) = sign(s_i) * (|s_i| - dist) and skip the interpolator.
+    auto t_prefill = clk::now();
+    Eigen::VectorXd S(N);
+    std::vector<bool> needs_interp(N, true);
+    int prefilled = 0;
+
+    if (hint_pts_.rows() > 0) {
+        for (int idx = 0; idx < N; idx++) {
+            Eigen::Vector3d g = GV.row(idx);
+            double best_margin = -1.0;
+            double best_val    =  0.0;
+            for (int k = 0; k < (int)hint_pts_.rows(); k++) {
+                double dist   = (g - hint_pts_.row(k).transpose()).norm();
+                double s      = hint_vals_(k);
+                double margin = std::abs(s) - dist;
+                if (margin > best_margin) {
+                    best_margin = margin;
+                    best_val    = (s >= 0 ? 1.0 : -1.0) * margin;
+                }
+            }
+            if (best_margin > 0.0) {
+                S(idx) = best_val;
+                needs_interp[idx] = false;
+                prefilled++;
+            }
+        }
+    }
+    std::cout << "[extract_surface] lipschitz pre-fill: " << prefilled << " / " << N
+              << " pts  (" << sec_since(t_prefill) << " s)\n";
+
+    // ── Interpolator for remaining uncertain points ──────────────────
+    auto t_pred = clk::now();
+    std::vector<int> interp_idx;
+    interp_idx.reserve(N - prefilled);
+    for (int i = 0; i < N; i++)
+        if (needs_interp[i]) interp_idx.push_back(i);
+
+    if (!interp_idx.empty()) {
+        const int M = (int)interp_idx.size();
+        Eigen::MatrixXd QV(M, 3);
+        for (int k = 0; k < M; k++) QV.row(k) = GV.row(interp_idx[k]);
+        Eigen::VectorXd QS = this->predict(QV, chunk_size);
+        for (int k = 0; k < M; k++) S(interp_idx[k]) = QS(k);
+    }
+    std::cout << "[extract_surface] predict (" << interp_idx.size() << " pts): "
+              << sec_since(t_pred) << " s\n";
+
+    auto t_mc = clk::now();
+    igl::marching_cubes(S, GV, (unsigned)nx, (unsigned)ny, (unsigned)nz, iso, V, F);
+    std::cout << "[extract_surface] marching_cubes: " << sec_since(t_mc) << " s\n";
+    std::cout << "[extract_surface] total: " << sec_since(t_total) << " s\n";
+
+#endif
 }
 
 }  // namespace sdf

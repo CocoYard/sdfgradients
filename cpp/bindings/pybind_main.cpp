@@ -50,10 +50,12 @@ PYBIND11_MODULE(sdf_cpp, m) {
                                       const Eigen::Vector3d& bbox_max,
                                       int nx, int ny, int nz,
                                       double iso,
-                                      int chunk_size) {
+                                      int chunk_size,
+                                      bool lipschitz_postfix) {
         Eigen::MatrixXd V;
         Eigen::MatrixXi F;
-        self.extract_surface(bbox_min, bbox_max, nx, ny, nz, iso, V, F, chunk_size);
+        self.extract_surface(bbox_min, bbox_max, nx, ny, nz, iso, V, F,
+                             chunk_size, lipschitz_postfix);
         return py::make_tuple(V, F);
     };
 
@@ -66,6 +68,7 @@ PYBIND11_MODULE(sdf_cpp, m) {
              py::arg("bbox_min"), py::arg("bbox_max"),
              py::arg("nx"), py::arg("ny"), py::arg("nz"),
              py::arg("iso") = 0.0, py::arg("chunk_size") = 5000,
+             py::arg("lipschitz_postfix") = true,
              "Extract an isosurface via libigl marching cubes. "
              "Returns (V, F) as numpy arrays.");
 
