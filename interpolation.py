@@ -376,9 +376,14 @@ class DuchonInterpolator(Interpolator):
             self.values = np.concatenate([values, np.zeros(len(projections))])
         elif hermite_interp:
             assert gradients is not None, "Hermite interpolation requires gradients to be provided."
-            self.points = points
-            self.values = values
-            self.alpha, self.beta, self.p, self.q = self._compute_coefficients_with_gradients(points, values, gradients)
+            if mask is None:
+                projections = points - values[:, np.newaxis] * gradients
+            else:
+                projections = points[mask] - values[mask, np.newaxis] * gradients[mask]
+            self.points = np.vstack([points, projections])
+            self.values = np.concatenate([values, np.zeros(len(projections))])
+            new_gradients = np.vstack([gradients, gradients])  # Use the same gradients for projection points
+            self.alpha, self.beta, self.p, self.q = self._compute_coefficients_with_gradients(self.points, self.values, new_gradients)
         else:
             self.points = points
             self.values = values
@@ -463,6 +468,8 @@ class DuchonInterpolator(Interpolator):
         for k in range(d):
             M[ps + 1 + k, :n] = points[:, k]
             M[ps + 1 + k, n + k * n: n + (k + 1) * n] = 1.0
+        # add regularization to ensure numerical stability
+        M[:ps, :ps] += 0 * np.eye(ps)
 
         rhs[:n] = values
         for l in range(d):
