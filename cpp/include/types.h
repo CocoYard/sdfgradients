@@ -8,6 +8,8 @@
 #include <cmath>
 #include <optional>
 
+#include "sphere_bvh.h"
+
 namespace sdf {
 
 // ── Tolerance parameters ────────────────────────────────────────────
@@ -68,8 +70,17 @@ struct Options {
     };
     BatchData batch;
 
-    // Neighbor lists: ngbrs_list[i] = list of neighbor indices for sphere i
+    // Neighbor lists: ngbrs_list[i] = list of neighbor indices for sphere i.
+    // Truncated at MAX_NEIGHBORS_SCANNED (2048) inside find_intersections —
+    // downstream compute_exposed_batch never scans beyond that. For pure
+    // "is point inside some sphere?" tests, use sphere_bvh (below) instead;
+    // that path is both exact and orders of magnitude smaller in memory.
     std::vector<std::vector<int>> ngbrs_list;
+
+    // Built once in get_visible_arcs; consumed by visibility + clamp. Kept
+    // as unique_ptr so Options stays movable without dragging the full
+    // SphereBVH definition into this header.
+    std::unique_ptr<SphereBVH> sphere_bvh;
 
     // If set, skip iterative optimization and use these gradients directly
     std::optional<Eigen::MatrixXd> gt_gradients;

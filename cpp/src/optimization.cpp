@@ -63,7 +63,7 @@ Eigen::MatrixXd iterative_projection_3d(
                 clamped_cnt = clamp_gradients_to_arcs(
                     points, values, new_gradients,
                     options.degenerate_pts, options.batch,
-                    options.ngbrs_list, options.tolerance);
+                    options.ngbrs_list, *options.sphere_bvh, options.tolerance);
                 if (1. * clamped_cnt / N > .3) {
                     options.tolerance.clamp_sdf_tol /= 2;
                 } else {
@@ -80,8 +80,13 @@ Eigen::MatrixXd iterative_projection_3d(
             proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
         }
         std::cout << "Checking visibility ...";
-        Eigen::VectorXi vis_new = are_points_visible(proj_new, points, values, options.degenerate_pts, options.ngbrs_list);
-        Eigen::VectorXi vis_old = are_points_visible(proj_old, points, values, options.degenerate_pts, options.ngbrs_list);
+        auto t_vis0 = std::chrono::high_resolution_clock::now();
+        Eigen::VectorXi vis_new = are_points_visible(proj_new, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh);
+        auto t_vis1 = std::chrono::high_resolution_clock::now();
+        Eigen::VectorXi vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh);
+        auto t_vis2 = std::chrono::high_resolution_clock::now();
+        std::cout << " [vis_new " << std::chrono::duration<double>(t_vis1 - t_vis0).count()
+                  << "s, vis_old " << std::chrono::duration<double>(t_vis2 - t_vis1).count() << "s]";
 
         // Don't update gradients that would make visible projections invisible
         // Don't update degenerate-arc points

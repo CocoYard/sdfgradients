@@ -1,6 +1,9 @@
 #include "clamp.h"
+#include "sphere_bvh.h"
 #include <cmath>
 #include <iostream>
+#include <chrono>
+#include <atomic>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -133,6 +136,7 @@ int clamp_gradients_to_arcs(
     const std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
     const Options::BatchData& batch,
     const std::vector<std::vector<int>>& ngbrs_list,
+    const SphereBVH& bvh,
     const Tolerance& tolerance)
 {
     int N = (int)points.rows();
@@ -153,32 +157,34 @@ int clamp_gradients_to_arcs(
 
     int debug_cnt = 0;
     int clamped_cnt = 0;
+    std::atomic<long long> fast_hits{0};
+    std::atomic<long long> bvh_fallbacks{0};
+    std::atomic<long long> arc_queries{0};
+    auto t_loop0 = std::chrono::high_resolution_clock::now();
     #pragma omp parallel for reduction(+:clamped_cnt) schedule(dynamic, 1024)
     for (int i = 0; i < N; i++) {
         // Skip degenerate-arc points
         if (degenerate_pts.count(i)) continue;
 
-        // Check if projection is inside any neighbor's sphere — compare
-        // squared distances to avoid a sqrt per neighbor.
-        const auto& ngbrs = ngbrs_list[i];
         double pix = projections(i, 0), piy = projections(i, 1), piz = projections(i, 2);
-        bool any_inside = false;
-        for (int j : ngbrs) {
-            double thr = std::abs(values(j)) - float_tol;
-            if (thr <= 0.0) continue;
-            double dx = pix - points(j, 0);
-            double dy = piy - points(j, 1);
-            double dz = piz - points(j, 2);
-            if (dx * dx + dy * dy + dz * dz < thr * thr) {
-                any_inside = true;
-                break;
-            }
+        // Fast path: does any of the 2048 curated neighbors contain proj(i)?
+        const auto& row = ngbrs_list[i];
+        bool inside = !row.empty() &&
+            bvh.any_sphere_contains(pix, piy, piz, float_tol, row.data(), (int)row.size());
+        if (inside) {
+            fast_hits.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            // Fall back to full BVH to confirm visibility (miss in fast path
+            // is inconclusive — occluder may be outside the curated list).
+            bvh_fallbacks.fetch_add(1, std::memory_order_relaxed);
+            inside = bvh.point_inside_any(pix, piy, piz, float_tol, /*exclude_idx=*/i);
         }
-        if (!any_inside) continue;
+        if (!inside) continue;
 
         // Try clamping to closest arc point
         Eigen::Vector3d closest;
         double distance;
+        arc_queries.fetch_add(1, std::memory_order_relaxed);
         query_closest_fast(projections.row(i).transpose(), batch, i, cap_map, arc_map, closest, distance);
 
         if (distance < clamp_tol) {
@@ -188,6 +194,12 @@ int clamp_gradients_to_arcs(
         }
         // Otherwise keep original gradient
     }
+    auto t_loop1 = std::chrono::high_resolution_clock::now();
+    std::cerr << "  [clamp] N=" << N
+              << " fast_hits=" << fast_hits.load()
+              << " bvh_fallbacks=" << bvh_fallbacks.load()
+              << " arc_queries=" << arc_queries.load()
+              << " wall=" << std::chrono::duration<double>(t_loop1 - t_loop0).count() << "s\n";
 
     if (debug_cnt > 0)
         std::cout << "\n there are " << debug_cnt << " samples without any arcs\n";

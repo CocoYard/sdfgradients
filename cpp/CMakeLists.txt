@@ -285,6 +285,7 @@ add_library(sdf_core STATIC
     src/optimization.cpp
     src/main_algorithm.cpp
     src/sphere_intersect_core.cpp
+    src/sphere_bvh.cpp
     src/existing_modules_adapter.cpp
     src/mes_contact_core.cpp
 )

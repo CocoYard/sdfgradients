@@ -320,6 +320,16 @@ void get_visible_arcs(
             options.batch);
     }  // pts_rm freed here
 
+    // Build persistent BVH over the SDF spheres. Visibility + clamp query
+    // this instead of scanning ngbrs_list[i] — exact, tiny memory, and lets
+    // us cap ngbrs_list at MAX_KEEP without losing occluder accuracy.
+    {
+        auto t = clk::now();
+        options.sphere_bvh = std::make_unique<SphereBVH>(sdf_points, sdf_values);
+        std::cout << "[get_visible_arcs] build SphereBVH: "
+                  << ms_since(t)/1000.0 << " s\n";
+    }
+
     // Count fully covered spheres
     int fully_covered = 0;
     for (int i = 0; i < N; i++) {
@@ -411,7 +421,8 @@ MainResult main_algorithm(
         projections.row(i) = sdf_points.row(i) - sdf_values(i) * gradients.row(i);
 
     Eigen::VectorXi vis = are_points_visible(
-        projections, sdf_points, sdf_values, options.degenerate_pts, options.ngbrs_list);
+        projections, sdf_values, options.degenerate_pts,
+        options.ngbrs_list, *options.sphere_bvh);
     std::cout << "[main_algorithm] final projection + visibility: "
               << ms_since(t5)/1000.0 << " s\n";
     std::cout << "[main_algorithm] total: " << ms_since(t0)/1000.0 << " s\n";

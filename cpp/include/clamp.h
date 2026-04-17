@@ -29,6 +29,7 @@ int clamp_gradients_to_arcs(
     const std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
     const Options::BatchData& batch,
     const std::vector<std::vector<int>>& ngbrs_list,
+    const SphereBVH& bvh,
     const Tolerance& tolerance);
 
 }  // namespace sdf

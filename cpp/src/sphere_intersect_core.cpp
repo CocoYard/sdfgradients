@@ -157,9 +157,32 @@ void find_intersections(const double* centers, const double* radii, int n,
 
     std::vector<std::vector<int>> result(n);
 
+    // Arrangement on the per-thread raw hit buffer `buf` (size = sz), then
+    // truncate to MAX_KEEP when copying into result[i]:
+    //   [0, NEAREST)                 : NEAREST nearest by center distance, sorted asc
+    //   [NEAREST, NEAREST+TOP_LARGEST): TOP_LARGEST largest by |radius| (from the remainder)
+    //   [NEAREST+TOP_LARGEST, MAX_KEEP): uniform random samples from the remainder
+    // Doing arrangement on the full `buf` before truncation keeps the curated
+    // picks exact; doing truncation in the same loop keeps peak RSS at the
+    // truncated size (critical for N in the millions).
+    constexpr int MAX_KEEP    = 2048;
+    constexpr int NEAREST     = 256;
+    constexpr int TOP_LARGEST = 64;
+    std::vector<float> absr(n);
+    for (int i = 0; i < n; i++) absr[i] = std::abs((float)radii[i]);
+    const float* absr_p = absr.data();
+    const float* cx_p = cx.data(), *cy_p = cy.data(), *cz_p = cz.data();
+
     #pragma omp parallel
     {
+#ifdef _OPENMP
+        int tid = omp_get_thread_num();
+#else
+        int tid = 0;
+#endif
+        std::mt19937 rng((uint32_t)(0x9E3779B1u ^ (uint32_t)tid));
         std::vector<int> buf;
+
         #pragma omp for schedule(dynamic, 256)
         for (int i = 0; i < n; i++) {
             buf.clear();
@@ -169,40 +192,8 @@ void find_intersections(const double* centers, const double* radii, int n,
                       s_lo_x[i], s_lo_y[i], s_lo_z[i],
                       s_hi_x[i], s_hi_y[i], s_hi_z[i],
                       buf);
-            // No sort+unique: each j lives in exactly one BVH leaf, so a
-            // single bvh_query never pushes the same j twice. assign()
-            // (vs std::move) keeps buf's capacity for the next iteration.
-            result[i].assign(buf.begin(), buf.end());
-        }
-    }
 
-    // Downstream compute_exposed_batch scans only the first MAX_NEIGHBORS_SCANNED
-    // (=2048) neighbors per sphere. We arrange the head of each row as:
-    //   [0, 32)       : 32 nearest by center distance, sorted ascending
-    //   [32, 64)      : 32 largest by |radius| (from the remainder), sorted desc
-    //   [64, 512)     : 448 uniformly random samples from the remainder
-    //   [512, sz)     : untouched (not truncated)
-    // Partitioning from the tail of the previous stage gives automatic dedup.
-    constexpr int NEAREST     = 32;
-    constexpr int TOP_LARGEST = 32;
-    constexpr int RANDOM_HEAD = 448;
-    std::vector<float> absr(n);
-    for (int i = 0; i < n; i++) absr[i] = std::abs((float)radii[i]);
-    const float* absr_p = absr.data();
-    const float* cx_p = cx.data(), *cy_p = cy.data(), *cz_p = cz.data();
-    #pragma omp parallel
-    {
-#ifdef _OPENMP
-        int tid = omp_get_thread_num();
-#else
-        int tid = 0;
-#endif
-        std::mt19937 rng((uint32_t)(0x9E3779B1u ^ (uint32_t)tid));
-
-        #pragma omp for schedule(dynamic, 256)
-        for (int i = 0; i < n; i++) {
-            auto& row = result[i];
-            int sz = (int)row.size();
+            int sz = (int)buf.size();
             if (sz == 0) continue;
 
             float qx = cx_p[i], qy = cy_p[i], qz = cz_p[i];
@@ -213,40 +204,43 @@ void find_intersections(const double* centers, const double* radii, int n,
             auto cmp_dist = [&dist2_of](int a, int b) { return dist2_of(a) < dist2_of(b); };
             auto cmp_rad  = [absr_p](int a, int b) { return absr_p[a] > absr_p[b]; };
 
-            // [0, nearest_k): 32 nearest, sorted ascending by distance.
+            // [0, nearest_k): 32 nearest, sorted asc by distance — picked
+            // from the FULL raw list so selection is exact.
             int nearest_k = sz < NEAREST ? sz : NEAREST;
-            if (nearest_k < sz) {
-                std::nth_element(row.begin(), row.begin() + nearest_k, row.end(), cmp_dist);
-            }
-            std::sort(row.begin(), row.begin() + nearest_k, cmp_dist);
-            if (sz <= nearest_k) continue;
+            if (nearest_k < sz)
+                std::nth_element(buf.begin(), buf.begin() + nearest_k, buf.end(), cmp_dist);
+            std::sort(buf.begin(), buf.begin() + nearest_k, cmp_dist);
 
-            // [nearest_k, nearest_k + largest_k): 32 largest by |radius|,
-            // chosen from [nearest_k, sz) so no overlap with the nearest set.
-            int after_nearest = sz - nearest_k;
-            int largest_k = after_nearest < TOP_LARGEST ? after_nearest : TOP_LARGEST;
-            if (largest_k < after_nearest) {
-                std::nth_element(row.begin() + nearest_k,
-                                 row.begin() + nearest_k + largest_k,
-                                 row.end(), cmp_rad);
+            int front_used = nearest_k;
+            if (sz > front_used) {
+                int after_nearest = sz - nearest_k;
+                int largest_k = after_nearest < TOP_LARGEST ? after_nearest : TOP_LARGEST;
+                if (largest_k < after_nearest)
+                    std::nth_element(buf.begin() + nearest_k,
+                                     buf.begin() + nearest_k + largest_k,
+                                     buf.end(), cmp_rad);
+                std::sort(buf.begin() + nearest_k,
+                          buf.begin() + nearest_k + largest_k, cmp_rad);
+                front_used += largest_k;
             }
-            std::sort(row.begin() + nearest_k,
-                      row.begin() + nearest_k + largest_k, cmp_rad);
 
-            int front_used = nearest_k + largest_k;
-            if (sz <= front_used) continue;
-
-            // [front_used, front_used + take): random, via partial Fisher-Yates
-            // over [front_used, sz). Tail beyond is left unordered (no truncation).
-            int remain = sz - front_used;
-            int take = remain < RANDOM_HEAD ? remain : RANDOM_HEAD;
-            for (int s = 0; s < take; s++) {
-                int lo = front_used + s;
-                int hi = sz - 1;
-                std::uniform_int_distribution<int> dist(lo, hi);
-                int pick = dist(rng);
-                if (pick != lo) std::swap(row[lo], row[pick]);
+            // Fill remaining kept slots [front_used, MAX_KEEP) with a
+            // uniform random sample from [front_used, sz) via Fisher-Yates.
+            if (sz > front_used) {
+                int remain = sz - front_used;
+                int cap = MAX_KEEP - front_used;
+                int take = remain < cap ? remain : cap;
+                for (int s = 0; s < take; s++) {
+                    int lo = front_used + s;
+                    int hi = sz - 1;
+                    std::uniform_int_distribution<int> dist(lo, hi);
+                    int pick = dist(rng);
+                    if (pick != lo) std::swap(buf[lo], buf[pick]);
+                }
             }
+
+            int keep = sz < MAX_KEEP ? sz : MAX_KEEP;
+            result[i].assign(buf.begin(), buf.begin() + keep);
         }
     }
     out_neighbors = std::move(result);
