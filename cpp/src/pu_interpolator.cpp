@@ -340,7 +340,7 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     }
 
     // Deduplicate
-    deduplicate(pts, vals);
+    deduplicate(pts, vals, 1e-6);
     int dim = (int)pts.cols();
     int min_pts = std::max(min_points_, dim + 2);
 

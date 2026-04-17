@@ -168,6 +168,7 @@ Eigen::VectorXi are_points_visible(
     const Eigen::MatrixXd& query_points,
     const Eigen::MatrixXd& sdf_points,
     const Eigen::VectorXd& sdf_values,
+    const std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
     const std::vector<std::vector<int>>& ngbrs_list,
     double epsilon)
 {
@@ -177,6 +178,9 @@ Eigen::VectorXi are_points_visible(
 
     #pragma omp parallel for schedule(dynamic, 256)
     for (int i = 0; i < N; i++) {
+        if (degenerate_pts.count(i) > 0) {
+            continue;  // skip degenerate points, treat them as visible
+        }
         if (query_points.row(i).array().isNaN().any()) {
             result(i) = 0;
             continue;

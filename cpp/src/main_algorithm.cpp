@@ -55,7 +55,8 @@ static void export_short_arcs_ply(
 static void filter_degenerate_pts(
     std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
     const Interpolator& interpolator,
-    double dist_tol = 0.1)
+    double dist_tol = 0.1,
+    double spatial_dedup_tol = 1e-4)
 {
     constexpr double dedup_tol = 1e-4;
     std::vector<int> to_remove;
@@ -131,6 +132,45 @@ static void filter_degenerate_pts(
             }
         }
     }
+
+    // Step 4: cross-sphere spatial dedup. Different spheres' degenerate
+    // projections often land on the same arc/edge, creating huge
+    // near-duplicate clusters that blow up the downstream PU patch sizes
+    // (Duchon is O(m^3)). Keep one representative per spatial cluster;
+    // flag the duplicates for removal — they'll just drop their init
+    // gradient and be treated as non-degenerate downstream.
+    std::vector<int> survivors;
+    survivors.reserve(keep_idx.size());
+    {
+        std::unordered_set<int> rm(to_remove.begin(), to_remove.end());
+        for (int idx : keep_idx)
+            if (!rm.count(idx)) survivors.push_back(idx);
+    }
+    if ((int)survivors.size() > 1) {
+        Eigen::MatrixXd R((int)survivors.size(), 3);
+        for (int i = 0; i < (int)survivors.size(); i++)
+            R.row(i) = degenerate_pts[survivors[i]][0].transpose();
+        KDTree3D stree(R);
+        std::vector<char> keep_flag(survivors.size(), 1);
+        int dedup_cnt = 0;
+        for (int i = 0; i < (int)survivors.size(); i++) {
+            if (!keep_flag[i]) continue;
+            Eigen::Vector3d pt = R.row(i);
+            auto neigh = stree.query_ball_point(pt, spatial_dedup_tol);
+            for (int j : neigh) {
+                if (j > i && keep_flag[j]) {
+                    keep_flag[j] = 0;
+                    to_remove.push_back(survivors[j]);
+                    dedup_cnt++;
+                }
+            }
+        }
+        if (dedup_cnt > 0)
+            std::cout << "Cross-sphere dedup removed " << dedup_cnt
+                      << " near-duplicate degenerate points (tol="
+                      << spatial_dedup_tol << ")\n";
+    }
+
     for (int idx : to_remove) degenerate_pts.erase(idx);
     std::cout << "Filtered out " << to_remove.size()
               << " degenerate points. Remaining: " << degenerate_pts.size() << "\n";
@@ -187,8 +227,6 @@ Eigen::MatrixXd init_gradients_by_degenerate_pts(
 {
     int N = (int)sdf_points.rows();
     auto& degenerate_pts = options.degenerate_pts;
-    std::cout << "Initializing gradients using " << degenerate_pts.size()
-              << " degenerate points...\n";
     // 1. Initial fit without gradients
     interpolator.fit(sdf_points, sdf_values);
     std::cout << "======== first fit done with input " << N << " points\n";
@@ -373,7 +411,7 @@ MainResult main_algorithm(
         projections.row(i) = sdf_points.row(i) - sdf_values(i) * gradients.row(i);
 
     Eigen::VectorXi vis = are_points_visible(
-        projections, sdf_points, sdf_values, options.ngbrs_list);
+        projections, sdf_points, sdf_values, options.degenerate_pts, options.ngbrs_list);
     std::cout << "[main_algorithm] final projection + visibility: "
               << ms_since(t5)/1000.0 << " s\n";
     std::cout << "[main_algorithm] total: " << ms_since(t0)/1000.0 << " s\n";

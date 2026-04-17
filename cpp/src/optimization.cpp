@@ -34,6 +34,7 @@ Eigen::MatrixXd iterative_projection_3d(
     }
 
     for (int it = 0; it < num_iter; it++) {
+        std::cout << "Iter " << (it + 1) << " | ";
         // ── Step 1: Find best gradient via angular search ──────────
         auto t_sbg0 = std::chrono::high_resolution_clock::now();
         Eigen::MatrixXd new_gradients;
@@ -44,7 +45,7 @@ Eigen::MatrixXd iterative_projection_3d(
             new_gradients = interpolator.sample_best_gradients(
                 points, values, num_coarse, /*refine_steps=*/4, /*num_refine=*/5, &gradients);
         }
-        std::cout << "  [" << options.iter_gradient_finding << "_best_gradients] "
+        std::cout << "[" << options.iter_gradient_finding << "_best_gradients] "
                   << std::chrono::duration<double>(
                          std::chrono::high_resolution_clock::now() - t_sbg0).count()
                   << "s\n";
@@ -78,9 +79,9 @@ Eigen::MatrixXd iterative_projection_3d(
             proj_new.row(i) = points.row(i) - values(i) * new_gradients.row(i);
             proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
         }
-        std::cout << "Checking visibility of new and old projections...\n";
-        Eigen::VectorXi vis_new = are_points_visible(proj_new, points, values, options.ngbrs_list);
-        Eigen::VectorXi vis_old = are_points_visible(proj_old, points, values, options.ngbrs_list);
+        std::cout << "Checking visibility ...";
+        Eigen::VectorXi vis_new = are_points_visible(proj_new, points, values, options.degenerate_pts, options.ngbrs_list);
+        Eigen::VectorXi vis_old = are_points_visible(proj_old, points, values, options.degenerate_pts, options.ngbrs_list);
 
         // Don't update gradients that would make visible projections invisible
         // Don't update degenerate-arc points
@@ -90,19 +91,8 @@ Eigen::MatrixXd iterative_projection_3d(
             if (skip) new_gradients.row(i) = gradients.row(i);
         }
 
-        // ── Convergence diagnostic ─────────────────────────────────
-        double cos_sum = 0.0;
-        double min_cos = 1.0;
-        for (int i = 0; i < N; i++) {
-            double cs = gradients.row(i).dot(new_gradients.row(i));
-            cos_sum += cs;
-            min_cos = std::min(min_cos, cs);
-        }
-        double mean_cos = cos_sum / N;
-        double max_angle_deg = std::acos(std::clamp(min_cos, -1.0, 1.0)) * 180.0 / M_PI;
-
-        std::cout << "Iter " << (it + 1) << " | mean cos_sim: " << mean_cos
-                  << "  max angle change: " << max_angle_deg << "°\n";
+        std::cout << "  visible old: " << vis_old.sum() << ", "
+                  << "visible new: " << vis_new.sum() << std::endl;
 
         // Compute visible mask (union of old and new)
         Eigen::VectorXi vis_mask(N);
@@ -113,6 +103,7 @@ Eigen::MatrixXd iterative_projection_3d(
             // vis_mask(i) = (vis_new(i) || vis_old(i)) && std::abs(values[i]) > 1e-2;
             if (vis_mask(i)) visible_num++;
         }
+        std::cout << "Iter " << (it + 1) << " | ";
         std::cout << "Number of visible projected points: " << visible_num
                   << " out of " << N << ". Percentage: "
                   << (100.0 * visible_num / N) << "%\n";

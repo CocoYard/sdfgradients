@@ -29,6 +29,7 @@ Eigen::VectorXi are_points_visible(
     const Eigen::MatrixXd& query_points,
     const Eigen::MatrixXd& sdf_points,
     const Eigen::VectorXd& sdf_values,
+    const std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
     const std::vector<std::vector<int>>& ngbrs_list,
     double epsilon = 1e-8);
 
