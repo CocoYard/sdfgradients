@@ -10,6 +10,7 @@
 #include <iostream>
 #include <limits>
 #include <cstdint>
+#include <random>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -168,32 +169,61 @@ void find_intersections(const double* centers, const double* radii, int n,
                       s_lo_x[i], s_lo_y[i], s_lo_z[i],
                       s_hi_x[i], s_hi_y[i], s_hi_z[i],
                       buf);
-            std::sort(buf.begin(), buf.end());
-            buf.erase(std::unique(buf.begin(), buf.end()), buf.end());
-            result[i] = std::move(buf);
+            // No sort+unique: each j lives in exactly one BVH leaf, so a
+            // single bvh_query never pushes the same j twice. assign()
+            // (vs std::move) keeps buf's capacity for the next iteration.
+            result[i].assign(buf.begin(), buf.end());
         }
     }
 
-    // Downstream compute_exposed_batch only scans the first MAX_NEIGHBORS_SCANNED
-    // (=2048) neighbors per sphere, so we only need the top-K by descending
-    // |radius| in sorted order — the tail can be left unordered. nth_element
-    // + sort of the head cuts this stage from ~10s (full sort of 1.3B items)
-    // to ~2s on bunny/grid=50.
-    constexpr int TOP_K = 512;
+    // Downstream compute_exposed_batch scans only the first MAX_NEIGHBORS_SCANNED
+    // (=2048) neighbors per sphere. We arrange the head of each row as:
+    //   [0, 32)       : 32 largest by |radius|, sorted descending
+    //   [32, 512)     : 480 uniformly random samples from the remainder
+    //   [512, sz)     : untouched (not truncated)
+    constexpr int TOP_LARGEST = 32;
+    constexpr int RANDOM_HEAD = 480;
+    constexpr int FRONT = TOP_LARGEST + RANDOM_HEAD;  // 512
     std::vector<float> absr(n);
     for (int i = 0; i < n; i++) absr[i] = std::abs((float)radii[i]);
     const float* absr_p = absr.data();
-    #pragma omp parallel for schedule(dynamic, 256)
-    for (int i = 0; i < n; i++) {
-        auto& row = result[i];
-        int sz = (int)row.size();
-        int k = sz < TOP_K ? sz : TOP_K;
+    #pragma omp parallel
+    {
+#ifdef _OPENMP
+        int tid = omp_get_thread_num();
+#else
+        int tid = 0;
+#endif
+        std::mt19937 rng((uint32_t)(0x9E3779B1u ^ (uint32_t)tid));
         auto cmp = [absr_p](int a, int b) { return absr_p[a] > absr_p[b]; };
-        if (k < sz) {
-            std::nth_element(row.begin(), row.begin() + k, row.end(), cmp);
+
+        #pragma omp for schedule(dynamic, 256)
+        for (int i = 0; i < n; i++) {
+            auto& row = result[i];
+            int sz = (int)row.size();
+            if (sz <= TOP_LARGEST) {
+                std::sort(row.begin(), row.end(), cmp);
+                continue;
+            }
+            // Place the 32 largest at [0, 32), sorted descending.
+            std::nth_element(row.begin(), row.begin() + TOP_LARGEST, row.end(), cmp);
+            std::sort(row.begin(), row.begin() + TOP_LARGEST, cmp);
+
+            // Partial Fisher-Yates over [32, sz) to fill [32, 32+take) with
+            // uniformly random picks from the remainder. Tail past FRONT is
+            // left unordered and not truncated.
+            int remain = sz - TOP_LARGEST;
+            int take = remain < RANDOM_HEAD ? remain : RANDOM_HEAD;
+            for (int s = 0; s < take; s++) {
+                int lo = TOP_LARGEST + s;
+                int hi = sz - 1;
+                std::uniform_int_distribution<int> dist(lo, hi);
+                int pick = dist(rng);
+                if (pick != lo) std::swap(row[lo], row[pick]);
+            }
         }
-        std::sort(row.begin(), row.begin() + k, cmp);
     }
+    (void)FRONT;
     out_neighbors = std::move(result);
 }
 

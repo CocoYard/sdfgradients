@@ -6,6 +6,9 @@
 #include <deque>
 #include <iostream>
 #include <chrono>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace sdf {
 
@@ -359,12 +362,22 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
               << patches_info.size() << " patches)\n";
 
     // ── Fit local interpolators ────────────────────────────────────
+    // Each patch fit is independent. Parallelize over patches and compact
+    // into patches_ in a serial pass. t_local_fit becomes a sum over
+    // threads (CPU-time-like), no longer wall time.
     patches_.clear();
     patches_.reserve(patches_info.size());
     double t_local_fit = 0;
     std::vector<int> patch_sizes;
 
-    for (auto& pi : patches_info) {
+    const int P = (int)patches_info.size();
+    std::vector<Patch> tmp_patches(P);
+    std::vector<int> tmp_sizes(P, 0);
+    std::vector<char> valid(P, 0);
+
+    #pragma omp parallel for schedule(dynamic, 4) reduction(+:t_local_fit)
+    for (int p = 0; p < P; p++) {
+        auto& pi = patches_info[p];
         if ((int)pi.ext_idx.size() < min_pts) continue;
 
         Eigen::MatrixXd local_pts(pi.ext_idx.size(), dim);
@@ -373,19 +386,24 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
             local_pts.row(i) = pts.row(pi.ext_idx[i]);
             local_vals(i) = vals(pi.ext_idx[i]);
         }
-        patch_sizes.push_back((int)pi.ext_idx.size());
+        tmp_sizes[p] = (int)pi.ext_idx.size();
 
         auto tf0 = clock::now();
         auto interp = std::make_unique<DuchonInterpolator>(kernel_, reg_);
         interp->fit(local_pts, local_vals);
         t_local_fit += std::chrono::duration<double>(clock::now() - tf0).count();
 
-        Patch patch;
-        patch.center = pi.center;
-        patch.half_ext = pi.half_ext;
-        patch.bsphere_radius = pi.half_ext.norm();
-        patch.interp = std::move(interp);
-        patches_.push_back(std::move(patch));
+        tmp_patches[p].center = pi.center;
+        tmp_patches[p].half_ext = pi.half_ext;
+        tmp_patches[p].bsphere_radius = pi.half_ext.norm();
+        tmp_patches[p].interp = std::move(interp);
+        valid[p] = 1;
+    }
+
+    for (int p = 0; p < P; p++) {
+        if (!valid[p]) continue;
+        patches_.push_back(std::move(tmp_patches[p]));
+        patch_sizes.push_back(tmp_sizes[p]);
     }
 
     auto t3 = clock::now();

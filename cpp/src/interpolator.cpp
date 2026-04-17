@@ -314,18 +314,27 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
     int chunk_size) const
 {
     int N = (int)points.rows();
+
+    // Bump to predict thread count for the duration: surrounding
+    // iterative_projection_3d runs under fit's reduced pool, but this
+    // routine is throughput-bound (N-wide loops + predict / predict_gradients).
+    int _saved = set_threads(thread_policy().predict);
+
     Eigen::VectorXd sgn(N);
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < N; i++)
         sgn(i) = (sdf_values(i) > 0) ? 1.0 : -1.0;
 
-    std::vector<bool> valid_mask(N, false);
+    std::vector<char> valid_mask(N, 0);
     if (initial_guess) {
+        #pragma omp parallel for schedule(static)
         for (int i = 0; i < N; i++)
             valid_mask[i] = !initial_guess->row(i).array().isNaN().any();
     }
 
     Eigen::MatrixXd dirs = Eigen::MatrixXd::Zero(N, 3);
     if (initial_guess) {
+        #pragma omp parallel for schedule(static)
         for (int i = 0; i < N; i++)
             if (valid_mask[i])
                 dirs.row(i) = initial_guess->row(i);
@@ -333,6 +342,7 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
 
     // Fibonacci coarse sweep for points without a valid initial guess
     std::vector<int> invalid_idx;
+    invalid_idx.reserve(N);
     for (int i = 0; i < N; i++)
         if (!valid_mask[i]) invalid_idx.push_back(i);
 
@@ -341,6 +351,7 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
         Eigen::MatrixXd fib = fibonacci_sphere(num_coarse);
 
         Eigen::MatrixXd samples(n_inv * num_coarse, 3);
+        #pragma omp parallel for schedule(static)
         for (int ii = 0; ii < n_inv; ii++) {
             int i = invalid_idx[ii];
             for (int d = 0; d < num_coarse; d++)
@@ -349,6 +360,7 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
         }
         Eigen::VectorXd preds = predict(samples, chunk_size);
 
+        #pragma omp parallel for schedule(static)
         for (int ii = 0; ii < n_inv; ii++) {
             int i = invalid_idx[ii];
             double best_obj = std::numeric_limits<double>::max();
@@ -366,13 +378,15 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
     // ∂obj/∂g = sgn(i) * (-s_i) * ∇sdf = -|s_i| * ∇sdf
     // tangent projection: grad_tan = grad - (grad · g) * g
     // retraction: g ← normalize(g - lr * grad_tan)
+    Eigen::MatrixXd proj(N, 3);
     for (int step = 0; step < optim_steps; step++) {
-        Eigen::MatrixXd proj(N, 3);
+        #pragma omp parallel for schedule(static)
         for (int i = 0; i < N; i++)
             proj.row(i) = points.row(i) - sdf_values(i) * dirs.row(i);
 
         Eigen::MatrixXd sdf_grad = predict_gradients(proj, chunk_size);
 
+        #pragma omp parallel for schedule(static)
         for (int i = 0; i < N; i++) {
             double abs_s = std::abs(sdf_values(i));
             if (abs_s < 1e-15) continue;
@@ -388,6 +402,7 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
         }
     }
 
+    restore_threads(_saved);
     return dirs;
 }
 

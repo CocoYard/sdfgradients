@@ -2,6 +2,7 @@
 #include "visibility.h"
 #include "clamp.h"
 #include "mes_contact_core.h"
+#include "thread_policy.h"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -49,7 +50,11 @@ Eigen::MatrixXd iterative_projection_3d(
                   << "s\n";
 
         // ── Clamp to arcs ──────────────────────────────────────────
+        // Throughput-bound (N × neighbors), so bump threads up to predict
+        // count for the duration — the surrounding iterative_projection_3d
+        // runs under fit's reduced thread pool.
         if (options.clamp) {
+            int _saved = sdf::set_threads(sdf::thread_policy().predict);
             Eigen::MatrixXd pre_clamp_gradients = new_gradients;
             int clamped_cnt = 0;
             while (true) {
@@ -64,6 +69,7 @@ Eigen::MatrixXd iterative_projection_3d(
                     break;
                 }
             }
+            sdf::restore_threads(_saved);
         }
 
         // ── Visibility checks ──────────────────────────────────────

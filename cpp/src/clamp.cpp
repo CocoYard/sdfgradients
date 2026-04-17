@@ -1,6 +1,9 @@
 #include "clamp.h"
 #include <cmath>
 #include <iostream>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace sdf {
 
@@ -144,21 +147,29 @@ int clamp_gradients_to_arcs(
 
     // Compute all projections
     Eigen::MatrixXd projections(N, 3);
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < N; i++)
         projections.row(i) = points.row(i) - values(i) * gradients.row(i);
 
     int debug_cnt = 0;
     int clamped_cnt = 0;
+    #pragma omp parallel for reduction(+:clamped_cnt) schedule(dynamic, 1024)
     for (int i = 0; i < N; i++) {
         // Skip degenerate-arc points
         if (degenerate_pts.count(i)) continue;
 
-        // Check if projection is inside any neighbor's sphere
+        // Check if projection is inside any neighbor's sphere — compare
+        // squared distances to avoid a sqrt per neighbor.
         const auto& ngbrs = ngbrs_list[i];
+        double pix = projections(i, 0), piy = projections(i, 1), piz = projections(i, 2);
         bool any_inside = false;
         for (int j : ngbrs) {
-            double dist = (projections.row(i) - points.row(j)).norm();
-            if (dist < std::abs(values(j)) - float_tol) {
+            double thr = std::abs(values(j)) - float_tol;
+            if (thr <= 0.0) continue;
+            double dx = pix - points(j, 0);
+            double dy = piy - points(j, 1);
+            double dz = piz - points(j, 2);
+            if (dx * dx + dy * dy + dz * dz < thr * thr) {
                 any_inside = true;
                 break;
             }
