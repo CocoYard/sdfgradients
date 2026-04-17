@@ -4,6 +4,7 @@
 #include "optimization.h"
 #include "visibility.h"
 #include "kdtree.h"
+#include "thread_policy.h"
 #include <iostream>
 #include <fstream>
 #include <cmath>
@@ -321,7 +322,11 @@ MainResult main_algorithm(
     std::cout << "[main_algorithm] get_visible_arcs: " << ms_since(t1)/1000.0 << " s\n";
 
     // Create interpolator
-    auto t2 = clk::now();
+    auto t2 = clk::now();    
+    // Fit phase has many small parallel sections — too many threads hurt.
+    // Auto-detected on big boxes, no-op on Mac / small workstations.
+    int _saved_threads = sdf::set_threads(sdf::thread_policy().fit);
+
     std::shared_ptr<Interpolator> interpolator;
     if (options.interpolator_type == "Duchon") {
         interpolator = std::make_shared<DuchonInterpolator>("cubic");
@@ -376,6 +381,7 @@ MainResult main_algorithm(
     if (options.export_projections)
         export_projection_ply(sdf_points, projections, vis, options, "out/" + options.name);
 
+    sdf::restore_threads(_saved_threads);
     return {projections, vis, interpolator};
 }
 

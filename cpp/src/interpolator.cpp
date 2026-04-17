@@ -1,4 +1,5 @@
 #include "interpolator.h"
+#include "thread_policy.h"
 #include <cassert>  // libigl's march_cube.cpp uses assert() without including <cassert>
 #include <igl/marching_cubes.h>
 #include <cmath>
@@ -9,6 +10,10 @@
 #include <set>
 #include <chrono>
 #include <iostream>
+
+using sdf::thread_policy;
+using sdf::set_threads;
+using sdf::restore_threads;
 
 namespace sdf {
 
@@ -574,7 +579,9 @@ void Interpolator::extract_surface(
         Eigen::MatrixXd RGV(M, 3);
         for (int k = 0; k < M; k++)
             RGV.row(k) = GV.row(refine_idx[k]);
+        int saved = set_threads(thread_policy().predict);
         Eigen::VectorXd RS = this->predict(RGV, chunk_size);
+        restore_threads(saved);
         for (int k = 0; k < M; k++)
             S(refine_idx[k]) = RS(k);
     }

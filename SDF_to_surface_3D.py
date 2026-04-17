@@ -199,7 +199,7 @@ def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_gtmesh=True)
     mesh_distances(recon, mesh, verbose=True)
     return plt
 
-def test_rfta(options, save_gtmesh=True):
+def test_rfta(options, save_gtmesh=True, screening_weight=10, parallel=True):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -217,7 +217,7 @@ def test_rfta(options, save_gtmesh=True):
     import trimesh, os
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
     os.makedirs(out_dir, exist_ok=True)
-    Vr, Fr = gpy.reach_for_the_arcs(points, distances)
+    Vr, Fr = gpy.reach_for_the_arcs(points, distances, screening_weight=screening_weight, parallel=parallel)
     rfta = trimesh.Trimesh(vertices=Vr, faces=Fr)
     # only keep the largest connected component
     components = rfta.split(only_watertight=False)
@@ -600,14 +600,14 @@ if __name__ == "__main__":
                 # test_rfta(options)
             check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
     else:
-        options = Options(name='chair', grid_len=20, max_iters=13, clamp=True,
+        options = Options(name='chair', grid_len=100, max_iters=13, clamp=True,
                         export_short_arcs=False, export_projections=False, turn_off_short_arcs=False,
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
                         overlap=0.2, reg=0, use_MES=False, post_processing=True, iter_gradient_finding='optimize')
         options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
         # # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
         plt = test_our_method(options, save_gtmesh=False)
-        # test_rfta(options)
+        # test_rfta(options, screening_weight=10, parallel=True)
         check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0
