@@ -80,7 +80,8 @@ public:
         Eigen::MatrixXd& V,
         Eigen::MatrixXi& F,
         int chunk_size = 5000,
-        bool lipschitz_postfix = true) const;
+        bool lipschitz_postfix = true,
+        bool use_dual_contouring = false) const;
 
 protected:
     // Raw training samples cached by fit() subclasses. Used by extract_surface

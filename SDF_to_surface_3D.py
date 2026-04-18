@@ -24,7 +24,7 @@ from bench import sphere_intersect
 class Options:
     def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', 
                  turn_off_short_arcs=False, export_short_arcs=True, export_projections=True, reg=1e-4,
-                 use_gt_gradients=False, interpolator_type='PU', interp_partition='box', overlap=0.5, 
+                 use_gt_gradients=False, interpolator_type='PU', interp_partition='box', overlap=0.5, cpp_dc=True,
                  turn_off_projection=False, use_MES=False, post_processing=True, iter_gradient_finding='optimize'):
         self.grid_len = grid_len
         self.max_iters = max_iters
@@ -42,6 +42,7 @@ class Options:
         self.post_processing = post_processing
         self.reg = reg
         self.iter_gradient_finding = iter_gradient_finding  # 'optimize' or 'sample'
+        self.cpp_dc = cpp_dc
 
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
@@ -502,23 +503,136 @@ def test_our_method(options : Options, save_gtmesh=False):
 
     # visualize results using marching cubes to extract isosurface
     timer = time.perf_counter()
-    use_cpp = False
+    """ ========================= output post+dc ========================= """
+    use_cpp = True
+    resolution = 256
     if use_cpp:
         bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
         bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
         verts, faces = result.interpolator.extract_surface(
             bbox_min=bbox_min, bbox_max=bbox_max,
-            nx=200, ny=200, nz=200, iso=0.0, chunk_size=5000,
-            lipschitz_postfix=options.post_processing)
+            nx=resolution, ny=resolution, nz=resolution, iso=0.0, chunk_size=5000,
+            lipschitz_postfix=options.post_processing,
+            use_dual_contouring=options.cpp_dc)
     else:
         verts, faces = interpolator.extract_zero_level_set(
             bounds=((points[:, 0].min(), points[:, 0].max()),
                     (points[:, 1].min(), points[:, 1].max()),
                     (points[:, 2].min(), points[:, 2].max())),
-            resolution=256, use_dual_contouring=True)
+            resolution=resolution, use_odc=True)
     print(f"  ⏱  {'Grid evaluation':<30} {time.perf_counter() - timer:>7.2f} s")
     # Extract isosurface at value 0 using marching cubes
+    # Export meshes to out/
+    import trimesh, os
+    out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
+    os.makedirs(out_dir, exist_ok=True)
+    recon = trimesh.Trimesh(vertices=verts, faces=faces)
+    # fname = f'interpolant_{grid_len}_{iters}_clamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
+    clamp_str = 'clamp' if options.clamp else 'noclamp'
+    mes_str = 'MES' if options.use_MES else 'noMES'
+    post_str = 'post' if options.post_processing else 'nopost'
+    if options.cpp_dc:
+        post_str = post_str + '_dc'
+    else:
+        post_str = post_str + '_mc'
+    short_arc_str = 'noShortArcs' if options.turn_off_short_arcs else 'shortArcs'
+    if not use_cpp:
+        post_str = 'odc'
+    fname = f'interpolant_{grid_len}_{iters}_{short_arc_str}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}.obj'
+    if options.use_gt_gradients:
+        fname = f'interpolant_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
+    recon.export(f'{out_dir}/{fname}')
+    '''
+    # """ ========================= output post+mc ========================= """
+    # use_cpp = True
+    # resolution = 256
+    # options.cpp_dc = False
+    # if use_cpp:
+    #     bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
+    #     bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
+    #     verts, faces = result.interpolator.extract_surface(
+    #         bbox_min=bbox_min, bbox_max=bbox_max,
+    #         nx=resolution, ny=resolution, nz=resolution, iso=0.0, chunk_size=5000,
+    #         lipschitz_postfix=options.post_processing,
+    #         use_dual_contouring=options.cpp_dc)
+    # else:
+    #     verts, faces = interpolator.extract_zero_level_set(
+    #         bounds=((points[:, 0].min(), points[:, 0].max()),
+    #                 (points[:, 1].min(), points[:, 1].max()),
+    #                 (points[:, 2].min(), points[:, 2].max())),
+    #         resolution=resolution, use_odc=True)
+    # print(f"  ⏱  {'Grid evaluation':<30} {time.perf_counter() - timer:>7.2f} s")
+    # # Extract isosurface at value 0 using marching cubes
+    # # Export meshes to out/
+    # import trimesh, os
+    # out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
+    # os.makedirs(out_dir, exist_ok=True)
+    # recon = trimesh.Trimesh(vertices=verts, faces=faces)
+    # # fname = f'interpolant_{grid_len}_{iters}_clamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
+    # clamp_str = 'clamp' if options.clamp else 'noclamp'
+    # mes_str = 'MES' if options.use_MES else 'noMES'
+    # post_str = 'post' if options.post_processing else 'nopost'
+    # if options.cpp_dc:
+    #     post_str = post_str + '_dc'
+    # else:
+    #     post_str = post_str + '_mc'
+    # short_arc_str = 'noShortArcs' if options.turn_off_short_arcs else 'shortArcs'
+    # if not use_cpp:
+    #     post_str = 'odc'
+    # fname = f'interpolant_{grid_len}_{iters}_{short_arc_str}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}.obj'
+    # if options.use_gt_gradients:
+    #     fname = f'interpolant_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
+    # recon.export(f'{out_dir}/{fname}')
+    # """ ========================= output ODC ========================= """
+    # use_cpp = False
+    # resolution = 256
+    # if use_cpp:
+    #     bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
+    #     bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
+    #     verts, faces = result.interpolator.extract_surface(
+    #         bbox_min=bbox_min, bbox_max=bbox_max,
+    #         nx=resolution, ny=resolution, nz=resolution, iso=0.0, chunk_size=5000,
+    #         lipschitz_postfix=options.post_processing,
+    #         use_dual_contouring=options.cpp_dc)
+    # else:
+    #     verts, faces = interpolator.extract_zero_level_set(
+    #         bounds=((points[:, 0].min(), points[:, 0].max()),
+    #                 (points[:, 1].min(), points[:, 1].max()),
+    #                 (points[:, 2].min(), points[:, 2].max())),
+    #         resolution=resolution, use_odc=True)
+    # print(f"  ⏱  {'Grid evaluation':<30} {time.perf_counter() - timer:>7.2f} s")
+    # # Extract isosurface at value 0 using marching cubes
+    # # Export meshes to out/
+    # import trimesh, os
+    # out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
+    # os.makedirs(out_dir, exist_ok=True)
+    # recon = trimesh.Trimesh(vertices=verts, faces=faces)
+    # # fname = f'interpolant_{grid_len}_{iters}_clamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
+    # clamp_str = 'clamp' if options.clamp else 'noclamp'
+    # mes_str = 'MES' if options.use_MES else 'noMES'
+    # post_str = 'post' if options.post_processing else 'nopost'
+    # if options.cpp_dc:
+    #     post_str = post_str + '_dc'
+    # else:
+    #     post_str = post_str + '_mc'
+    # short_arc_str = 'noShortArcs' if options.turn_off_short_arcs else 'shortArcs'
+    # if not use_cpp:
+    #     post_str = 'odc'
+    # fname = f'interpolant_{grid_len}_{iters}_{short_arc_str}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}.obj'
+    # if options.use_gt_gradients:
+    #     fname = f'interpolant_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
+    # recon.export(f'{out_dir}/{fname}')
+    '''
 
+    # Export projection visualization GLB
+    if not use_cpp and options.export_projections:
+        out_path = f'out/projections_{options.name}_{options.grid_len}_{options.max_iters}.glb'
+        if options.use_gt_gradients:
+            out_path = f'out/projections_{options.name}_{options.grid_len}_gtmesh.glb'
+            export_projection_visualization(points, projections, mask, mesh, output_path=out_path)
+            out_path = f'out/projections_{options.name}_{options.grid_len}_gt.glb'
+        export_projection_visualization(points, projections, mask, recon, output_path=out_path)
+    
     # --- Second window: marching cubes directly on sample points (原始网格点) ---
     # 从点坐标反推网格结构，无需插值
     xs = np.unique(np.round(points[:, 0], 8))
@@ -534,32 +648,6 @@ def test_our_method(options : Options, save_gtmesh=False):
     from skimage.measure import marching_cubes
     verts2, faces2, _, _ = marching_cubes(grid_values_direct, level=0.0, spacing=sp)
     verts2 += np.array([xs[0], ys[0], zs[0]])
-    # Export meshes to out/
-    import trimesh, os
-    out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
-    os.makedirs(out_dir, exist_ok=True)
-    recon = trimesh.Trimesh(vertices=verts, faces=faces)
-    # fname = f'interpolant_{grid_len}_{iters}_clamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
-    clamp_str = 'clamp' if options.clamp else 'noclamp'
-    mes_str = 'MES' if options.use_MES else 'noMES'
-    post_str = 'post' if options.post_processing else 'nopost'
-    iter_grad_str = 'optproj' if options.iter_gradient_finding == 'optimize' else 'slowproj'
-    if not use_cpp:
-        post_str = 'dc'
-    fname = f'interpolant_{grid_len}_{iters}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}_{iter_grad_str}.obj'
-    if options.use_gt_gradients:
-        fname = f'interpolant_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
-    recon.export(f'{out_dir}/{fname}')
-    
-    # Export projection visualization GLB
-    if not use_cpp and options.export_projections:
-        out_path = f'out/projections_{options.name}_{options.grid_len}_{options.max_iters}.glb'
-        if options.use_gt_gradients:
-            out_path = f'out/projections_{options.name}_{options.grid_len}_gtmesh.glb'
-            export_projection_visualization(points, projections, mask, mesh, output_path=out_path)
-            out_path = f'out/projections_{options.name}_{options.grid_len}_gt.glb'
-        export_projection_visualization(points, projections, mask, recon, output_path=out_path)
-
     trimesh.Trimesh(vertices=verts2, faces=faces2).export(f'{out_dir}/sample_points_{grid_len}.obj')    
     print(f"Exported: {out_dir}/{fname}, {out_dir}/sample_points_{grid_len}.obj")
     mesh_distances(recon, mesh, verbose=True)
@@ -588,11 +676,11 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
 if __name__ == "__main__":
     t0 = time.perf_counter()
     batch = False
-    data_dir = 'examples/benchmark'
+    data_dir = 'examples'
     if batch:
-        for name in ['bunny']:
+        for name in ['eiffel', 'denker', 'horse']:
         # for name in ['eiffel', 'archer', 'horse', 'bunny', 'denker']:
-            for grid_len in [20, 50]:  # 20^3=8000 points, 30^3=27000 points
+            for grid_len in [20, 30, 50]:  # 20^3=8000 points, 30^3=27000 points
                 for max_iters in [13]:  # 0 means no optimization, only initial gradient estimation and projection
                     options = Options(name=name, grid_len=grid_len, max_iters=max_iters, clamp=True,
                         export_short_arcs=True, export_projections=False, turn_off_short_arcs=False,
@@ -604,14 +692,14 @@ if __name__ == "__main__":
                 # test_rfta(options)
             check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
     else:
-        options = Options(name='common3d__fandisk', grid_len=100, max_iters=13, clamp=True,
-                        export_short_arcs=True, export_projections=False, turn_off_short_arcs=False,
+        options = Options(name='denker', grid_len=100, max_iters=13, clamp=True, cpp_dc=True,
+                        export_short_arcs=False, export_projections=False, turn_off_short_arcs=False,
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
                         overlap=0.2, reg=0, use_MES=False, post_processing=True, iter_gradient_finding='optimize')
         options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
         # # # plt = test_mesh(grid_len=20, path_to_obj='{data_dir}/holes.obj')
         plt = test_our_method(options, save_gtmesh=False)
-        test_rfta(options, screening_weight=10, parallel=True)
+        # test_rfta(options, screening_weight=10, parallel=True)
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0

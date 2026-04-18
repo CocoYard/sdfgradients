@@ -25,12 +25,12 @@ class Interpolator(ABC):
     def predict_gradients(self, x_new, chunk_size=500):
         pass
 
-    def extract_zero_level_set(self, bounds, resolution=256, use_dual_contouring=True):
+    def extract_zero_level_set(self, bounds, resolution=256, use_odc=True):
         """
         Extract zero level set contours (Marching Squares for 2D / Marching Cubes for 3D)
         """
         if len(bounds) == 3:
-            return self._extract_zero_level_set_3d(bounds, resolution, use_dual_contouring)
+            return self._extract_zero_level_set_3d(bounds, resolution, use_odc)
         else:
             return self._extract_zero_level_set_2d(bounds, resolution)
 
@@ -122,8 +122,8 @@ class Interpolator(ABC):
         self.zero_contours = contours
         return contours
 
-    def _extract_zero_level_set_3d(self, bounds, grid_resolution, use_dual_contouring):
-        if use_dual_contouring:
+    def _extract_zero_level_set_3d(self, bounds, grid_resolution, use_odc):
+        if use_odc:
             from occupancy_dual_contouring import occupancy_dual_contouring
             import torch
             if torch.cuda.is_available():

@@ -406,6 +406,238 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
     return dirs;
 }
 
+// ── Dual contouring ──────────────────────────────────────────────────
+// Given an evaluated SDF grid and an interpolator with analytic gradients,
+// build a triangle mesh of the iso level set. For each sign-changing grid
+// edge we evaluate the gradient at the interpolated intersection point; for
+// each cell with at least one such edge we solve a QEF (min Σ (nᵢ·(v-pᵢ))²)
+// via truncated-SVD, biased toward the cell centroid, and clamp the result
+// to the cell bbox. Every sign-changing edge then emits a quad of the 4
+// dual vertices of the cells sharing it, split into two triangles with
+// winding chosen so the outward normal follows sdf gradient sign.
+namespace dc_impl {
+
+struct EdgeIsect {
+    float t;                      // linear intersection parameter ∈ [0,1]
+    int xi, yi, zi;               // base (lower-index) grid vertex
+    signed char axis;             // 0=x, 1=y, 2=z
+    signed char neg_end;          // 0 if S(base)<iso, 1 if S(base+axis)<iso
+};
+
+static void dual_contour(
+    const Interpolator& interp,
+    const Eigen::VectorXd& S,
+    const Eigen::MatrixXd& GV,
+    int nx, int ny, int nz,
+    double iso,
+    int chunk_size,
+    Eigen::MatrixXd& V_out,
+    Eigen::MatrixXi& F_out)
+{
+    using clk = std::chrono::steady_clock;
+    auto sec_since = [](const clk::time_point& t) {
+        return std::chrono::duration<double>(clk::now() - t).count();
+    };
+    const int N  = nx * ny * nz;
+    auto vidx = [&](int xi, int yi, int zi) {
+        return xi + nx * (yi + ny * zi);
+    };
+
+    // ── 1. Find all sign-changing edges ──────────────────────────────
+    auto t_edge = clk::now();
+    std::vector<EdgeIsect> edges;
+    edges.reserve(N / 4);
+    std::vector<int> edge_map(3 * N, -1);
+    auto emap = [&](int xi, int yi, int zi, int axis) {
+        return 3 * vidx(xi, yi, zi) + axis;
+    };
+    auto try_edge = [&](int xi, int yi, int zi, int axis,
+                        int xi2, int yi2, int zi2) {
+        double sa = S(vidx(xi, yi, zi));
+        double sb = S(vidx(xi2, yi2, zi2));
+        bool a_neg = sa < iso, b_neg = sb < iso;
+        if (a_neg == b_neg) return;
+        double denom = sb - sa;
+        float t = (std::abs(denom) > 1e-30) ? float((iso - sa) / denom) : 0.5f;
+        if (t < 0.f) t = 0.f; else if (t > 1.f) t = 1.f;
+        edge_map[emap(xi, yi, zi, axis)] = (int)edges.size();
+        EdgeIsect ei;
+        ei.t = t;
+        ei.xi = xi; ei.yi = yi; ei.zi = zi;
+        ei.axis = (signed char)axis;
+        ei.neg_end = a_neg ? 0 : 1;
+        edges.push_back(ei);
+    };
+    for (int zi = 0; zi < nz;   zi++)
+    for (int yi = 0; yi < ny;   yi++)
+    for (int xi = 0; xi < nx-1; xi++) try_edge(xi, yi, zi, 0, xi+1, yi, zi);
+    for (int zi = 0; zi < nz;   zi++)
+    for (int yi = 0; yi < ny-1; yi++)
+    for (int xi = 0; xi < nx;   xi++) try_edge(xi, yi, zi, 1, xi, yi+1, zi);
+    for (int zi = 0; zi < nz-1; zi++)
+    for (int yi = 0; yi < ny;   yi++)
+    for (int xi = 0; xi < nx;   xi++) try_edge(xi, yi, zi, 2, xi, yi, zi+1);
+
+    const int nedges = (int)edges.size();
+    std::cout << "[DC] sign-changing edges: " << nedges
+              << " (" << sec_since(t_edge) << " s)\n";
+    if (nedges == 0) {
+        V_out.resize(0, 3); F_out.resize(0, 3);
+        return;
+    }
+
+    // ── 2. Intersection positions + gradients (one batched predict) ──
+    auto t_grad = clk::now();
+    Eigen::MatrixXd EP(nedges, 3);
+    for (int e = 0; e < nedges; e++) {
+        const auto& ei = edges[e];
+        Eigen::Vector3d pa = GV.row(vidx(ei.xi, ei.yi, ei.zi));
+        int xi2 = ei.xi + (ei.axis == 0);
+        int yi2 = ei.yi + (ei.axis == 1);
+        int zi2 = ei.zi + (ei.axis == 2);
+        Eigen::Vector3d pb = GV.row(vidx(xi2, yi2, zi2));
+        EP.row(e) = pa + double(ei.t) * (pb - pa);
+    }
+    int saved = set_threads(thread_policy().predict);
+    Eigen::MatrixXd EN = interp.predict_gradients(EP, chunk_size);
+    restore_threads(saved);
+    for (int e = 0; e < nedges; e++) {
+        double n = EN.row(e).norm();
+        if (n > 1e-12) EN.row(e) /= n;
+        else EN.row(e).setZero();
+    }
+    std::cout << "[DC] edge gradients: " << sec_since(t_grad) << " s\n";
+
+    // ── 3. Per-cell QEF: min Σ (nᵢ·(v-pᵢ))², biased to centroid ─────
+    auto t_qef = clk::now();
+    const int Cx = nx - 1, Cy = ny - 1, Cz = nz - 1;
+    const int NC = Cx * Cy * Cz;
+    auto cidx = [&](int ci, int cj, int ck) {
+        return ci + Cx * (cj + Cy * ck);
+    };
+    std::vector<int> cell_vertex(NC, -1);
+    std::vector<Eigen::Vector3d> verts;
+    verts.reserve(nedges / 3);
+
+    for (int ck = 0; ck < Cz; ck++)
+    for (int cj = 0; cj < Cy; cj++)
+    for (int ci = 0; ci < Cx; ci++) {
+        int ids[12] = {
+            edge_map[emap(ci, cj  , ck  , 0)],
+            edge_map[emap(ci, cj+1, ck  , 0)],
+            edge_map[emap(ci, cj  , ck+1, 0)],
+            edge_map[emap(ci, cj+1, ck+1, 0)],
+            edge_map[emap(ci  , cj, ck  , 1)],
+            edge_map[emap(ci+1, cj, ck  , 1)],
+            edge_map[emap(ci  , cj, ck+1, 1)],
+            edge_map[emap(ci+1, cj, ck+1, 1)],
+            edge_map[emap(ci  , cj  , ck, 2)],
+            edge_map[emap(ci+1, cj  , ck, 2)],
+            edge_map[emap(ci  , cj+1, ck, 2)],
+            edge_map[emap(ci+1, cj+1, ck, 2)],
+        };
+        Eigen::Matrix3d AtA = Eigen::Matrix3d::Zero();
+        Eigen::Vector3d Atb = Eigen::Vector3d::Zero();
+        Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+        int nact = 0;
+        for (int e = 0; e < 12; e++) {
+            if (ids[e] < 0) continue;
+            Eigen::Vector3d p = EP.row(ids[e]);
+            Eigen::Vector3d n = EN.row(ids[e]);
+            AtA += n * n.transpose();
+            Atb += n * (n.dot(p));
+            centroid += p;
+            nact++;
+        }
+        if (nact == 0) continue;
+        centroid /= double(nact);
+
+        // Solve (AtA)(v-c) = Atb - AtA·c via truncated SVD pinv. Truncating
+        // small singular values is what biases v toward c along underdetermined
+        // directions (plane / edge normals) while preserving sharp features.
+        Eigen::JacobiSVD<Eigen::Matrix3d> svd(
+            AtA, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        const Eigen::Vector3d& sv = svd.singularValues();
+        const double trunc = 1e-3 * sv(0);
+        Eigen::Vector3d inv_sv;
+        for (int k = 0; k < 3; k++)
+            inv_sv(k) = (sv(k) > trunc) ? (1.0 / sv(k)) : 0.0;
+        Eigen::Matrix3d pinv =
+            svd.matrixV() * inv_sv.asDiagonal() * svd.matrixU().transpose();
+        Eigen::Vector3d v = centroid + pinv * (Atb - AtA * centroid);
+
+        Eigen::Vector3d cmin = GV.row(vidx(ci,   cj,   ck  ));
+        Eigen::Vector3d cmax = GV.row(vidx(ci+1, cj+1, ck+1));
+        for (int k = 0; k < 3; k++)
+            v(k) = std::max(cmin(k), std::min(cmax(k), v(k)));
+
+        cell_vertex[cidx(ci, cj, ck)] = (int)verts.size();
+        verts.push_back(v);
+    }
+    std::cout << "[DC] QEF solve (" << verts.size() << " cells): "
+              << sec_since(t_qef) << " s\n";
+
+    // ── 4. Emit triangles per sign-changing edge ─────────────────────
+    // Cell ordering is CCW when viewed looking in +axis direction so that
+    // triangle winding yields an outward normal aligned with +axis when the
+    // edge goes neg→pos (neg_end == 0). Flip otherwise.
+    auto t_tri = clk::now();
+    std::vector<std::array<int, 3>> tris;
+    tris.reserve(nedges * 2);
+    for (int e = 0; e < nedges; e++) {
+        const auto& ei = edges[e];
+        int xi = ei.xi, yi = ei.yi, zi = ei.zi;
+        int c[4];
+        if (ei.axis == 0) {
+            if (yi == 0 || yi >= Cy || zi == 0 || zi >= Cz) continue;
+            c[0] = cidx(xi, yi-1, zi-1);
+            c[1] = cidx(xi, yi  , zi-1);
+            c[2] = cidx(xi, yi  , zi  );
+            c[3] = cidx(xi, yi-1, zi  );
+        } else if (ei.axis == 1) {
+            if (xi == 0 || xi >= Cx || zi == 0 || zi >= Cz) continue;
+            c[0] = cidx(xi-1, yi, zi-1);
+            c[1] = cidx(xi-1, yi, zi  );
+            c[2] = cidx(xi  , yi, zi  );
+            c[3] = cidx(xi  , yi, zi-1);
+        } else {
+            if (xi == 0 || xi >= Cx || yi == 0 || yi >= Cy) continue;
+            c[0] = cidx(xi-1, yi-1, zi);
+            c[1] = cidx(xi  , yi-1, zi);
+            c[2] = cidx(xi  , yi  , zi);
+            c[3] = cidx(xi-1, yi  , zi);
+        }
+        int v[4];
+        bool ok = true;
+        for (int k = 0; k < 4; k++) {
+            v[k] = cell_vertex[c[k]];
+            if (v[k] < 0) { ok = false; break; }
+        }
+        if (!ok) continue;
+
+        if (ei.neg_end == 0) {
+            tris.push_back({v[0], v[1], v[2]});
+            tris.push_back({v[0], v[2], v[3]});
+        } else {
+            tris.push_back({v[0], v[2], v[1]});
+            tris.push_back({v[0], v[3], v[2]});
+        }
+    }
+
+    V_out.resize((int)verts.size(), 3);
+    for (int i = 0; i < (int)verts.size(); i++) V_out.row(i) = verts[i];
+    F_out.resize((int)tris.size(), 3);
+    for (int i = 0; i < (int)tris.size(); i++) {
+        F_out(i, 0) = tris[i][0];
+        F_out(i, 1) = tris[i][1];
+        F_out(i, 2) = tris[i][2];
+    }
+    std::cout << "[DC] triangles: " << tris.size()
+              << " (" << sec_since(t_tri) << " s)\n";
+}
+
+}  // namespace dc_impl
+
 // ── extract_surface (narrow-band marching cubes via libigl) ──────────
 //
 // Two-pass strategy:
@@ -431,7 +663,8 @@ void Interpolator::extract_surface(
     Eigen::MatrixXd& V,
     Eigen::MatrixXi& F,
     int chunk_size,
-    bool lipschitz_postfix) const
+    bool lipschitz_postfix,
+    bool use_dual_contouring) const
 {
     if (nx < 2 || ny < 2 || nz < 2)
         throw std::invalid_argument("extract_surface: nx, ny, nz must each be >= 2");
@@ -756,12 +989,19 @@ void Interpolator::extract_surface(
                   << sec_since(t_fix) << " s)\n";
     }
 
-    // ── Marching cubes ───────────────────────────────────────────────
+    // ── Surface extraction ───────────────────────────────────────────
     auto t_mc = clk::now();
-    igl::marching_cubes(S, GV,
-                        (unsigned)nx, (unsigned)ny, (unsigned)nz,
-                        iso, V, F);
-    std::cout << "[extract_surface] marching_cubes: " << sec_since(t_mc) << " s\n";
+    if (use_dual_contouring) {
+        dc_impl::dual_contour(*this, S, GV, nx, ny, nz, iso, chunk_size, V, F);
+        std::cout << "[extract_surface] dual_contouring: "
+                  << sec_since(t_mc) << " s\n";
+    } else {
+        igl::marching_cubes(S, GV,
+                            (unsigned)nx, (unsigned)ny, (unsigned)nz,
+                            iso, V, F);
+        std::cout << "[extract_surface] marching_cubes: "
+                  << sec_since(t_mc) << " s\n";
+    }
     std::cout << "[extract_surface] total: " << sec_since(t_total) << " s\n";
 
 #else  // plain marching cubes

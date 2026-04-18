@@ -52,11 +52,13 @@ PYBIND11_MODULE(sdf_cpp, m) {
                                       int nx, int ny, int nz,
                                       double iso,
                                       int chunk_size,
-                                      bool lipschitz_postfix) {
+                                      bool lipschitz_postfix,
+                                      bool use_dual_contouring) {
         Eigen::MatrixXd V;
         Eigen::MatrixXi F;
         self.extract_surface(bbox_min, bbox_max, nx, ny, nz, iso, V, F,
-                             chunk_size, lipschitz_postfix);
+                             chunk_size, lipschitz_postfix,
+                             use_dual_contouring);
         return py::make_tuple(V, F);
     };
 
@@ -70,8 +72,11 @@ PYBIND11_MODULE(sdf_cpp, m) {
              py::arg("nx"), py::arg("ny"), py::arg("nz"),
              py::arg("iso") = 0.0, py::arg("chunk_size") = 5000,
              py::arg("lipschitz_postfix") = true,
-             "Extract an isosurface via libigl marching cubes. "
-             "Returns (V, F) as numpy arrays.");
+             py::arg("use_dual_contouring") = false,
+             "Extract an isosurface from the implicit field. "
+             "If use_dual_contouring=True, uses gradient-aware Dual Contouring "
+             "(QEF per cell, sharp-feature preserving); otherwise uses libigl "
+             "marching cubes. Returns (V, F) as numpy arrays.");
 
     // Helper lambda for fit() with optional pointer args
     auto fit_wrapper = [](sdf::Interpolator& self,

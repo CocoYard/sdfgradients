@@ -299,8 +299,25 @@ void get_visible_arcs(
     const Eigen::VectorXd& sdf_values,
     Options& options)
 {
+    // Build persistent BVH over the SDF spheres. Visibility + clamp query
+    // this instead of scanning ngbrs_list[i] — exact, tiny memory, and lets
+    // us cap ngbrs_list at MAX_KEEP without losing occluder accuracy.
+    {
+        auto t = clk::now();
+        options.sphere_bvh = std::make_unique<SphereBVH>(sdf_points, sdf_values);
+        std::cout << "[get_visible_arcs] build SphereBVH: "
+                  << ms_since(t)/1000.0 << " s\n";
+    }
+
+    if (options.turn_off_short_arcs && !options.clamp) {
+        // no need to compute arcs if we're not using them for clamping or gradient init
+        // But the visibility check is still needed for the final output, so we keep the BVH build and just skip the arc/degenerate pt extraction
+        options.ngbrs_list = std::vector<std::vector<int>>(sdf_points.rows());  // empty neighbor lists
+        return;
+    }
     int N = (int)sdf_points.rows();
     Eigen::VectorXd radii = sdf_values.cwiseAbs();
+    
 
     // Scope block: row-major copy + flat CSR arrays are only needed for the two C
     // function calls.  Wrapping them here releases ~(24N + M·4) bytes before the
@@ -319,16 +336,6 @@ void get_visible_arcs(
             1e-4, 1e-6, 1e-12, 1e-8,
             options.batch);
     }  // pts_rm freed here
-
-    // Build persistent BVH over the SDF spheres. Visibility + clamp query
-    // this instead of scanning ngbrs_list[i] — exact, tiny memory, and lets
-    // us cap ngbrs_list at MAX_KEEP without losing occluder accuracy.
-    {
-        auto t = clk::now();
-        options.sphere_bvh = std::make_unique<SphereBVH>(sdf_points, sdf_values);
-        std::cout << "[get_visible_arcs] build SphereBVH: "
-                  << ms_since(t)/1000.0 << " s\n";
-    }
 
     // Count fully covered spheres
     int fully_covered = 0;
