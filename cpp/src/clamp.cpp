@@ -195,7 +195,7 @@ int clamp_gradients_to_arcs(
         // Otherwise keep original gradient
     }
     auto t_loop1 = std::chrono::high_resolution_clock::now();
-    std::cerr << "  [clamp] N=" << N
+    std::cout << "  [clamp] N=" << N
               << " fast_hits=" << fast_hits.load()
               << " bvh_fallbacks=" << bvh_fallbacks.load()
               << " arc_queries=" << arc_queries.load()

@@ -79,15 +79,9 @@ Eigen::MatrixXd iterative_projection_3d(
             proj_new.row(i) = points.row(i) - values(i) * new_gradients.row(i);
             proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
         }
-        std::cout << "Checking visibility ...";
-        auto t_vis0 = std::chrono::high_resolution_clock::now();
+        std::cout << "Checking visibility ...\n";
         Eigen::VectorXi vis_new = are_points_visible(proj_new, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh);
-        auto t_vis1 = std::chrono::high_resolution_clock::now();
         Eigen::VectorXi vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh);
-        auto t_vis2 = std::chrono::high_resolution_clock::now();
-        std::cout << " [vis_new " << std::chrono::duration<double>(t_vis1 - t_vis0).count()
-                  << "s, vis_old " << std::chrono::duration<double>(t_vis2 - t_vis1).count() << "s]";
-
         // Don't update gradients that would make visible projections invisible
         // Don't update degenerate-arc points
         for (int i = 0; i < N; i++) {

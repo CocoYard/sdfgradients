@@ -80,9 +80,7 @@ Eigen::VectorXi are_points_visible(
         if (occluded) result(i) = 0;
     }
     auto t1 = std::chrono::high_resolution_clock::now();
-    std::cerr << "  [are_points_visible] N=" << N
-              << " fast_hits=" << fast_hits.load()
-              << " bvh_fallbacks=" << bvh_fallbacks.load()
+    std::cout << "  [are_points_visible] hit_rate=" << (1.0 * fast_hits.load() / (fast_hits.load() + bvh_fallbacks.load()))
               << " total=" << std::chrono::duration<double>(t1 - t0).count() << "s\n";
     return result;
 }
