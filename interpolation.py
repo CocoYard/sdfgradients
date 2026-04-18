@@ -30,9 +30,9 @@ class Interpolator(ABC):
         Extract zero level set contours (Marching Squares for 2D / Marching Cubes for 3D)
         """
         if len(bounds) == 3:
-            return self._extract_zero_level_set_3d(bounds, resolution)
+            return self._extract_zero_level_set_3d(bounds, resolution, use_dual_contouring)
         else:
-            return self._extract_zero_level_set_2d(bounds, resolution, use_dual_contouring)
+            return self._extract_zero_level_set_2d(bounds, resolution)
 
     def _extract_zero_level_set_2d(self, bounds, resolution=256):
         (xmin, xmax), (ymin, ymax) = bounds
@@ -122,12 +122,12 @@ class Interpolator(ABC):
         self.zero_contours = contours
         return contours
 
-    def _extract_zero_level_set_3d(self, bounds, grid_resolution=64, use_dual_contouring=True):
+    def _extract_zero_level_set_3d(self, bounds, grid_resolution, use_dual_contouring):
         if use_dual_contouring:
             from occupancy_dual_contouring import occupancy_dual_contouring
             import torch
             if torch.cuda.is_available():
-                device = "cuda:1"
+                device = "cuda"
             elif torch.backends.mps.is_available():
                 device = "mps"
             else:

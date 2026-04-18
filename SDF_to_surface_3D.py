@@ -31,7 +31,7 @@ class Options:
         self.clamp = clamp
         self.turn_off_short_arcs = turn_off_short_arcs
         self.name = name
-        self.path_to_obj = f'examples/{name}.obj'
+        self.path_to_obj = f'{data_dir}/{name}.obj'
         self.export_short_arcs = export_short_arcs  # whether to export short arcs .glb for visualization
         self.export_projections = export_projections  # export gradients .glb for visualization
         self.use_gt_gradients = use_gt_gradients
@@ -199,7 +199,7 @@ def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_gtmesh=True)
     mesh_distances(recon, mesh, verbose=True)
     return plt
 
-def test_rfta(options, save_gtmesh=True, screening_weight=10, parallel=True):
+def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -434,7 +434,7 @@ def export_projection_visualization(sdf_points, projections, mask, recon_mesh, o
     scene.export(output_path)
     print(f"Exported to {output_path}")
 
-def test_our_method(options : Options, save_gtmesh=True):
+def test_our_method(options : Options, save_gtmesh=False):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -502,6 +502,7 @@ def test_our_method(options : Options, save_gtmesh=True):
 
     # visualize results using marching cubes to extract isosurface
     timer = time.perf_counter()
+    use_cpp = False
     if use_cpp:
         bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
         bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
@@ -514,7 +515,7 @@ def test_our_method(options : Options, save_gtmesh=True):
             bounds=((points[:, 0].min(), points[:, 0].max()),
                     (points[:, 1].min(), points[:, 1].max()),
                     (points[:, 2].min(), points[:, 2].max())),
-            resolution=100, use_dual_contouring=False)
+            resolution=256, use_dual_contouring=True)
     print(f"  ⏱  {'Grid evaluation':<30} {time.perf_counter() - timer:>7.2f} s")
     # Extract isosurface at value 0 using marching cubes
 
@@ -543,9 +544,11 @@ def test_our_method(options : Options, save_gtmesh=True):
     mes_str = 'MES' if options.use_MES else 'noMES'
     post_str = 'post' if options.post_processing else 'nopost'
     iter_grad_str = 'optproj' if options.iter_gradient_finding == 'optimize' else 'slowproj'
+    if not use_cpp:
+        post_str = 'dc'
     fname = f'interpolant_{grid_len}_{iters}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}_{iter_grad_str}.obj'
     if options.use_gt_gradients:
-        fname = f'interpolant_{grid_len}_gtgrad_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
+        fname = f'interpolant_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
     
     # Export projection visualization GLB
@@ -585,6 +588,7 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
 if __name__ == "__main__":
     t0 = time.perf_counter()
     batch = False
+    data_dir = 'examples/benchmark'
     if batch:
         for name in ['bunny']:
         # for name in ['eiffel', 'archer', 'horse', 'bunny', 'denker']:
@@ -595,20 +599,20 @@ if __name__ == "__main__":
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
                         overlap=0.2, reg=0, use_MES=True, post_processing=True, iter_gradient_finding='optimize')
                     options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
-                    # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
+                    # plt = test_mesh(grid_len=20, path_to_obj='{data_dir}/holes.obj')
                     plt = test_our_method(options, save_gtmesh=False)
                 # test_rfta(options)
-            check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
+            check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
     else:
-        options = Options(name='chair', grid_len=100, max_iters=13, clamp=True,
-                        export_short_arcs=False, export_projections=False, turn_off_short_arcs=False,
+        options = Options(name='common3d__fandisk', grid_len=100, max_iters=13, clamp=True,
+                        export_short_arcs=True, export_projections=False, turn_off_short_arcs=False,
                         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
                         overlap=0.2, reg=0, use_MES=False, post_processing=True, iter_gradient_finding='optimize')
         options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
-        # # # plt = test_mesh(grid_len=20, path_to_obj='examples/holes.obj')
+        # # # plt = test_mesh(grid_len=20, path_to_obj='{data_dir}/holes.obj')
         plt = test_our_method(options, save_gtmesh=False)
-        # test_rfta(options, screening_weight=10, parallel=True)
-        check_mesh_error(f'out/{options.name}', f'examples/{options.name}.obj')
+        test_rfta(options, screening_weight=10, parallel=True)
+        check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0
     print(f"  ⏱  {'Total execution time':<30} {elapsed:>7.2f} s")
