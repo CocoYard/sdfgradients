@@ -117,9 +117,10 @@ Eigen::MatrixXd iterative_projection_3d(
             double gain = (double)(visible_num - vis_old_sum) / N;
             if (!MES_used && gain < 0.01) {
                 std::cout << "========= Using MES points... =========\n";
+                auto mes_t0 = std::chrono::steady_clock::now();
                 Eigen::MatrixXd contact_pts, mes_normals;
                 mes_contact_core::contact_points_from_sdf(
-                    points, values, /*filter_bbox=*/true, /*debug_level=*/1,
+                    points, values, /*filter_bbox=*/true, /*debug_level=*/0,
                     contact_pts, mes_normals);
                 for (int i = 0; i < N; i++) {
                     bool valid = !std::isnan(mes_normals(i, 0));
@@ -127,6 +128,10 @@ Eigen::MatrixXd iterative_projection_3d(
                     if (valid && not_visible)
                         new_gradients.row(i) = mes_normals.row(i);
                 }
+                auto mes_t1 = std::chrono::steady_clock::now();
+                double mes_ms = std::chrono::duration<double, std::milli>(mes_t1 - mes_t0).count();
+                std::cout << "MES contact points elapsed: " << mes_ms/1000 << " s\n";
+
                 MES_used = true;
             }
         }

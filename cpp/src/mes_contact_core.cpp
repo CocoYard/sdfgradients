@@ -47,7 +47,7 @@ static void process_group(
 
     CGAL::maximal_empty_spheres<CGAL::Dimension_tag<3>>(
         G_abs, result, &contact_indices, /*atol=*/1e-8, debug_level,
-        /*ncp_max=*/10, /*cone_filter=*/true);
+        /*ncp_max=*/10, /*cone_filter=*/false);
 
     std::cout << "[MES] process_group M=" << M
               << "  result.rows=" << result.rows()
