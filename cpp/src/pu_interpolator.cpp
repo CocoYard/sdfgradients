@@ -69,6 +69,7 @@ void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& value
         new_pts.row(i) = points.row(kept[i]);
         new_vals(i) = values(kept[i]);
     }
+    std::cout << "  [PU fit] deduplication removed: " << (n - kept.size()) << " points\n";
     points = new_pts;
     values = new_vals;
 }
@@ -333,14 +334,16 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
             pf.row(i) = pts.row(keep[i]);
             vf(i) = vals(keep[i]);
         }
-        std::cout << "Warning: too many points, only keeping " << keep.size()
-                  << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";
         pts = pf;
         vals = vf;
     }
 
     // Deduplicate
-    deduplicate(pts, vals, 1e-6);
+    deduplicate(pts, vals, 1e-4);
+    if (vals.size() > 5000) {
+        std::cout << "  [PU fit] Warning: too many points, only keeping " << pts.rows()
+                  << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";
+    }
     int dim = (int)pts.cols();
     int min_pts = std::max(min_points_, dim + 2);
 

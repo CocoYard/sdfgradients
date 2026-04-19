@@ -479,8 +479,6 @@ static void dual_contour(
     for (int xi = 0; xi < nx;   xi++) try_edge(xi, yi, zi, 2, xi, yi, zi+1);
 
     const int nedges = (int)edges.size();
-    std::cout << "[DC] sign-changing edges: " << nedges
-              << " (" << sec_since(t_edge) << " s)\n";
     if (nedges == 0) {
         V_out.resize(0, 3); F_out.resize(0, 3);
         return;
@@ -506,8 +504,6 @@ static void dual_contour(
         if (n > 1e-12) EN.row(e) /= n;
         else EN.row(e).setZero();
     }
-    std::cout << "[DC] edge gradients: " << sec_since(t_grad) << " s\n";
-
     // ── 3. Per-cell QEF: min Σ (nᵢ·(v-pᵢ))², biased to centroid ─────
     auto t_qef = clk::now();
     const int Cx = nx - 1, Cy = ny - 1, Cz = nz - 1;
@@ -574,9 +570,6 @@ static void dual_contour(
         cell_vertex[cidx(ci, cj, ck)] = (int)verts.size();
         verts.push_back(v);
     }
-    std::cout << "[DC] QEF solve (" << verts.size() << " cells): "
-              << sec_since(t_qef) << " s\n";
-
     // ── 4. Emit triangles per sign-changing edge ─────────────────────
     // Cell ordering is CCW when viewed looking in +axis direction so that
     // triangle winding yields an outward normal aligned with +axis when the
@@ -632,8 +625,6 @@ static void dual_contour(
         F_out(i, 1) = tris[i][1];
         F_out(i, 2) = tris[i][2];
     }
-    std::cout << "[DC] triangles: " << tris.size()
-              << " (" << sec_since(t_tri) << " s)\n";
 }
 
 }  // namespace dc_impl

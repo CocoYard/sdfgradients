@@ -25,6 +25,8 @@ Eigen::MatrixXd iterative_projection_3d(
     int N = (int)points.rows();
     Eigen::MatrixXd gradients = init_gradients;
     bool MES_used = false;
+    Eigen::VectorXi vis_cached;
+    bool vis_cache_valid = false;
 
     if (gt_gradients) {
         double cos_sum = 0.0;
@@ -74,21 +76,31 @@ Eigen::MatrixXd iterative_projection_3d(
         }
 
         // ── Visibility checks ──────────────────────────────────────
-        Eigen::MatrixXd proj_new(N, 3), proj_old(N, 3);
-        for (int i = 0; i < N; i++) {
+        Eigen::MatrixXd proj_new(N, 3);
+        for (int i = 0; i < N; i++)
             proj_new.row(i) = points.row(i) - values(i) * new_gradients.row(i);
-            proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
-        }
         std::cout << "Checking visibility ...\n";
         Eigen::VectorXi vis_new = are_points_visible(proj_new, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh);
-        Eigen::VectorXi vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh);
+        Eigen::VectorXi vis_old;
+        if (vis_cache_valid) {
+            vis_old = vis_cached;
+        } else {
+            Eigen::MatrixXd proj_old(N, 3);
+            for (int i = 0; i < N; i++)
+                proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
+            vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh);
+        }
         // Don't update gradients that would make visible projections invisible
         // Don't update degenerate-arc points
+        Eigen::VectorXi vis_next(N);
         for (int i = 0; i < N; i++) {
             bool skip = (vis_old(i) && !vis_new(i));
             if (options.degenerate_pts.count(i)) skip = true;
             if (skip) new_gradients.row(i) = gradients.row(i);
+            vis_next(i) = skip ? vis_old(i) : vis_new(i);
         }
+        vis_cached = vis_next;
+        vis_cache_valid = true;
 
         std::cout << "  visible old: " << vis_old.sum() << ", "
                   << "visible new: " << vis_new.sum() << std::endl;
@@ -133,6 +145,7 @@ Eigen::MatrixXd iterative_projection_3d(
                 std::cout << "MES contact points elapsed: " << mes_ms/1000 << " s\n";
 
                 MES_used = true;
+                vis_cache_valid = false;  // MES rewrote some gradients; cache stale
             }
         }
 
