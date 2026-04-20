@@ -134,7 +134,8 @@ Eigen::MatrixXd iterative_projection_3d(
         if (options.use_MES) {
             int vis_old_sum = vis_old.sum();
             double gain = (double)(visible_num - vis_old_sum) / N;
-            if (!MES_used && gain < 0.01) {
+            double vis_per_sample_area =  visible_num / (std::cbrt(N) * std::cbrt(N));  // heuristic for point density in visible region
+            if (!MES_used && gain < 0.01 && vis_per_sample_area < 10) {
                 if (options.verbose)
                     std::cout << "========= Using MES points... =========\n";
                 auto mes_t0 = std::chrono::steady_clock::now();

@@ -215,6 +215,32 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True):
     largest.export(f'{out_dir}/rfta_{grid_len}.obj')
     print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept largest component: {len(largest.faces)} faces out of {len(Fr)})")
 
+def test_mes(options, save_gtmesh=False, screening_weight=10):
+    """
+    Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
+    e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
+    """
+    grid_len, path_to_obj, path_to_sdf = options.grid_len, options.path_to_obj, options.path_to_sdf
+    if path_to_sdf is not None:
+        # read sdf data from file
+        data = np.load(path_to_sdf)
+        points = data['points']
+        distances = data['sdf_values']
+    else:
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
+    import sys, os
+    # Export meshes to out/
+    out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
+    os.makedirs(out_dir, exist_ok=True)
+    _here = os.path.dirname(__file__)
+    sys.path.insert(0, os.path.join(_here, 'cpp', 'build', '_deps', 'mes_fork-src'))
+    from cgal.EmptySpheresReconstruction import MESReconstruction
+    R_cgal = MESReconstruction(points, distances,screening_weight=screening_weight)
+    gpy.write_mesh(f"{out_dir}/mes_{grid_len}.obj", *R_cgal)
+
+    print(f"Exported: {out_dir}/mes_{grid_len}.obj")
+
 def filter_degenerate_pts(degenerate_pts, interpolator : Interpolator, dist_tol=1e-1):
     """ 
     Filter out degenerate points that are too far from the surface or more than 1 point, since 
@@ -688,15 +714,16 @@ if __name__ == "__main__":
                 test_rfta(options, screening_weight=10, parallel=True)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [50]:
-            options = Options(name='eiffel', grid_len=length, max_iters=13, clamp=False, cpp_dc=True, verbose=False,
+        for length in [20]:
+            options = Options(name='eiffel', grid_len=length, max_iters=13, clamp=False, cpp_dc=True, verbose=True,
                             export_short_arcs=False, export_projections=False, turn_off_short_arcs=True,
                             use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
                             overlap=0.2, reg=0, use_MES=True, post_processing=False, iter_gradient_finding='optimize')
             options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
             # # # plt = test_mesh(grid_len=20, path_to_obj='{data_dir}/holes.obj')
-            plt = test_our_method(options, save_gtmesh=False)
+            # plt = test_our_method(options, save_gtmesh=False)
             # test_rfta(options, screening_weight=10, parallel=True)
+            test_mes(options, save_gtmesh=False, screening_weight=10)
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0
