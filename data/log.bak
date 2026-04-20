@@ -1,0 +1,3369 @@
+(base) yongcheng@Mac sdfgradients %  source /Users/yongcheng/Documents/phd/research/sdfgradients/.venv/bin/activate
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py 
+Sphere intersection detection benchmark  (n = 27000), centers in [-100,100], radii in [1,100])
+============================================================
+Serial (loop)                         15.146s
+(116658080 pairs)
+^CTraceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test2.py", line 331, in <module>
+    for name, func in methods:
+              ^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test2.py", line 298, in sap
+    if dist_sq <= r_sum * r_sum:
+                      ^^^^^^^^^^^
+KeyboardInterrupt
+^C
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py
+Sphere intersection detection benchmark  (n = 27000), centers in [-100,100], radii in [1,100])
+============================================================
+Serial (loop)                         11.316s
+(116658080 pairs)
+^CTraceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test2.py", line 333, in <module>
+    elapsed = time.perf_counter() - t0
+          ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test2.py", line 298, in sap
+    for a, b in zip(idx_i, idx_j):
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+^C
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py
+Sphere intersection detection benchmark  (n = 27000), centers in [-100,100], radii in [1,100])
+============================================================
+Serial (loop)                         11.173s
+(116658080 pairs)
+^CTraceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test2.py", line 332, in <module>
+    res = func(centers, radii)
+          ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test2.py", line 299, in sap
+    result.setdefault(int(a), []).append(int(b))
+                      ^^^^^^
+KeyboardInterrupt
+^C
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py
+Sphere intersection detection benchmark  (n = 8000), centers in [-100,100], radii in [1,100])
+============================================================
+Serial (loop)                          0.951s
+(10082036 pairs)
+sap                                    3.401s
+(10082036 pairs)
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py
+Sphere intersection detection benchmark  (n = 27000), centers in [-100,100], radii in [1,100])
+============================================================
+sap                                   42.120s
+(116658080 pairs)
+Serial (loop)                         23.269s
+(116658080 pairs)
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py
+Sphere intersection detection benchmark  (n = 27000), centers in [-100,100], radii in [1,100])
+============================================================
+sap                                   48.644s
+(116658080 pairs)
+Serial (loop)                         20.426s
+(116658080 pairs)
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py
+Sphere intersection detection benchmark  (n = 27000), centers in [-100,100], radii in [1,100])
+============================================================
+Serial (loop)                         21.786s
+(116658080 pairs)
+Serial (loop)                         11.427s
+(116658080 pairs)
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py
+Sphere intersection detection benchmark  (n = 27000), centers in [-100,100], radii in [1,100])
+============================================================
+Serial2 (loop)                        33.762s
+(116658080 pairs)
+Serial (loop)                         11.771s
+(116658080 pairs)
+(.venv) (base) yongcheng@Mac sdfgradients % python test2.py
+Sphere intersection detection benchmark  (n = 27000), centers in [-100,100], radii in [1,100])
+============================================================
+Serial2 (loop)                        33.996s
+(116658080 pairs)
+Serial (loop)                         11.786s
+(116658080 pairs)
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py 
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=2.0
+  Sphere 0: center=[1.8 0.  0. ], r=1.8
+  Sphere 1: center=[0.  1.8 0. ], r=1.8
+  Sphere 2: center=[0.  0.  1.8], r=1.8
+  Sphere 3: center=[-1.5 -1.2  0.5], r=1.5
+
+Total surface area:    50.265482
+Covered (Gauss-Bonnet): 34.959742
+Covered (Monte Carlo):  34.926970
+Exposed (Gauss-Bonnet): 15.305740
+GB vs MC difference:    0.032772
+
+Boundary loops: 1
+  Loop 0: 6 arcs — [(0, '173.8°'), (1, '41.9°'), (1, '131.9°'), (2, '36.4°'), (3, '247.5°'), (2, '49.0°')]
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 971, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 953, in main
+    fig.savefig('/home/claude/gauss_bonnet_analysis.png', dpi=150, bbox_inches='tight')
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/figure.py", line 3490, in savefig
+    self.canvas.print_figure(fname, **kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2186, in print_figure
+    result = print_method(
+             ^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2042, in <lambda>
+    print_method = functools.wraps(meth)(lambda *args, **kwargs: meth(
+                                                                 ^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 481, in print_png
+    self._print_pil(filename_or_obj, "png", pil_kwargs, metadata)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 430, in _print_pil
+    mpl.image.imsave(
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/image.py", line 1657, in imsave
+    image.save(fname, **pil_kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/PIL/Image.py", line 2585, in save
+    fp = builtins.open(filename, "w+b")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/claude/gauss_bonnet_analysis.png'
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=2.0
+  Sphere 0: center=[1.8 0.  0. ], r=1.8
+  Sphere 1: center=[0.  1.8 0. ], r=1.8
+  Sphere 2: center=[0.  0.  1.8], r=1.8
+  Sphere 3: center=[-1.5 -1.2  0.5], r=3.5
+
+Total surface area:    50.265482
+Covered (Gauss-Bonnet): 49.256450
+Covered (Monte Carlo):  49.261178
+Exposed (Gauss-Bonnet): 1.009033
+GB vs MC difference:    0.004728
+
+Boundary loops: 1
+  Loop 0: 4 arcs — [(0, '51.5°'), (1, '41.9°'), (1, '0.2°'), (3, '64.1°')]
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 971, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 953, in main
+    fig.savefig('/home/claude/gauss_bonnet_analysis.png', dpi=150, bbox_inches='tight')
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/figure.py", line 3490, in savefig
+    self.canvas.print_figure(fname, **kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2186, in print_figure
+    result = print_method(
+             ^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2042, in <lambda>
+    print_method = functools.wraps(meth)(lambda *args, **kwargs: meth(
+                                                                 ^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 481, in print_png
+    self._print_pil(filename_or_obj, "png", pil_kwargs, metadata)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 430, in _print_pil
+    mpl.image.imsave(
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/image.py", line 1657, in imsave
+    image.save(fname, **pil_kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/PIL/Image.py", line 2585, in save
+    fp = builtins.open(filename, "w+b")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/claude/gauss_bonnet_analysis.png'
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=2.0
+  Sphere 0: center=[1.8 0.  0. ], r=1.8
+  Sphere 1: center=[0.  1.8 0. ], r=1.8
+  Sphere 2: center=[0.  0.  1.8], r=1.8
+  Sphere 3: center=[-1.5 -1.5 -1.5], r=1.2
+
+Total surface area:    50.265482
+Covered (Gauss-Bonnet): 31.924692
+Covered (Monte Carlo):  31.910639
+Exposed (Gauss-Bonnet): 18.340790
+GB vs MC difference:    0.014053
+
+Boundary loops: 2
+  Loop 0: 1 arcs — [(3, '360.0°')]
+  Loop 1: 4 arcs — [(0, '173.8°'), (1, '41.9°'), (1, '131.9°'), (2, '173.8°')]
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+^CTraceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 971, in <module>
+    
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 952, in main
+    print(f"    parameter ranges: {arcs_parameters}")
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 915, in visualize
+    plt.show()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/pyplot.py", line 613, in show
+    return _get_backend_mod().show(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 3550, in show
+    cls.mainloop()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_macosx.py", line 179, in start_main_loop
+    with _allow_interrupt_macos():
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/lib/python3.12/contextlib.py", line 144, in __exit__
+    next(self.gen)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 1660, in _allow_interrupt
+    old_sigint_handler(*handler_args)
+KeyboardInterrupt
+
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=2.0
+  Sphere 0: center=[1.8 0.  0. ], r=1.8
+  Sphere 1: center=[0.  1.8 0. ], r=1.8
+  Sphere 2: center=[0.  0.  1.8], r=1.8
+  Sphere 3: center=[-1.5 -1.5 -1.5], r=1.2
+
+Total surface area:    50.265482
+Covered (Gauss-Bonnet): 31.924692
+Covered (Monte Carlo):  31.910639
+Exposed (Gauss-Bonnet): 18.340790
+GB vs MC difference:    0.014053
+
+Boundary loops: 2
+  Loop 0: 1 arcs — [(3, '360.0°')]
+    parameter ranges: [(3, '0.0° → 360.0°')]
+  Loop 1: 4 arcs — [(0, '173.8°'), (1, '41.9°'), (1, '131.9°'), (2, '173.8°')]
+    parameter ranges: [(0, '48.1° → 221.9°'), (1, '318.1° → 360.0°'), (1, '0.0° → 131.9°'), (2, '48.1° → 221.9°')]
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+^CTraceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 973, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 954, in main
+    fig = visualize(main_sphere, other_spheres, result)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 915, in visualize
+    plt.show()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/pyplot.py", line 613, in show
+    return _get_backend_mod().show(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 3550, in show
+    cls.mainloop()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_macosx.py", line 179, in start_main_loop
+    with _allow_interrupt_macos():
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/lib/python3.12/contextlib.py", line 144, in __exit__
+    next(self.gen)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 1660, in _allow_interrupt
+    old_sigint_handler(*handler_args)
+KeyboardInterrupt
+
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142135623730951
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142135623730951
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142135623730951
+  Sphere 3: center=[0. 1. 0.], r=1.4142135623730951
+
+Total surface area:    12.566371
+Covered (Gauss-Bonnet): 0.000000
+Covered (Monte Carlo):  12.566371
+Exposed (Gauss-Bonnet): 12.566371
+GB vs MC difference:    12.566371
+
+Boundary loops: 0
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 973, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 955, in main
+    fig.savefig('/home/claude/gauss_bonnet_analysis.png', dpi=150, bbox_inches='tight')
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/figure.py", line 3490, in savefig
+    self.canvas.print_figure(fname, **kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2186, in print_figure
+    result = print_method(
+             ^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2042, in <lambda>
+    print_method = functools.wraps(meth)(lambda *args, **kwargs: meth(
+                                                                 ^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 481, in print_png
+    self._print_pil(filename_or_obj, "png", pil_kwargs, metadata)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 430, in _print_pil
+    mpl.image.imsave(
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/image.py", line 1657, in imsave
+    image.save(fname, **pil_kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/PIL/Image.py", line 2585, in save
+    fp = builtins.open(filename, "w+b")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/claude/gauss_bonnet_analysis.png'
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142135623730951
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142135623730951
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142135623730951
+  Sphere 3: center=[0. 1. 0.], r=1.4142135623730951
+
+Total surface area:    12.566371
+Covered (Gauss-Bonnet): 0.000000
+Covered (Monte Carlo):  12.566371
+Exposed (Gauss-Bonnet): 12.566371
+GB vs MC difference:    12.566371
+
+Boundary loops: 0
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+^CTraceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1034, in <module>
+    
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1015, in main
+    print(f"    parameter ranges: {arcs_parameters}")
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 976, in visualize
+    ax.set_box_aspect([1,1,1])
+    ^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/pyplot.py", line 613, in show
+    return _get_backend_mod().show(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 3550, in show
+    cls.mainloop()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_macosx.py", line 179, in start_main_loop
+    with _allow_interrupt_macos():
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/lib/python3.12/contextlib.py", line 144, in __exit__
+    next(self.gen)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 1660, in _allow_interrupt
+    old_sigint_handler(*handler_args)
+KeyboardInterrupt
+
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142135623730951
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142135623730951
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142135623730951
+  Sphere 3: center=[0. 1. 0.], r=1.4142135623730951
+
+Total surface area:    12.566371
+Covered (Gauss-Bonnet): 0.000000
+Covered (Monte Carlo):  12.566371
+Exposed (Gauss-Bonnet): 12.566371
+GB vs MC difference:    12.566371
+
+Boundary loops: 0
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1036, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1018, in main
+    fig.savefig('/home/claude/gauss_bonnet_analysis.png', dpi=150, bbox_inches='tight')
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/figure.py", line 3490, in savefig
+    self.canvas.print_figure(fname, **kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2186, in print_figure
+    result = print_method(
+             ^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2042, in <lambda>
+    print_method = functools.wraps(meth)(lambda *args, **kwargs: meth(
+                                                                 ^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 481, in print_png
+    self._print_pil(filename_or_obj, "png", pil_kwargs, metadata)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 430, in _print_pil
+    mpl.image.imsave(
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/image.py", line 1657, in imsave
+    image.save(fname, **pil_kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/PIL/Image.py", line 2585, in save
+    fp = builtins.open(filename, "w+b")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/claude/gauss_bonnet_analysis.png'
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142135623730951
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142135623730951
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142135623730951
+  Sphere 3: center=[0. 1. 0.], r=1.4142135623730951
+
+Total surface area:    12.566371
+Covered (Gauss-Bonnet): 0.000000
+Covered (Monte Carlo):  12.566371
+Exposed (Gauss-Bonnet): 12.566371
+GB vs MC difference:    12.566371
+
+Boundary loops: 0
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1040, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1022, in main
+    fig.savefig('/home/claude/gauss_bonnet_analysis.png', dpi=150, bbox_inches='tight')
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/figure.py", line 3490, in savefig
+    self.canvas.print_figure(fname, **kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2186, in print_figure
+    result = print_method(
+             ^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2042, in <lambda>
+    print_method = functools.wraps(meth)(lambda *args, **kwargs: meth(
+                                                                 ^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 481, in print_png
+    self._print_pil(filename_or_obj, "png", pil_kwargs, metadata)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 430, in _print_pil
+    mpl.image.imsave(
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/image.py", line 1657, in imsave
+    image.save(fname, **pil_kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/PIL/Image.py", line 2585, in save
+    fp = builtins.open(filename, "w+b")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/claude/gauss_bonnet_analysis.png'
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142135623730951
+  Sphere 1: center=[ 0.  0. -1.], r=1.224744871391589
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142135623730951
+  Sphere 3: center=[0. 1. 0.], r=1.4142135623730951
+
+Total surface area:    12.566371
+Covered (Gauss-Bonnet): -12.566371
+Covered (Monte Carlo):  12.566371
+Exposed (Gauss-Bonnet): 25.132741
+GB vs MC difference:    25.132741
+
+Boundary loops: 2
+  Loop 0: 2 arcs — [(2, '14.5°'), (3, '14.5°')]
+    parameter ranges: [(2, '90.0° → 104.5°'), (3, '75.5° → 90.0°')]
+  Loop 1: 2 arcs — [(2, '14.5°'), (3, '14.5°')]
+    parameter ranges: [(2, '255.5° → 270.0°'), (3, '270.0° → 284.5°')]
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1040, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1022, in main
+    fig.savefig('/home/claude/gauss_bonnet_analysis.png', dpi=150, bbox_inches='tight')
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/figure.py", line 3490, in savefig
+    self.canvas.print_figure(fname, **kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2186, in print_figure
+    result = print_method(
+             ^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2042, in <lambda>
+    print_method = functools.wraps(meth)(lambda *args, **kwargs: meth(
+                                                                 ^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 481, in print_png
+    self._print_pil(filename_or_obj, "png", pil_kwargs, metadata)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 430, in _print_pil
+    mpl.image.imsave(
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/image.py", line 1657, in imsave
+    image.save(fname, **pil_kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/PIL/Image.py", line 2585, in save
+    fp = builtins.open(filename, "w+b")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/claude/gauss_bonnet_analysis.png'
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+============================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+============================================================
+  Total arc: 0.00e+00 rad
+  Exposed points: 2
+    pos=[-1.  0. -0.], on boundaries=[0, 1, 2, 3]
+    pos=[ 1.  0. -0.], on boundaries=[0, 1, 2, 3]
+  PASSED ✓
+
+============================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+============================================================
+  Total arc: 0.00e+00 rad
+  Exposed points: 1
+    pos=[ 1.  0. -0.], on boundaries=[0, 1, 2, 3]
+  PASSED ✓
+
+============================================================
+Test 3: 2 spheres → normal arcs, 0 degenerate points
+============================================================
+  Total arc: 12.5664 rad
+  Exposed points: 0
+  PASSED ✓
+
+============================================================
+Test 4: Non-origin center, 4 spheres → 2 points
+============================================================
+  Exposed points: 2
+    pos=[ 2. -2.  7.]
+    pos=[ 4. -2.  7.]
+  PASSED ✓
+
+============================================================
+Test 5: Fully covered sphere → nothing exposed
+============================================================
+  Total arc: 0.00e+00
+  Exposed points: 0
+  PASSED ✓
+
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 783, in <module>
+    ) -> List[List[BoundaryArc]]:
+                   ^^^^^^^^^^^
+NameError: name 'BoundaryArc' is not defined
+(.venv) (base) yongcheng@Mac sdfgradients % python sphere_gauss_bonnet.py
+=================================================================
+Gauss-Bonnet Sphere Surface Analysis
+=================================================================
+
+Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142135623730951
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142135623730951
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142135623730951
+  Sphere 3: center=[0. 1. 0.], r=1.4142135623730951
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1313, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1279, in main
+    result = compute_exposed_area(main_sphere, other_spheres)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1111, in compute_exposed_area
+    covered_gb = compute_covered_area_gauss_bonnet(main, caps, arcs_by_cap, others)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/sphere_gauss_bonnet.py", line 1007, in compute_covered_area_gauss_bonnet
+    total_arcs = sum(len(v) for v in arcs_by_cap.values())
+                                     ^^^^^^^^^^^^^^^^^^
+AttributeError: 'tuple' object has no attribute 'values'
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+============================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+============================================================
+  Total arc: 0.00e+00 rad
+  Exposed points: 2
+    pos=[-1.  0. -0.], on boundaries=[0, 1, 2, 3]
+    pos=[ 1.  0. -0.], on boundaries=[0, 1, 2, 3]
+  PASSED ✓
+
+============================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+============================================================
+  Total arc: 0.00e+00 rad
+  Exposed points: 1
+    pos=[ 1.  0. -0.], on boundaries=[0, 1, 2, 3]
+  PASSED ✓
+
+============================================================
+Test 3: 2 spheres → normal arcs, 0 degenerate points
+============================================================
+  Total arc: 12.5664 rad
+  Exposed points: 0
+  PASSED ✓
+
+============================================================
+Test 4: Non-origin center, 4 spheres → 2 points
+============================================================
+  Exposed points: 2
+    pos=[ 2. -2.  7.]
+    pos=[ 4. -2.  7.]
+  PASSED ✓
+
+============================================================
+Test 5: Fully covered sphere → nothing exposed
+============================================================
+  Total arc: 0.00e+00
+  Exposed points: 0
+  PASSED ✓
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 0 (0.00°)
+  Exposed points: 2
+    pos = (-1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+    pos = (1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test_sphere_gauss_bonnet.py", line 281, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test_sphere_gauss_bonnet.py", line 274, in main
+    fig.savefig(fname, dpi=150, bbox_inches='tight')
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/figure.py", line 3490, in savefig
+    self.canvas.print_figure(fname, **kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2186, in print_figure
+    result = print_method(
+             ^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 2042, in <lambda>
+    print_method = functools.wraps(meth)(lambda *args, **kwargs: meth(
+                                                                 ^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 481, in print_png
+    self._print_pil(filename_or_obj, "png", pil_kwargs, metadata)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py", line 430, in _print_pil
+    mpl.image.imsave(
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/image.py", line 1657, in imsave
+    image.save(fname, **pil_kwargs)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/PIL/Image.py", line 2585, in save
+    fp = builtins.open(filename, "w+b")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/claude/robust_test_1.png'
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 0 (0.00°)
+  Exposed points: 2
+    pos = (-1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+    pos = (1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 5
+  Arc segments: 0 (0.00°)
+  Exposed points: 1
+    pos = (1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 3: 2 spheres → normal arcs
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[1.5 0.  0. ], r=1.0000
+  Sphere 1: center=[-1.5  0.   0. ], r=1.0000
+
+  Caps: 2
+  Arc segments: 2 (720.00°)
+  Exposed points: 0
+
+=================================================================
+Test 4: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 6
+  Arc segments: 0 (0.00°)
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test_sphere_gauss_bonnet.py", line 10, in <module>
+    from robust_exposed import (
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/robust_exposed.py", line 376, in <module>
+    ) -> Tuple[Dict[int, List[Tuple[float, float]]], List[ExposedPoint]]:
+                                                          ^^^^^^^^^^^^
+NameError: name 'ExposedPoint' is not defined
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 0 (0.00°)
+  Exposed points: 2
+    pos = (-1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+    pos = (1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 5
+  Arc segments: 0 (0.00°)
+  Exposed points: 1
+    pos = (1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 3: 2 spheres → normal arcs
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[1.5 0.  0. ], r=1.0000
+  Sphere 1: center=[-1.5  0.   0. ], r=1.0000
+
+  Caps: 2
+  Arc segments: 2 (720.00°)
+  Exposed points: 0
+
+=================================================================
+Test 4: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 6
+  Arc segments: 0 (0.00°)
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 0 (0.00°)
+  Exposed points: 2
+    pos = (-1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+    pos = (1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 5
+  Arc segments: 0 (0.00°)
+  Exposed points: 1
+    pos = (1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 3: 2 spheres → normal arcs
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[1.5 0.  0. ], r=1.0000
+  Sphere 1: center=[-1.5  0.   0. ], r=1.0000
+
+  Caps: 2
+  Arc segments: 2 (720.00°)
+  Exposed points: 0
+
+=================================================================
+Test 4: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 6
+  Arc segments: 0 (0.00°)
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.0000
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 4 (120.00°)
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=2.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 4 (1440.00°)
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.5
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 8 (436.49°)
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=0.99999999
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 0 (0.00°)
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 0 (0.00°)
+  Exposed points: 2
+    pos = (-1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+    pos = (1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=0.999999999
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+  Arc segments: 0 (0.00°)
+  Exposed points: 2
+    pos = (-1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+    pos = (1.000000, 0.000000, -0.000000)
+    on cap boundaries: [0, 1, 2, 3]
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 2
+    point 0: pos = (-1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+    point 1: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 5
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+    Cap 4: sphere_idx=4, normal=[-1.  0.  0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 1
+    point 0: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 3: 2 spheres → normal arcs
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[1.5 0.  0. ], r=1.0000
+  Sphere 1: center=[-1.5  0.   0. ], r=1.0000
+
+  Caps: 2
+    Cap 0: sphere_idx=0, normal=[1. 0. 0.], ϕ=41.4°, circle_r=0.6614
+    Cap 1: sphere_idx=1, normal=[-1.  0.  0.], ϕ=41.4°, circle_r=0.6614
+
+  Arc segments: 2 (total 720.00°)
+    Cap 0 (sphere 0):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+0.750000, +0.000000, +0.661438)
+             end   = (+0.750000, +0.000000, +0.661438)
+    Cap 1 (sphere 1):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (-0.750000, +0.000000, -0.661438)
+             end   = (-0.750000, +0.000000, -0.661438)
+
+  Exposed points: 0
+
+=================================================================
+Test 4: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 6
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+    Cap 4: sphere_idx=4, normal=[1. 0. 0.], ϕ=90.0°, circle_r=1.0000
+    Cap 5: sphere_idx=5, normal=[-1.  0.  0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 2
+    point 0: pos = (-1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+    point 1: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 5
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+    Cap 4: sphere_idx=4, normal=[-1.  0.  0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 1
+    point 0: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 3: 2 spheres → normal arcs
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[1.5 0.  0. ], r=1.0000
+  Sphere 1: center=[-1.5  0.   0. ], r=1.0000
+
+  Caps: 2
+    Cap 0: sphere_idx=0, normal=[1. 0. 0.], ϕ=41.4°, circle_r=0.6614
+    Cap 1: sphere_idx=1, normal=[-1.  0.  0.], ϕ=41.4°, circle_r=0.6614
+
+  Arc segments: 2 (total 720.00°)
+    Cap 0 (sphere 0):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+0.750000, +0.000000, +0.661438)
+             end   = (+0.750000, +0.000000, +0.661438)
+    Cap 1 (sphere 1):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (-0.750000, +0.000000, -0.661438)
+             end   = (-0.750000, +0.000000, -0.661438)
+
+  Exposed points: 0
+
+=================================================================
+Test 4: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=2.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 6
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=41.4°, circle_r=1.3229
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=41.4°, circle_r=1.3229
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=41.4°, circle_r=1.3229
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=41.4°, circle_r=1.3229
+    Cap 4: sphere_idx=4, normal=[1. 0. 0.], ϕ=41.4°, circle_r=1.3229
+    Cap 5: sphere_idx=5, normal=[-1.  0.  0.], ϕ=41.4°, circle_r=1.3229
+
+  Arc segments: 6 (total 2160.00°)
+    Cap 0 (sphere 0):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+0.000000, +1.322876, +1.500000)
+             end   = (+0.000000, +1.322876, +1.500000)
+    Cap 1 (sphere 1):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+0.000000, -1.322876, -1.500000)
+             end   = (+0.000000, -1.322876, -1.500000)
+    Cap 2 (sphere 2):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+0.000000, -1.500000, +1.322876)
+             end   = (+0.000000, -1.500000, +1.322876)
+    Cap 3 (sphere 3):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+0.000000, +1.500000, -1.322876)
+             end   = (+0.000000, +1.500000, -1.322876)
+    Cap 4 (sphere 4):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+1.500000, +0.000000, +1.322876)
+             end   = (+1.500000, +0.000000, +1.322876)
+    Cap 5 (sphere 5):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (-1.500000, +0.000000, -1.322876)
+             end   = (-1.500000, +0.000000, -1.322876)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 2
+    point 0: pos = (-1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+    point 1: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 5
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+    Cap 4: sphere_idx=4, normal=[-1.  0.  0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 1
+    point 0: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 3: 2 spheres → normal arcs
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[1.5 0.  0. ], r=1.0000
+  Sphere 1: center=[-1.5  0.   0. ], r=1.0000
+
+  Caps: 2
+    Cap 0: sphere_idx=0, normal=[1. 0. 0.], ϕ=41.4°, circle_r=0.6614
+    Cap 1: sphere_idx=1, normal=[-1.  0.  0.], ϕ=41.4°, circle_r=0.6614
+
+  Arc segments: 2 (total 720.00°)
+    Cap 0 (sphere 0):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+0.750000, +0.000000, +0.661438)
+             end   = (+0.750000, +0.000000, +0.661438)
+    Cap 1 (sphere 1):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (-0.750000, +0.000000, -0.661438)
+             end   = (-0.750000, +0.000000, -0.661438)
+
+  Exposed points: 0
+
+=================================================================
+Test 4: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.5
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 6
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=65.4°, circle_r=1.3636
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=65.4°, circle_r=1.3636
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=65.4°, circle_r=1.3636
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=65.4°, circle_r=1.3636
+    Cap 4: sphere_idx=4, normal=[1. 0. 0.], ϕ=65.4°, circle_r=1.3636
+    Cap 5: sphere_idx=5, normal=[-1.  0.  0.], ϕ=65.4°, circle_r=1.3636
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 2
+    point 0: pos = (-1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+    point 1: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 5
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+    Cap 4: sphere_idx=4, normal=[-1.  0.  0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 1
+    point 0: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 3: 2 spheres → normal arcs
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[1.5 0.  0. ], r=1.0000
+  Sphere 1: center=[-1.5  0.   0. ], r=1.0000
+
+  Caps: 2
+    Cap 0: sphere_idx=0, normal=[1. 0. 0.], ϕ=41.4°, circle_r=0.6614
+    Cap 1: sphere_idx=1, normal=[-1.  0.  0.], ϕ=41.4°, circle_r=0.6614
+
+  Arc segments: 2 (total 720.00°)
+    Cap 0 (sphere 0):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+0.750000, +0.000000, +0.661438)
+             end   = (+0.750000, +0.000000, +0.661438)
+    Cap 1 (sphere 1):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (-0.750000, +0.000000, -0.661438)
+             end   = (-0.750000, +0.000000, -0.661438)
+
+  Exposed points: 0
+
+=================================================================
+Test 4: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.7
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 6
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=56.2°, circle_r=1.4131
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=56.2°, circle_r=1.4131
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=56.2°, circle_r=1.4131
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=56.2°, circle_r=1.4131
+    Cap 4: sphere_idx=4, normal=[1. 0. 0.], ϕ=56.2°, circle_r=1.4131
+    Cap 5: sphere_idx=5, normal=[-1.  0.  0.], ϕ=56.2°, circle_r=1.4131
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 2
+    point 0: pos = (-1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+    point 1: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 2: 5 spheres → 1 exposed point at (1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 5
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+    Cap 4: sphere_idx=4, normal=[-1.  0.  0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00°)
+
+  Exposed points: 1
+    point 0: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 3: 2 spheres → normal arcs
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0
+  Sphere 0: center=[1.5 0.  0. ], r=1.0000
+  Sphere 1: center=[-1.5  0.   0. ], r=1.0000
+
+  Caps: 2
+    Cap 0: sphere_idx=0, normal=[1. 0. 0.], ϕ=41.4°, circle_r=0.6614
+    Cap 1: sphere_idx=1, normal=[-1.  0.  0.], ϕ=41.4°, circle_r=0.6614
+
+  Arc segments: 2 (total 720.00°)
+    Cap 0 (sphere 0):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (+0.750000, +0.000000, +0.661438)
+             end   = (+0.750000, +0.000000, +0.661438)
+    Cap 1 (sphere 1):
+      arc 0: t =    0.00° →  360.00°  (Δ = 360.00°)
+             start = (-0.750000, +0.000000, -0.661438)
+             end   = (-0.750000, +0.000000, -0.661438)
+
+  Exposed points: 0
+
+=================================================================
+Test 4: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.85
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 6
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=49.1°, circle_r=1.3983
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=49.1°, circle_r=1.3983
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=49.1°, circle_r=1.3983
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=49.1°, circle_r=1.3983
+    Cap 4: sphere_idx=4, normal=[1. 0. 0.], ϕ=49.1°, circle_r=1.3983
+    Cap 5: sphere_idx=5, normal=[-1.  0.  0.], ϕ=49.1°, circle_r=1.3983
+
+  Arc segments: 24 (total 720.97°)
+    Cap 0 (sphere 0):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, +1.211250, +1.211250)
+             end   = (-1.211250, +0.698747, +1.211250)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -0.698747, +1.211250)
+             end   = (-0.698747, -1.211250, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, -1.211250, +1.211250)
+             end   = (+1.211250, -0.698747, +1.211250)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +0.698747, +1.211250)
+             end   = (+0.698747, +1.211250, +1.211250)
+    Cap 1 (sphere 1):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, -1.211250, -1.211250)
+             end   = (-1.211250, -0.698747, -1.211250)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, +0.698747, -1.211250)
+             end   = (-0.698747, +1.211250, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, +1.211250, -1.211250)
+             end   = (+1.211250, +0.698747, -1.211250)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, -0.698747, -1.211250)
+             end   = (+0.698747, -1.211250, -1.211250)
+    Cap 2 (sphere 2):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, -1.211250, +1.211250)
+             end   = (-1.211250, -1.211250, +0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -1.211250, -0.698747)
+             end   = (-0.698747, -1.211250, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, -1.211250, -1.211250)
+             end   = (+1.211250, -1.211250, -0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, -1.211250, +0.698747)
+             end   = (+0.698747, -1.211250, +1.211250)
+    Cap 3 (sphere 3):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, +1.211250, -1.211250)
+             end   = (-1.211250, +1.211250, -0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, +1.211250, +0.698747)
+             end   = (-0.698747, +1.211250, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, +1.211250, +1.211250)
+             end   = (+1.211250, +1.211250, +0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +1.211250, -0.698747)
+             end   = (+0.698747, +1.211250, -1.211250)
+    Cap 4 (sphere 4):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (+1.211250, -0.698747, +1.211250)
+             end   = (+1.211250, -1.211250, +0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (+1.211250, -1.211250, -0.698747)
+             end   = (+1.211250, -0.698747, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+1.211250, +0.698747, -1.211250)
+             end   = (+1.211250, +1.211250, -0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +1.211250, +0.698747)
+             end   = (+1.211250, +0.698747, +1.211250)
+    Cap 5 (sphere 5):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-1.211250, -0.698747, -1.211250)
+             end   = (-1.211250, -1.211250, -0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -1.211250, +0.698747)
+             end   = (-1.211250, -0.698747, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (-1.211250, +0.698747, +1.211250)
+             end   = (-1.211250, +1.211250, +0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (-1.211250, +1.211250, -0.698747)
+             end   = (-1.211250, +0.698747, -1.211250)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.00000001
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 8 (total 0.00°)
+    Cap 0 (sphere 0):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000000, +0.000000, +0.000000)
+             end   = (-1.000000, -0.000000, +0.000000)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000000, -0.000000, +0.000000)
+             end   = (+1.000000, +0.000000, +0.000000)
+    Cap 1 (sphere 1):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000000, -0.000000, -0.000000)
+             end   = (-1.000000, +0.000000, -0.000000)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000000, +0.000000, -0.000000)
+             end   = (+1.000000, -0.000000, -0.000000)
+    Cap 2 (sphere 2):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000000, -0.000000, +0.000000)
+             end   = (-1.000000, -0.000000, -0.000000)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000000, -0.000000, -0.000000)
+             end   = (+1.000000, -0.000000, +0.000000)
+    Cap 3 (sphere 3):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000000, +0.000000, -0.000000)
+             end   = (-1.000000, +0.000000, +0.000000)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000000, +0.000000, +0.000000)
+             end   = (+1.000000, +0.000000, -0.000000)
+
+  Exposed points: 2
+    point 0: pos = (-1.000000, -0.000000, +0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+    point 1: pos = (+1.000000, -0.000000, +0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.0000001
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 8 (total 0.00°)
+    Cap 0 (sphere 0):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000000, +0.000000, +0.000000)
+             end   = (-1.000000, -0.000000, +0.000000)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000000, -0.000000, +0.000000)
+             end   = (+1.000000, +0.000000, +0.000000)
+    Cap 1 (sphere 1):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000000, -0.000000, -0.000000)
+             end   = (-1.000000, +0.000000, -0.000000)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000000, +0.000000, -0.000000)
+             end   = (+1.000000, -0.000000, -0.000000)
+    Cap 2 (sphere 2):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000000, -0.000000, +0.000000)
+             end   = (-1.000000, -0.000000, -0.000000)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000000, -0.000000, -0.000000)
+             end   = (+1.000000, -0.000000, +0.000000)
+    Cap 3 (sphere 3):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000000, +0.000000, -0.000000)
+             end   = (-1.000000, +0.000000, +0.000000)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000000, +0.000000, +0.000000)
+             end   = (+1.000000, +0.000000, -0.000000)
+
+  Exposed points: 0
+2026-03-27 02:36:14.885 python[6447:4613005] error messaging the mach port for IMKCFRunLoopWakeUpReliable
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.001
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=89.9°, circle_r=1.0010
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=89.9°, circle_r=1.0010
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=89.9°, circle_r=1.0010
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=89.9°, circle_r=1.0010
+
+  Arc segments: 8 (total 0.92°)
+    Cap 0 (sphere 0):
+      arc 0: t =   89.94° →   90.06°  (Δ = 0.11°)
+             start = (-1.000999, +0.001000, +0.001000)
+             end   = (-1.000999, -0.001000, +0.001000)
+      arc 1: t =  269.94° →  270.06°  (Δ = 0.11°)
+             start = (+1.000999, -0.001000, +0.001000)
+             end   = (+1.000999, +0.001000, +0.001000)
+    Cap 1 (sphere 1):
+      arc 0: t =   89.94° →   90.06°  (Δ = 0.11°)
+             start = (-1.000999, -0.001000, -0.001000)
+             end   = (-1.000999, +0.001000, -0.001000)
+      arc 1: t =  269.94° →  270.06°  (Δ = 0.11°)
+             start = (+1.000999, +0.001000, -0.001000)
+             end   = (+1.000999, -0.001000, -0.001000)
+    Cap 2 (sphere 2):
+      arc 0: t =   89.94° →   90.06°  (Δ = 0.11°)
+             start = (-1.000999, -0.001000, +0.001000)
+             end   = (-1.000999, -0.001000, -0.001000)
+      arc 1: t =  269.94° →  270.06°  (Δ = 0.11°)
+             start = (+1.000999, -0.001000, -0.001000)
+             end   = (+1.000999, -0.001000, +0.001000)
+    Cap 3 (sphere 3):
+      arc 0: t =   89.94° →   90.06°  (Δ = 0.11°)
+             start = (-1.000999, +0.001000, -0.001000)
+             end   = (-1.000999, +0.001000, +0.001000)
+      arc 1: t =  269.94° →  270.06°  (Δ = 0.11°)
+             start = (+1.000999, +0.001000, +0.001000)
+             end   = (+1.000999, +0.001000, -0.001000)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.000001
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 8 (total 0.00°)
+    Cap 0 (sphere 0):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000001, +0.000001, +0.000001)
+             end   = (-1.000001, -0.000001, +0.000001)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000001, -0.000001, +0.000001)
+             end   = (+1.000001, +0.000001, +0.000001)
+    Cap 1 (sphere 1):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000001, -0.000001, -0.000001)
+             end   = (-1.000001, +0.000001, -0.000001)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000001, +0.000001, -0.000001)
+             end   = (+1.000001, -0.000001, -0.000001)
+    Cap 2 (sphere 2):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000001, -0.000001, +0.000001)
+             end   = (-1.000001, -0.000001, -0.000001)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000001, -0.000001, -0.000001)
+             end   = (+1.000001, -0.000001, +0.000001)
+    Cap 3 (sphere 3):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000001, +0.000001, -0.000001)
+             end   = (-1.000001, +0.000001, +0.000001)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000001, +0.000001, +0.000001)
+             end   = (+1.000001, +0.000001, -0.000001)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=1.000001
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 8 (total 0.00091673°)
+    Cap 0 (sphere 0):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000001, +0.000001, +0.000001)
+             end   = (-1.000001, -0.000001, +0.000001)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000001, -0.000001, +0.000001)
+             end   = (+1.000001, +0.000001, +0.000001)
+    Cap 1 (sphere 1):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000001, -0.000001, -0.000001)
+             end   = (-1.000001, +0.000001, -0.000001)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000001, +0.000001, -0.000001)
+             end   = (+1.000001, -0.000001, -0.000001)
+    Cap 2 (sphere 2):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000001, -0.000001, +0.000001)
+             end   = (-1.000001, -0.000001, -0.000001)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000001, -0.000001, -0.000001)
+             end   = (+1.000001, -0.000001, +0.000001)
+    Cap 3 (sphere 3):
+      arc 0: t =   90.00° →   90.00°  (Δ = 0.00°)
+             start = (-1.000001, +0.000001, -0.000001)
+             end   = (-1.000001, +0.000001, +0.000001)
+      arc 1: t =  270.00° →  270.00°  (Δ = 0.00°)
+             start = (+1.000001, +0.000001, +0.000001)
+             end   = (+1.000001, +0.000001, -0.000001)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=0.999999
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00000000°)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=0.99999999
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00000000°)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=0.999999995
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00000000°)
+
+  Exposed points: 1
+    point 0: pos = (-1.000000, +0.000000, +0.000000)
+              on cap boundaries: []
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=0.999999995
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00000000°)
+
+  Exposed points: 1
+    point 0: pos = (-1.000000, +0.000000, +0.000000)
+              on cap boundaries: []
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=0.999999995
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00000000°)
+
+  Exposed points: 1
+    point 0: pos = (-1.000000, +0.000000, +0.000000)
+              on cap boundaries: []
+
+=================================================================
+Test 2: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.85
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 6
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=49.1°, circle_r=1.3983
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=49.1°, circle_r=1.3983
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=49.1°, circle_r=1.3983
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=49.1°, circle_r=1.3983
+    Cap 4: sphere_idx=4, normal=[1. 0. 0.], ϕ=49.1°, circle_r=1.3983
+    Cap 5: sphere_idx=5, normal=[-1.  0.  0.], ϕ=49.1°, circle_r=1.3983
+
+  Arc segments: 24 (total 720.96892683°)
+    Cap 0 (sphere 0):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, +1.211250, +1.211250)
+             end   = (-1.211250, +0.698747, +1.211250)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -0.698747, +1.211250)
+             end   = (-0.698747, -1.211250, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, -1.211250, +1.211250)
+             end   = (+1.211250, -0.698747, +1.211250)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +0.698747, +1.211250)
+             end   = (+0.698747, +1.211250, +1.211250)
+    Cap 1 (sphere 1):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, -1.211250, -1.211250)
+             end   = (-1.211250, -0.698747, -1.211250)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, +0.698747, -1.211250)
+             end   = (-0.698747, +1.211250, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, +1.211250, -1.211250)
+             end   = (+1.211250, +0.698747, -1.211250)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, -0.698747, -1.211250)
+             end   = (+0.698747, -1.211250, -1.211250)
+    Cap 2 (sphere 2):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, -1.211250, +1.211250)
+             end   = (-1.211250, -1.211250, +0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -1.211250, -0.698747)
+             end   = (-0.698747, -1.211250, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, -1.211250, -1.211250)
+             end   = (+1.211250, -1.211250, -0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, -1.211250, +0.698747)
+             end   = (+0.698747, -1.211250, +1.211250)
+    Cap 3 (sphere 3):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, +1.211250, -1.211250)
+             end   = (-1.211250, +1.211250, -0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, +1.211250, +0.698747)
+             end   = (-0.698747, +1.211250, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, +1.211250, +1.211250)
+             end   = (+1.211250, +1.211250, +0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +1.211250, -0.698747)
+             end   = (+0.698747, +1.211250, -1.211250)
+    Cap 4 (sphere 4):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (+1.211250, -0.698747, +1.211250)
+             end   = (+1.211250, -1.211250, +0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (+1.211250, -1.211250, -0.698747)
+             end   = (+1.211250, -0.698747, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+1.211250, +0.698747, -1.211250)
+             end   = (+1.211250, +1.211250, -0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +1.211250, +0.698747)
+             end   = (+1.211250, +0.698747, +1.211250)
+    Cap 5 (sphere 5):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-1.211250, -0.698747, -1.211250)
+             end   = (-1.211250, -1.211250, -0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -1.211250, +0.698747)
+             end   = (-1.211250, -0.698747, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (-1.211250, +0.698747, +1.211250)
+             end   = (-1.211250, +1.211250, +0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (-1.211250, +1.211250, -0.698747)
+             end   = (-1.211250, +0.698747, -1.211250)
+
+  Exposed points: 0
+^CTraceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test_sphere_gauss_bonnet.py", line 308, in <module>
+    main()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/test_sphere_gauss_bonnet.py", line 302, in main
+    plt.show()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/pyplot.py", line 613, in show
+    return _get_backend_mod().show(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 3550, in show
+    cls.mainloop()
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backends/backend_macosx.py", line 179, in start_main_loop
+    with _allow_interrupt_macos():
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/lib/python3.12/contextlib.py", line 144, in __exit__
+    next(self.gen)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/matplotlib/backend_bases.py", line 1660, in _allow_interrupt
+    old_sigint_handler(*handler_args)
+KeyboardInterrupt
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=0.999999995
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00000000°)
+
+  Exposed points: 2
+    point 0: pos = (-1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+    point 1: pos = (+1.000000, +0.000000, -0.000000)
+              on cap boundaries: [0, 1, 2, 3]
+
+=================================================================
+Test 2: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.85
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 6
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=49.1°, circle_r=1.3983
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=49.1°, circle_r=1.3983
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=49.1°, circle_r=1.3983
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=49.1°, circle_r=1.3983
+    Cap 4: sphere_idx=4, normal=[1. 0. 0.], ϕ=49.1°, circle_r=1.3983
+    Cap 5: sphere_idx=5, normal=[-1.  0.  0.], ϕ=49.1°, circle_r=1.3983
+
+  Arc segments: 24 (total 720.96892683°)
+    Cap 0 (sphere 0):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, +1.211250, +1.211250)
+             end   = (-1.211250, +0.698747, +1.211250)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -0.698747, +1.211250)
+             end   = (-0.698747, -1.211250, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, -1.211250, +1.211250)
+             end   = (+1.211250, -0.698747, +1.211250)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +0.698747, +1.211250)
+             end   = (+0.698747, +1.211250, +1.211250)
+    Cap 1 (sphere 1):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, -1.211250, -1.211250)
+             end   = (-1.211250, -0.698747, -1.211250)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, +0.698747, -1.211250)
+             end   = (-0.698747, +1.211250, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, +1.211250, -1.211250)
+             end   = (+1.211250, +0.698747, -1.211250)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, -0.698747, -1.211250)
+             end   = (+0.698747, -1.211250, -1.211250)
+    Cap 2 (sphere 2):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, -1.211250, +1.211250)
+             end   = (-1.211250, -1.211250, +0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -1.211250, -0.698747)
+             end   = (-0.698747, -1.211250, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, -1.211250, -1.211250)
+             end   = (+1.211250, -1.211250, -0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, -1.211250, +0.698747)
+             end   = (+0.698747, -1.211250, +1.211250)
+    Cap 3 (sphere 3):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, +1.211250, -1.211250)
+             end   = (-1.211250, +1.211250, -0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, +1.211250, +0.698747)
+             end   = (-0.698747, +1.211250, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, +1.211250, +1.211250)
+             end   = (+1.211250, +1.211250, +0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +1.211250, -0.698747)
+             end   = (+0.698747, +1.211250, -1.211250)
+    Cap 4 (sphere 4):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (+1.211250, -0.698747, +1.211250)
+             end   = (+1.211250, -1.211250, +0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (+1.211250, -1.211250, -0.698747)
+             end   = (+1.211250, -0.698747, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+1.211250, +0.698747, -1.211250)
+             end   = (+1.211250, +1.211250, -0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +1.211250, +0.698747)
+             end   = (+1.211250, +0.698747, +1.211250)
+    Cap 5 (sphere 5):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-1.211250, -0.698747, -1.211250)
+             end   = (-1.211250, -1.211250, -0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -1.211250, +0.698747)
+             end   = (-1.211250, -0.698747, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (-1.211250, +0.698747, +1.211250)
+             end   = (-1.211250, +1.211250, +0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (-1.211250, +1.211250, -0.698747)
+             end   = (-1.211250, +0.698747, -1.211250)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python test_sphere_gauss_bonnet.py
+=================================================================
+Test 1: 4 spheres → 2 exposed points at (±1,0,0)
+=================================================================
+  Main: center=[0. 0. 0.], r=0.999999995
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+  shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+  Caps: 4
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=90.0°, circle_r=1.0000
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=90.0°, circle_r=1.0000
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=90.0°, circle_r=1.0000
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=90.0°, circle_r=1.0000
+
+  Arc segments: 0 (total 0.00000000°)
+
+  Exposed points: 0
+
+=================================================================
+Test 2: 6 spheres → fully covered
+=================================================================
+  Main: center=[0. 0. 0.], r=1.85
+  Sphere 0: center=[0. 0. 1.], r=1.4142
+  Sphere 1: center=[ 0.  0. -1.], r=1.4142
+  Sphere 2: center=[ 0. -1.  0.], r=1.4142
+  Sphere 3: center=[0. 1. 0.], r=1.4142
+  Sphere 4: center=[1. 0. 0.], r=1.4142
+  Sphere 5: center=[-1.  0.  0.], r=1.4142
+
+  Caps: 6
+    Cap 0: sphere_idx=0, normal=[0. 0. 1.], ϕ=49.1°, circle_r=1.3983
+    Cap 1: sphere_idx=1, normal=[ 0.  0. -1.], ϕ=49.1°, circle_r=1.3983
+    Cap 2: sphere_idx=2, normal=[ 0. -1.  0.], ϕ=49.1°, circle_r=1.3983
+    Cap 3: sphere_idx=3, normal=[0. 1. 0.], ϕ=49.1°, circle_r=1.3983
+    Cap 4: sphere_idx=4, normal=[1. 0. 0.], ϕ=49.1°, circle_r=1.3983
+    Cap 5: sphere_idx=5, normal=[-1.  0.  0.], ϕ=49.1°, circle_r=1.3983
+
+  Arc segments: 24 (total 720.96892683°)
+    Cap 0 (sphere 0):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, +1.211250, +1.211250)
+             end   = (-1.211250, +0.698747, +1.211250)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -0.698747, +1.211250)
+             end   = (-0.698747, -1.211250, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, -1.211250, +1.211250)
+             end   = (+1.211250, -0.698747, +1.211250)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +0.698747, +1.211250)
+             end   = (+0.698747, +1.211250, +1.211250)
+    Cap 1 (sphere 1):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, -1.211250, -1.211250)
+             end   = (-1.211250, -0.698747, -1.211250)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, +0.698747, -1.211250)
+             end   = (-0.698747, +1.211250, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, +1.211250, -1.211250)
+             end   = (+1.211250, +0.698747, -1.211250)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, -0.698747, -1.211250)
+             end   = (+0.698747, -1.211250, -1.211250)
+    Cap 2 (sphere 2):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, -1.211250, +1.211250)
+             end   = (-1.211250, -1.211250, +0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -1.211250, -0.698747)
+             end   = (-0.698747, -1.211250, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, -1.211250, -1.211250)
+             end   = (+1.211250, -1.211250, -0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, -1.211250, +0.698747)
+             end   = (+0.698747, -1.211250, +1.211250)
+    Cap 3 (sphere 3):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-0.698747, +1.211250, -1.211250)
+             end   = (-1.211250, +1.211250, -0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, +1.211250, +0.698747)
+             end   = (-0.698747, +1.211250, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+0.698747, +1.211250, +1.211250)
+             end   = (+1.211250, +1.211250, +0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +1.211250, -0.698747)
+             end   = (+0.698747, +1.211250, -1.211250)
+    Cap 4 (sphere 4):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (+1.211250, -0.698747, +1.211250)
+             end   = (+1.211250, -1.211250, +0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (+1.211250, -1.211250, -0.698747)
+             end   = (+1.211250, -0.698747, -1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (+1.211250, +0.698747, -1.211250)
+             end   = (+1.211250, +1.211250, -0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (+1.211250, +1.211250, +0.698747)
+             end   = (+1.211250, +0.698747, +1.211250)
+    Cap 5 (sphere 5):
+      arc 0: t =   29.98° →   60.02°  (Δ = 30.04°)
+             start = (-1.211250, -0.698747, -1.211250)
+             end   = (-1.211250, -1.211250, -0.698747)
+      arc 1: t =  119.98° →  150.02°  (Δ = 30.04°)
+             start = (-1.211250, -1.211250, +0.698747)
+             end   = (-1.211250, -0.698747, +1.211250)
+      arc 2: t =  209.98° →  240.02°  (Δ = 30.04°)
+             start = (-1.211250, +0.698747, +1.211250)
+             end   = (-1.211250, +1.211250, +0.698747)
+      arc 3: t =  299.98° →  330.02°  (Δ = 30.04°)
+             start = (-1.211250, +1.211250, -0.698747)
+             end   = (-1.211250, +0.698747, -1.211250)
+
+  Exposed points: 0
+
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py           
+======================================================================
+Benchmark: 20 spheres, grid_accel=ON
+======================================================================
+
+Generated 20 spheres in 0.030s
+Max radius: 0.6805, grid cell size: 1.7013
+Grid index built in 0.000s  (60 cells)
+  [     2/20]  7 spheres/s  ETA 2.6s  last: 0.13ms  caps=1, arcs=1, pts=0
+  [     4/20]  14 spheres/s  ETA 1.1s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [     6/20]  21 spheres/s  ETA 0.7s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [     8/20]  28 spheres/s  ETA 0.4s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    10/20]  35 spheres/s  ETA 0.3s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    12/20]  42 spheres/s  ETA 0.2s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    14/20]  49 spheres/s  ETA 0.1s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    16/20]  56 spheres/s  ETA 0.1s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    18/20]  63 spheres/s  ETA 0.0s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    20/20]  70 spheres/s  ETA 0.0s  last: 0.01ms  caps=0, arcs=0, pts=1
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (20 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     0.28s  (14.21 ms/sphere)
+Grid build:     0.000s
+Throughput:     70 spheres/s
+
+Timing per sphere (ms):
+  mean=14.206  median=0.010  p95=14.313  p99=229.852  max=283.736
+
+Neighbors per sphere:
+  mean=0.1  median=0  max=1
+
+Caps per sphere:
+  mean=0.1  median=0  max=1
+
+Exposed arcs per sphere:
+  mean=0.1  median=0  max=1
+
+Arc total angle (°):
+  (among spheres with arcs) mean=360.0°  min=360.0°  max=360.0°
+
+Exposed points (degenerate):
+  spheres with exposed points: 18
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:        0  (0.0%)
+  has arcs:             2  (10.0%)
+  has points only:     18  (90.0%)
+  any exposed:         20  (100.0%)
+
+Top 5 slowest spheres:
+  #1  sphere     0: 283.74ms  neighbors=0  caps=0  arcs=0  pts=1
+  #2  sphere     1: 0.13ms  neighbors=1  caps=1  arcs=1  pts=0
+  #3  sphere    14: 0.06ms  neighbors=1  caps=1  arcs=1  pts=0
+  #4  sphere     2: 0.02ms  neighbors=0  caps=0  arcs=0  pts=1
+  #5  sphere     6: 0.02ms  neighbors=0  caps=0  arcs=0  pts=1
+
+
+
+======================================================================
+Benchmark: 200 spheres, grid_accel=ON
+======================================================================
+
+Generated 200 spheres in 0.000s
+Max radius: 0.8151, grid cell size: 2.0378
+Grid index built in 0.001s  (92 cells)
+  [    20/200]  6700 spheres/s  ETA 0.0s  last: 0.25ms  caps=6, arcs=12, pts=0
+  [    40/200]  6691 spheres/s  ETA 0.0s  last: 0.23ms  caps=5, arcs=5, pts=0
+  [    60/200]  6151 spheres/s  ETA 0.0s  last: 0.26ms  caps=6, arcs=8, pts=0
+  [    80/200]  6322 spheres/s  ETA 0.0s  last: 0.14ms  caps=3, arcs=7, pts=0
+  [   100/200]  5080 spheres/s  ETA 0.0s  last: 0.13ms  caps=3, arcs=2, pts=0
+  [   120/200]  4934 spheres/s  ETA 0.0s  last: 0.18ms  caps=4, arcs=8, pts=0
+  [   140/200]  5226 spheres/s  ETA 0.0s  last: 0.09ms  caps=2, arcs=4, pts=0
+  [   160/200]  5409 spheres/s  ETA 0.0s  last: 0.10ms  caps=2, arcs=2, pts=0
+  [   180/200]  5479 spheres/s  ETA 0.0s  last: 0.10ms  caps=2, arcs=4, pts=0
+  [   200/200]  5414 spheres/s  ETA 0.0s  last: 0.45ms  caps=8, arcs=14, pts=0
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (200 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     0.04s  (0.18 ms/sphere)
+Grid build:     0.001s
+Throughput:     5412 spheres/s
+
+Timing per sphere (ms):
+  mean=0.184  median=0.111  p95=0.446  p99=0.838  max=4.410
+
+Neighbors per sphere:
+  mean=3.0  median=2  max=13
+
+Caps per sphere:
+  mean=3.0  median=2  max=13
+
+Exposed arcs per sphere:
+  mean=4.1  median=3  max=22
+
+Arc total angle (°):
+  (among spheres with arcs) mean=686.7°  min=259.6°  max=2147.4°
+
+Exposed points (degenerate):
+  spheres with exposed points: 30
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:        2  (1.0%)
+  has arcs:           168  (84.0%)
+  has points only:     30  (15.0%)
+  any exposed:        198  (99.0%)
+
+Top 5 slowest spheres:
+  #1  sphere    84: 4.41ms  neighbors=1  caps=1  arcs=0  pts=0
+  #2  sphere   116: 0.99ms  neighbors=4  caps=4  arcs=0  pts=0
+  #3  sphere   198: 0.84ms  neighbors=11  caps=11  arcs=22  pts=0
+  #4  sphere   102: 0.82ms  neighbors=13  caps=13  arcs=22  pts=0
+  #5  sphere   127: 0.68ms  neighbors=12  caps=12  arcs=19  pts=0
+
+
+
+======================================================================
+Benchmark: 2000 spheres, grid_accel=ON
+======================================================================
+
+Generated 2000 spheres in 0.001s
+Max radius: 0.8188, grid cell size: 2.0471
+Grid index built in 0.005s  (118 cells)
+  [   200/2000]  204 spheres/s  ETA 8.8s  last: 0.42ms  caps=7, arcs=3, pts=0
+  [   400/2000]  232 spheres/s  ETA 6.9s  last: 40.78ms  caps=64, arcs=0, pts=0
+  [   600/2000]  230 spheres/s  ETA 6.1s  last: 0.84ms  caps=14, arcs=5, pts=0
+  [   800/2000]  234 spheres/s  ETA 5.1s  last: 2.18ms  caps=24, arcs=20, pts=0
+  [  1000/2000]  236 spheres/s  ETA 4.2s  last: 1.84ms  caps=23, arcs=10, pts=0
+  [  1200/2000]  239 spheres/s  ETA 3.3s  last: 1.01ms  caps=13, arcs=10, pts=0
+  [  1400/2000]  238 spheres/s  ETA 2.5s  last: 0.93ms  caps=5, arcs=0, pts=0
+  [  1600/2000]  236 spheres/s  ETA 1.7s  last: 6.02ms  caps=48, arcs=6, pts=0
+  [  1800/2000]  240 spheres/s  ETA 0.8s  last: 4.64ms  caps=18, arcs=0, pts=0
+  [  2000/2000]  237 spheres/s  ETA 0.0s  last: 1.99ms  caps=22, arcs=11, pts=0
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (2000 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     8.43s  (4.22 ms/sphere)
+Grid build:     0.005s
+Throughput:     237 spheres/s
+
+Timing per sphere (ms):
+  mean=4.217  median=2.313  p95=13.929  p99=30.958  max=73.499
+
+Neighbors per sphere:
+  mean=28.8  median=24  max=108
+
+Caps per sphere:
+  mean=28.7  median=24  max=106
+
+Exposed arcs per sphere:
+  mean=8.1  median=6  max=32
+
+Arc total angle (°):
+  (among spheres with arcs) mean=370.1°  min=0.7°  max=1852.0°
+
+Exposed points (degenerate):
+  spheres with exposed points: 3
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:      207  (10.3%)
+  has arcs:          1790  (89.5%)
+  has points only:      3  (0.1%)
+  any exposed:       1793  (89.6%)
+
+Top 5 slowest spheres:
+  #1  sphere  1529: 73.50ms  neighbors=83  caps=83  arcs=0  pts=0
+  #2  sphere   668: 71.71ms  neighbors=80  caps=80  arcs=0  pts=0
+  #3  sphere    24: 64.58ms  neighbors=81  caps=80  arcs=0  pts=0
+  #4  sphere  1938: 56.46ms  neighbors=74  caps=74  arcs=0  pts=0
+  #5  sphere  1249: 47.25ms  neighbors=67  caps=66  arcs=0  pts=0
+
+
+
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+======================================================================
+Benchmark: 20 spheres, grid_accel=ON
+======================================================================
+
+Generated 20 spheres in 0.011s
+Max radius: 0.6805, grid cell size: 1.7013
+Grid index built in 0.000s  (60 cells)
+  [     2/20]  12 spheres/s  ETA 1.5s  last: 0.12ms  caps=1, arcs=1, pts=0
+  [     4/20]  24 spheres/s  ETA 0.7s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [     6/20]  36 spheres/s  ETA 0.4s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [     8/20]  48 spheres/s  ETA 0.2s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    10/20]  61 spheres/s  ETA 0.2s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    12/20]  73 spheres/s  ETA 0.1s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    14/20]  85 spheres/s  ETA 0.1s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    16/20]  97 spheres/s  ETA 0.0s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    18/20]  109 spheres/s  ETA 0.0s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    20/20]  121 spheres/s  ETA 0.0s  last: 0.01ms  caps=0, arcs=0, pts=1
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (20 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     0.17s  (8.26 ms/sphere)
+Grid build:     0.000s
+Throughput:     121 spheres/s
+
+Timing per sphere (ms):
+  mean=8.257  median=0.012  p95=8.352  p99=133.453  max=164.728
+
+Neighbors per sphere:
+  mean=0.1  median=0  max=1
+
+Caps per sphere:
+  mean=0.1  median=0  max=1
+
+Exposed arcs per sphere:
+  mean=0.1  median=0  max=1
+
+Arc total angle (°):
+  (among spheres with arcs) mean=360.0°  min=360.0°  max=360.0°
+
+Exposed points (degenerate):
+  spheres with exposed points: 18
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:        0  (0.0%)
+  has arcs:             2  (10.0%)
+  has points only:     18  (90.0%)
+  any exposed:         20  (100.0%)
+
+Top 5 slowest spheres:
+  #1  sphere     0: 164.73ms  neighbors=0  caps=0  arcs=0  pts=1
+  #2  sphere     1: 0.12ms  neighbors=1  caps=1  arcs=1  pts=0
+  #3  sphere    14: 0.07ms  neighbors=1  caps=1  arcs=1  pts=0
+  #4  sphere     2: 0.03ms  neighbors=0  caps=0  arcs=0  pts=1
+  #5  sphere     6: 0.02ms  neighbors=0  caps=0  arcs=0  pts=1
+
+
+
+======================================================================
+Benchmark: 200 spheres, grid_accel=ON
+======================================================================
+
+Generated 200 spheres in 0.000s
+Max radius: 0.8151, grid cell size: 2.0378
+Grid index built in 0.001s  (92 cells)
+  [    20/200]  6516 spheres/s  ETA 0.0s  last: 0.26ms  caps=6, arcs=12, pts=0
+  [    40/200]  6430 spheres/s  ETA 0.0s  last: 0.23ms  caps=5, arcs=5, pts=0
+  [    60/200]  5704 spheres/s  ETA 0.0s  last: 0.28ms  caps=6, arcs=8, pts=0
+  [    80/200]  5951 spheres/s  ETA 0.0s  last: 0.15ms  caps=3, arcs=7, pts=0
+  [   100/200]  5954 spheres/s  ETA 0.0s  last: 0.13ms  caps=3, arcs=2, pts=0
+  [   120/200]  5497 spheres/s  ETA 0.0s  last: 0.17ms  caps=4, arcs=8, pts=0
+  [   140/200]  5710 spheres/s  ETA 0.0s  last: 0.09ms  caps=2, arcs=4, pts=0
+  [   160/200]  5889 spheres/s  ETA 0.0s  last: 0.10ms  caps=2, arcs=2, pts=0
+  [   180/200]  6028 spheres/s  ETA 0.0s  last: 0.09ms  caps=2, arcs=4, pts=0
+  [   200/200]  5939 spheres/s  ETA 0.0s  last: 0.38ms  caps=8, arcs=14, pts=0
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (200 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     0.03s  (0.17 ms/sphere)
+Grid build:     0.001s
+Throughput:     5937 spheres/s
+
+Timing per sphere (ms):
+  mean=0.168  median=0.107  p95=0.490  p99=0.993  max=1.063
+
+Neighbors per sphere:
+  mean=3.0  median=2  max=13
+
+Caps per sphere:
+  mean=3.0  median=2  max=13
+
+Exposed arcs per sphere:
+  mean=4.1  median=3  max=22
+
+Arc total angle (°):
+  (among spheres with arcs) mean=686.7°  min=259.6°  max=2147.4°
+
+Exposed points (degenerate):
+  spheres with exposed points: 30
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:        2  (1.0%)
+  has arcs:           168  (84.0%)
+  has points only:     30  (15.0%)
+  any exposed:        198  (99.0%)
+
+Top 5 slowest spheres:
+  #1  sphere    84: 1.06ms  neighbors=1  caps=1  arcs=0  pts=0
+  #2  sphere   198: 1.03ms  neighbors=11  caps=11  arcs=22  pts=0
+  #3  sphere   102: 0.99ms  neighbors=13  caps=13  arcs=22  pts=0
+  #4  sphere   116: 0.99ms  neighbors=4  caps=4  arcs=0  pts=0
+  #5  sphere    46: 0.69ms  neighbors=9  caps=9  arcs=12  pts=0
+
+
+
+======================================================================
+Benchmark: 4000 spheres, grid_accel=ON
+======================================================================
+
+Generated 4000 spheres in 0.001s
+Max radius: 0.8162, grid cell size: 2.0404
+Grid index built in 0.011s  (122 cells)
+  [   400/4000]  49 spheres/s  ETA 73.8s  last: 9.26ms  caps=61, arcs=12, pts=0
+  [   800/4000]  50 spheres/s  ETA 63.4s  last: 4.37ms  caps=40, arcs=6, pts=0
+  [  1200/4000]  47 spheres/s  ETA 59.4s  last: 87.20ms  caps=92, arcs=0, pts=0
+  [  1600/4000]  49 spheres/s  ETA 49.3s  last: 25.09ms  caps=115, arcs=7, pts=0
+  [  2000/4000]  49 spheres/s  ETA 40.4s  last: 4.97ms  caps=42, arcs=10, pts=0
+  [  2400/4000]  50 spheres/s  ETA 31.9s  last: 10.95ms  caps=67, arcs=20, pts=0
+  [  2800/4000]  51 spheres/s  ETA 23.6s  last: 8.88ms  caps=62, arcs=13, pts=0
+  [  3200/4000]  50 spheres/s  ETA 15.9s  last: 2.60ms  caps=28, arcs=1, pts=0
+  [  3600/4000]  51 spheres/s  ETA 7.8s  last: 3.31ms  caps=33, arcs=4, pts=0
+  [  4000/4000]  51 spheres/s  ETA 0.0s  last: 5.70ms  caps=43, arcs=6, pts=0
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (4000 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     77.69s  (19.42 ms/sphere)
+Grid build:     0.011s
+Throughput:     51 spheres/s
+
+Timing per sphere (ms):
+  mean=19.421  median=8.551  p95=69.026  p99=190.404  max=365.341
+
+Neighbors per sphere:
+  mean=61.2  median=52  max=218
+
+Caps per sphere:
+  mean=61.0  median=52  max=215
+
+Exposed arcs per sphere:
+  mean=6.5  median=6  max=34
+
+Arc total angle (°):
+  (among spheres with arcs) mean=247.8°  min=0.4°  max=1288.4°
+
+Exposed points (degenerate):
+  spheres with exposed points: 1
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:      808  (20.2%)
+  has arcs:          3191  (79.8%)
+  has points only:      1  (0.0%)
+  any exposed:       3192  (79.8%)
+
+Top 5 slowest spheres:
+  #1  sphere  3058: 365.34ms  neighbors=181  caps=181  arcs=0  pts=0
+  #2  sphere  2869: 348.99ms  neighbors=180  caps=180  arcs=0  pts=0
+  #3  sphere   361: 346.01ms  neighbors=181  caps=181  arcs=0  pts=0
+  #4  sphere   497: 340.82ms  neighbors=183  caps=183  arcs=0  pts=0
+  #5  sphere   358: 319.16ms  neighbors=174  caps=174  arcs=0  pts=0
+
+
+
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 367, in <module>
+    benchmark(n_spheres=n)
+TypeError: benchmark() got an unexpected keyword argument 'n_spheres'
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 367, in <module>
+    benchmark(grid_len=n, path_to_mesh='data/bunny.obj', use_grid=True)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 126, in benchmark
+    mesh, points, sdf_values, gradients = generate_test_mesh_data(path_to_mesh, grid_len=grid_len)
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 316, in generate_test_mesh_data
+    mesh = trimesh.load(path_to_mesh)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/trimesh/exchange/load.py", line 111, in load
+    loaded = load_scene(
+             ^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/trimesh/exchange/load.py", line 193, in load_scene
+    arg = _parse_file_args(
+          ^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/trimesh/exchange/load.py", line 624, in _parse_file_args
+    raise ValueError(f"string is not a file: `{file_obj}`")
+ValueError: string is not a file: `data/bunny.obj`
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+======================================================================
+Benchmark: 8000 spheres, grid_accel=ON
+======================================================================
+
+Generated 8000 spheres in 0.003s
+Max radius: 0.6891, grid cell size: 1.7228
+Grid index built in 0.019s  (8 cells)
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 367, in <module>
+    benchmark(grid_len=n, path_to_mesh='examples/bunny.obj', use_grid=True)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 186, in benchmark
+    caps = compute_all_caps(main, others)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/robust_exposed.py", line 136, in compute_all_caps
+    caps.remove(existing); break
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 4, in __eq__
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+======================================================================
+Benchmark: 8000 spheres, grid_accel=ON
+======================================================================
+
+Generated 8000 spheres in 0.003s
+Max radius: 0.6891, grid cell size: 1.7228
+Grid index built in 0.021s  (8 cells)
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 367, in <module>
+    benchmark(grid_len=n, path_to_mesh='examples/bunny.obj', use_grid=True)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 186, in benchmark
+    caps = compute_all_caps(main, others)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/robust_exposed.py", line 136, in compute_all_caps
+    caps.remove(existing); break
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 4, in __eq__
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+======================================================================
+Benchmark: 20 spheres, grid_accel=ON
+======================================================================
+
+Generated 20 spheres in 0.030s
+Max radius: 0.6805, grid cell size: 1.7013
+Grid index built in 0.000s  (60 cells)
+  [     2/20]  7 spheres/s  ETA 2.6s  last: 0.15ms  caps=1, arcs=1, pts=0
+  [     4/20]  14 spheres/s  ETA 1.2s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [     6/20]  21 spheres/s  ETA 0.7s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [     8/20]  27 spheres/s  ETA 0.4s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    10/20]  34 spheres/s  ETA 0.3s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    12/20]  41 spheres/s  ETA 0.2s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    14/20]  48 spheres/s  ETA 0.1s  last: 0.02ms  caps=0, arcs=0, pts=1
+  [    16/20]  55 spheres/s  ETA 0.1s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    18/20]  62 spheres/s  ETA 0.0s  last: 0.01ms  caps=0, arcs=0, pts=1
+  [    20/20]  69 spheres/s  ETA 0.0s  last: 0.01ms  caps=0, arcs=0, pts=1
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (20 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     0.29s  (14.56 ms/sphere)
+Grid build:     0.000s
+Throughput:     69 spheres/s
+
+Timing per sphere (ms):
+  mean=14.553  median=0.011  p95=14.673  p99=235.447  max=290.640
+
+Neighbors per sphere:
+  mean=0.1  median=0  max=1
+
+Caps per sphere:
+  mean=0.1  median=0  max=1
+
+Exposed arcs per sphere:
+  mean=0.1  median=0  max=1
+
+Arc total angle (°):
+  (among spheres with arcs) mean=360.0°  min=360.0°  max=360.0°
+
+Exposed points (degenerate):
+  spheres with exposed points: 18
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:        0  (0.0%)
+  has arcs:             2  (10.0%)
+  has points only:     18  (90.0%)
+  any exposed:         20  (100.0%)
+
+Top 5 slowest spheres:
+  #1  sphere     0: 290.64ms  neighbors=0  caps=0  arcs=0  pts=1
+  #2  sphere     1: 0.15ms  neighbors=1  caps=1  arcs=1  pts=0
+  #3  sphere    14: 0.06ms  neighbors=1  caps=1  arcs=1  pts=0
+  #4  sphere     2: 0.03ms  neighbors=0  caps=0  arcs=0  pts=1
+  #5  sphere    16: 0.02ms  neighbors=0  caps=0  arcs=0  pts=1
+
+
+
+======================================================================
+Benchmark: 200 spheres, grid_accel=ON
+======================================================================
+
+Generated 200 spheres in 0.000s
+Max radius: 0.8151, grid cell size: 2.0378
+Grid index built in 0.001s  (92 cells)
+  [    20/200]  5835 spheres/s  ETA 0.0s  last: 0.29ms  caps=6, arcs=12, pts=0
+  [    40/200]  6245 spheres/s  ETA 0.0s  last: 0.20ms  caps=5, arcs=5, pts=0
+  [    60/200]  5974 spheres/s  ETA 0.0s  last: 0.40ms  caps=6, arcs=8, pts=0
+  [    80/200]  6022 spheres/s  ETA 0.0s  last: 0.14ms  caps=3, arcs=7, pts=0
+  [   100/200]  4904 spheres/s  ETA 0.0s  last: 0.12ms  caps=3, arcs=2, pts=0
+  [   120/200]  4811 spheres/s  ETA 0.0s  last: 0.16ms  caps=4, arcs=8, pts=0
+  [   140/200]  5127 spheres/s  ETA 0.0s  last: 0.09ms  caps=2, arcs=4, pts=0
+  [   160/200]  5250 spheres/s  ETA 0.0s  last: 0.15ms  caps=2, arcs=2, pts=0
+  [   180/200]  5330 spheres/s  ETA 0.0s  last: 0.09ms  caps=2, arcs=4, pts=0
+  [   200/200]  5372 spheres/s  ETA 0.0s  last: 0.37ms  caps=8, arcs=14, pts=0
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (200 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     0.04s  (0.19 ms/sphere)
+Grid build:     0.001s
+Throughput:     5370 spheres/s
+
+Timing per sphere (ms):
+  mean=0.185  median=0.111  p95=0.419  p99=0.813  max=4.679
+
+Neighbors per sphere:
+  mean=3.0  median=2  max=13
+
+Caps per sphere:
+  mean=3.0  median=2  max=13
+
+Exposed arcs per sphere:
+  mean=4.1  median=3  max=22
+
+Arc total angle (°):
+  (among spheres with arcs) mean=686.7°  min=259.6°  max=2147.4°
+
+Exposed points (degenerate):
+  spheres with exposed points: 30
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:        2  (1.0%)
+  has arcs:           168  (84.0%)
+  has points only:     30  (15.0%)
+  any exposed:        198  (99.0%)
+
+Top 5 slowest spheres:
+  #1  sphere    84: 4.68ms  neighbors=1  caps=1  arcs=0  pts=0
+  #2  sphere   116: 0.99ms  neighbors=4  caps=4  arcs=0  pts=0
+  #3  sphere   102: 0.81ms  neighbors=13  caps=13  arcs=22  pts=0
+  #4  sphere   127: 0.65ms  neighbors=12  caps=12  arcs=19  pts=0
+  #5  sphere   198: 0.65ms  neighbors=11  caps=11  arcs=22  pts=0
+
+
+
+======================================================================
+Benchmark: 2000 spheres, grid_accel=ON
+======================================================================
+
+Generated 2000 spheres in 0.001s
+Max radius: 0.8188, grid cell size: 2.0471
+Grid index built in 0.005s  (118 cells)
+  [   200/2000]  199 spheres/s  ETA 9.1s  last: 0.43ms  caps=7, arcs=3, pts=0
+^CTraceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 299, in <module>
+    benchmark(n_spheres=n)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 186, in benchmark
+    arcs_by_cap, exposed_points = compute_exposed_arcs_robust(main, caps)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/robust_exposed.py", line 394, in compute_exposed_arcs_robust
+    lines, feasible = compute_oriented_lines_for_cap(i, caps)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/robust_exposed.py", line 155, in compute_oriented_lines_for_cap
+    line = intersect_plane_with_cap_plane(host, other, other_cap_idx=j)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/robust_exposed.py", line 142, in intersect_plane_with_cap_plane
+    a = -np.dot(other_cap.normal, host_cap.local_u)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+======================================================================
+Benchmark: 8000 spheres, grid_accel=ON
+======================================================================
+
+Generated 8000 spheres in 0.003s
+Max radius: 0.6891, grid cell size: 1.7228
+Grid index built in 0.021s  (8 cells)
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 367, in <module>
+    benchmark(grid_len=n, path_to_mesh='examples/bunny.obj', use_grid=True)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 186, in benchmark
+    caps = compute_all_caps(main, others)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/robust_exposed.py", line 136, in compute_all_caps
+    caps.remove(existing); break
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 4, in __eq__
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+======================================================================
+Benchmark: 8000 spheres, grid_accel=ON
+======================================================================
+
+Generated 8000 spheres in 0.003s
+Max radius: 0.6891, grid cell size: 1.7228
+Grid index built in 0.021s  (8 cells)
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 317, in <module>
+    benchmark(grid_len=n, path_to_mesh='examples/bunny.obj', use_grid=True)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 136, in benchmark
+    caps = compute_all_caps(main, others)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/robust_exposed.py", line 136, in compute_all_caps
+    caps.remove(existing); break
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 4, in __eq__
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+======================================================================
+Benchmark: 8000 spheres, grid_accel=ON
+======================================================================
+
+Generated 8000 spheres in 0.002s
+Max radius: 0.6891, grid cell size: 1.7228
+Grid index built in 0.020s  (8 cells)
+^CTraceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 317, in <module>
+    benchmark(grid_len=n, path_to_mesh='examples/bunny.obj', use_grid=True)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 136, in benchmark
+    caps = compute_all_caps(main, others)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/robust_exposed.py", line 129, in compute_all_caps
+    dot = np.dot(cap.normal, existing.normal)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+======================================================================
+Benchmark: 125 spheres, grid_accel=ON
+======================================================================
+
+Generated 125 spheres in 0.000s
+Max radius: 0.6891, grid cell size: 1.7228
+Grid index built in 0.000s  (8 cells)
+  [    12/125]  1652 spheres/s  ETA 0.1s  last: 0.14ms  caps=2, arcs=2, pts=0
+  [    24/125]  1035 spheres/s  ETA 0.1s  last: 1.92ms  caps=21, arcs=15, pts=0
+  [    36/125]  1185 spheres/s  ETA 0.1s  last: 0.14ms  caps=2, arcs=2, pts=0
+  [    48/125]  1153 spheres/s  ETA 0.1s  last: 1.52ms  caps=17, arcs=13, pts=0
+  [    60/125]  1159 spheres/s  ETA 0.1s  last: 0.72ms  caps=11, arcs=13, pts=0
+  [    72/125]  1188 spheres/s  ETA 0.0s  last: 0.47ms  caps=8, arcs=8, pts=0
+  [    84/125]  1127 spheres/s  ETA 0.0s  last: 0.06ms  caps=0, arcs=0, pts=1
+  [    96/125]  1115 spheres/s  ETA 0.0s  last: 1.33ms  caps=13, arcs=12, pts=0
+  [   108/125]  1035 spheres/s  ETA 0.0s  last: 1.35ms  caps=17, arcs=17, pts=0
+  [   120/125]  970 spheres/s  ETA 0.0s  last: 1.91ms  caps=19, arcs=9, pts=0
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (125 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     0.14s  (1.08 ms/sphere)
+Grid build:     0.000s
+Throughput:     923 spheres/s
+
+Timing per sphere (ms):
+  mean=1.082  median=0.788  p95=3.069  p99=3.444  max=3.563
+
+Neighbors per sphere:
+  mean=14.3  median=13  max=36
+
+Caps per sphere:
+  mean=12.3  median=11  max=31
+
+Exposed arcs per sphere:
+  mean=9.4  median=10  max=21
+
+Arc total angle (°):
+  (among spheres with arcs) mean=594.3°  min=36.3°  max=1440.0°
+
+Exposed points (degenerate):
+  spheres with exposed points: 12
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:        0  (0.0%)
+  has arcs:           113  (90.4%)
+  has points only:     12  (9.6%)
+  any exposed:        125  (100.0%)
+
+Top 5 slowest spheres:
+  #1  sphere    69: 3.56ms  neighbors=29  caps=27  arcs=10  pts=0
+  #2  sphere    44: 3.45ms  neighbors=34  caps=31  arcs=17  pts=0
+  #3  sphere    74: 3.43ms  neighbors=36  caps=28  arcs=20  pts=0
+  #4  sphere   123: 3.41ms  neighbors=36  caps=29  arcs=18  pts=0
+  #5  sphere   118: 3.35ms  neighbors=31  caps=29  arcs=21  pts=0
+
+
+
+======================================================================
+Benchmark: 1000 spheres, grid_accel=ON
+======================================================================
+
+Generated 1000 spheres in 0.000s
+Max radius: 0.6891, grid cell size: 1.7228
+Grid index built in 0.003s  (8 cells)
+  [   100/1000]  50 spheres/s  ETA 17.8s  last: 71.24ms  caps=194, arcs=12, pts=0
+  [   200/1000]  50 spheres/s  ETA 16.1s  last: 87.84ms  caps=211, arcs=13, pts=0
+  [   300/1000]  51 spheres/s  ETA 13.6s  last: 88.32ms  caps=205, arcs=16, pts=0
+  [   400/1000]  52 spheres/s  ETA 11.5s  last: 96.73ms  caps=215, arcs=12, pts=0
+  [   500/1000]  53 spheres/s  ETA 9.4s  last: 107.11ms  caps=227, arcs=16, pts=0
+  [   600/1000]  53 spheres/s  ETA 7.5s  last: 102.13ms  caps=218, arcs=13, pts=0
+  [   700/1000]  52 spheres/s  ETA 5.7s  last: 97.75ms  caps=210, arcs=11, pts=0
+  [   800/1000]  50 spheres/s  ETA 4.0s  last: 98.48ms  caps=204, arcs=5, pts=0
+  [   900/1000]  43 spheres/s  ETA 2.3s  last: 100.68ms  caps=202, arcs=5, pts=0
+  [  1000/1000]  39 spheres/s  ETA 0.0s  last: 90.79ms  caps=187, arcs=14, pts=0
+
+──────────────────────────────────────────────────────────────────────
+RESULTS (1000 spheres)
+──────────────────────────────────────────────────────────────────────
+Total time:     25.49s  (25.49 ms/sphere)
+Grid build:     0.003s
+Throughput:     39 spheres/s
+
+Timing per sphere (ms):
+  mean=25.490  median=11.696  p95=91.322  p99=117.517  max=787.679
+
+Neighbors per sphere:
+  mean=97.7  median=81  max=296
+
+Caps per sphere:
+  mean=81.2  median=67  max=235
+
+Exposed arcs per sphere:
+  mean=9.4  median=10  max=32
+
+Arc total angle (°):
+  (among spheres with arcs) mean=279.8°  min=2.1°  max=2232.1°
+
+Exposed points (degenerate):
+  spheres with exposed points: 44
+  mean count (when >0): 1.0  max: 1
+
+Classification:
+  fully covered:        0  (0.0%)
+  has arcs:           956  (95.6%)
+  has points only:     44  (4.4%)
+  any exposed:       1000  (100.0%)
+
+Top 5 slowest spheres:
+  #1  sphere   888: 787.68ms  neighbors=236  caps=206  arcs=0  pts=1
+  #2  sphere   887: 128.04ms  neighbors=274  caps=235  arcs=5  pts=0
+  #3  sphere   997: 127.88ms  neighbors=296  caps=233  arcs=21  pts=0
+  #4  sphere   996: 121.50ms  neighbors=276  caps=218  arcs=11  pts=0
+  #5  sphere   897: 121.19ms  neighbors=281  caps=229  arcs=10  pts=0
+
+
+
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py example/bunny.obj 10
+C extension not found, using pure Python (slower)
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 321, in <module>
+    benchmark(path_to_mesh=mesh_path, grid_len=grid_len)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 146, in benchmark
+    mesh, points, sdf_values, gradients = generate_test_mesh_data(
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 56, in generate_test_mesh_data
+    mesh = trimesh.load(path_to_mesh)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/trimesh/exchange/load.py", line 111, in load
+    loaded = load_scene(
+             ^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/trimesh/exchange/load.py", line 193, in load_scene
+    arg = _parse_file_args(
+          ^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/trimesh/exchange/load.py", line 624, in _parse_file_args
+    raise ValueError(f"string is not a file: `{file_obj}`")
+ValueError: string is not a file: `example/bunny.obj`
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py example/bunny.obj 10
+C extension not found, using pure Python (slower)
+Traceback (most recent call last):
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 309, in <module>
+    benchmark(path_to_mesh="example/bunny.obj", grid_len=10)
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 146, in benchmark
+    mesh, points, sdf_values, gradients = generate_test_mesh_data(
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/bench_exposed.py", line 56, in generate_test_mesh_data
+    mesh = trimesh.load(path_to_mesh)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/trimesh/exchange/load.py", line 111, in load
+    loaded = load_scene(
+             ^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/trimesh/exchange/load.py", line 193, in load_scene
+    arg = _parse_file_args(
+          ^^^^^^^^^^^^^^^^^
+  File "/Users/yongcheng/Documents/phd/research/sdfgradients/.venv/lib/python3.12/site-packages/trimesh/exchange/load.py", line 624, in _parse_file_args
+    raise ValueError(f"string is not a file: `{file_obj}`")
+ValueError: string is not a file: `example/bunny.obj`
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py example/bunny.obj 10
+C extension not found, using pure Python (slower)
+======================================================================
+Benchmark: 1000 spheres (grid_len=10)
+======================================================================
+
+[0] Data generation: 0.550s
+    Radius range: [0.000435, 0.689128]
+[1] Neighbors:       0.005s  (mean=97.7, median=81, max=296)
+  [   100/1000]  54 sph/s  ETA 16.8s
+  [   200/1000]  53 sph/s  ETA 15.1s
+  [   300/1000]  54 sph/s  ETA 12.9s
+  [   400/1000]  55 sph/s  ETA 10.8s
+  [   500/1000]  56 sph/s  ETA 8.9s
+  [   600/1000]  56 sph/s  ETA 7.1s
+  [   700/1000]  55 sph/s  ETA 5.5s
+  [   800/1000]  52 sph/s  ETA 3.9s
+  [   900/1000]  45 sph/s  ETA 2.2s
+  [  1000/1000]  41 sph/s  ETA 0.0s
+[2] Compute (Python): 24.628s  (24.628 ms/sphere)
+
+──────────────────────────────────────────────────────────────────────
+RESULTS  (1000 spheres)
+──────────────────────────────────────────────────────────────────────
+[0] Generate:       0.550s
+[1] Neighbors:      0.005s
+[2] Compute:        24.628s
+    Total:          25.183s
+    Throughput:     40 spheres/s
+
+Per-sphere timing (ms):
+  mean=24.628  median=11.495  p95=88.925  max=782.584
+
+Caps/sphere:  mean=81.2  median=67  max=235
+Arcs/sphere:  mean=9.4  median=10  max=32
+Arc angle (°):  mean=279.8  min=2.1  max=2232.1
+
+Classification:
+  no neighbors:        43  (4.3%)
+  fully covered:        0  (0.0%)
+  has arcs:           956  (95.6%)
+  has points only:      1  (0.1%)
+
+Exposed points (degenerate):
+  spheres with pts: 1
+  mean count:       1.0
+  max count:        1
+
+Top 5 by cap count:
+  #1  sphere   887: nbrs=274  caps=235  arcs=5  pts=0
+  #2  sphere   698: nbrs=283  caps=234  arcs=16  pts=0
+  #3  sphere   389: nbrs=284  caps=233  arcs=11  pts=0
+  #4  sphere   997: nbrs=296  caps=233  arcs=21  pts=0
+  #5  sphere   588: nbrs=268  caps=233  arcs=9  pts=0
+(.venv) (base) yongcheng@Mac sdfgradients % gcc -O3 -shared -fPIC \
+  -o sphere_exposed_ext$(python3-config --extension-suffix) \
+  sphere_exposed_ext.c \
+  -I$(python3 -c "import sysconfig; print(sysconfig.get_path('include'))") \
+  -I$(python3 -c "import numpy; print(numpy.get_include())") \
+  $(python3-config --ldflags) -lm
+Undefined symbols for architecture arm64:
+  "_PyCapsule_GetPointer", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyCapsule_Type", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyDict_GetItem", referenced from:
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+  "_PyDict_New", referenced from:
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+  "_PyDict_SetItem", referenced from:
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+  "_PyDict_SetItemString", referenced from:
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      ...
+  "_PyErr_Clear", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyErr_ExceptionMatches", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyErr_Format", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyErr_Print", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyErr_SetString", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyExc_ImportError", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyExc_ModuleNotFoundError", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyExc_RuntimeError", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyFloat_FromDouble", referenced from:
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+  "_PyImport_ImportModule", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyList_Append", referenced from:
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+  "_PyList_GetItem", referenced from:
+      _py_compute_exposed_batch in sphere_exposed_ext-5ec2d5.o
+  "_PyList_New", referenced from:
+      _py_compute_exposed_batch in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+  "_PyList_Type", referenced from:
+      _py_compute_exposed_batch in sphere_exposed_ext-5ec2d5.o
+  "_PyLong_FromLong", referenced from:
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+  "_PyModule_Create2", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "_PyObject_GetAttrString", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+  "__PyArg_ParseTuple_SizeT", referenced from:
+      _py_compute_exposed_single in sphere_exposed_ext-5ec2d5.o
+      _py_compute_exposed_batch in sphere_exposed_ext-5ec2d5.o
+  "__Py_BuildValue_SizeT", referenced from:
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+  "__Py_Dealloc", referenced from:
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _PyInit_sphere_exposed_ext in sphere_exposed_ext-5ec2d5.o
+      _py_compute_exposed_batch in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      _result_to_pydict in sphere_exposed_ext-5ec2d5.o
+      ...
+ld: symbol(s) not found for architecture arm64
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+(.venv) (base) yongcheng@Mac sdfgradients % gcc -O3 -shared -fPIC -undefined dynamic_lookup \
+  -o sphere_exposed_ext$(python3-config --extension-suffix) \
+  sphere_exposed_ext.c \
+  -I$(python3 -c "import sysconfig; print(sysconfig.get_path('include'))") \
+  -I$(python3 -c "import numpy; print(numpy.get_include())") \
+  -lm
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py                          
+Using C extension for exposed arc computation
+======================================================================
+Benchmark: 1000 spheres (grid_len=10)
+======================================================================
+
+[0] Data generation: 0.504s
+    Radius range: [0.000435, 0.689128]
+[1] Neighbors:       0.004s  (mean=97.7, median=81, max=296)
+[2] Compute (C extension): 0.174s  (0.174 ms/sphere)
+
+──────────────────────────────────────────────────────────────────────
+RESULTS  (1000 spheres)
+──────────────────────────────────────────────────────────────────────
+[0] Generate:       0.504s
+[1] Neighbors:      0.004s
+[2] Compute:        0.174s
+    Total:          0.683s
+    Throughput:     1465 spheres/s
+
+Caps/sphere:  mean=81.2  median=67  max=235
+Arcs/sphere:  mean=9.4  median=10  max=32
+Arc angle (°):  mean=279.8  min=2.1  max=2232.1
+
+Classification:
+  no neighbors:        43  (4.3%)
+  fully covered:        0  (0.0%)
+  has arcs:           956  (95.6%)
+  has points only:      1  (0.1%)
+
+Exposed points (degenerate):
+  spheres with pts: 1
+  mean count:       1.0
+  max count:        1
+
+Top 5 by cap count:
+  #1  sphere   887: nbrs=274  caps=235  arcs=5  pts=0
+  #2  sphere   698: nbrs=283  caps=234  arcs=16  pts=0
+  #3  sphere   389: nbrs=284  caps=233  arcs=11  pts=0
+  #4  sphere   997: nbrs=296  caps=233  arcs=21  pts=0
+  #5  sphere   588: nbrs=268  caps=233  arcs=9  pts=0
+(.venv) (base) yongcheng@Mac sdfgradients % python bench_exposed.py
+Using C extension for exposed arc computation
+======================================================================
+Benchmark: 8000 spheres (grid_len=20)
+======================================================================
+
+[0] Data generation: 0.529s
+    Radius range: [0.000008, 0.689128]
+[1] Neighbors:       0.344s  (mean=708.2, median=558, max=2290)
+[2] Compute (C extension): 10.428s  (1.304 ms/sphere)
+
+──────────────────────────────────────────────────────────────────────
+RESULTS  (8000 spheres)
+──────────────────────────────────────────────────────────────────────
+[0] Generate:       0.529s
+[1] Neighbors:      0.344s
+[2] Compute:        10.428s
+    Total:          11.301s
+    Throughput:     708 spheres/s
+
+Caps/sphere:  mean=349.1  median=462  max=512
+Arcs/sphere:  mean=11.5  median=8  max=68
+Arc angle (°):  mean=300.6  min=0.0  max=3316.8
+
+Classification:
+  no neighbors:       119  (1.5%)
+  fully covered:        0  (0.0%)
+  has arcs:          7772  (97.2%)
+  has points only:    111  (1.4%)
+
+Exposed points (degenerate):
+  spheres with pts: 111
+  mean count:       1.2
+  max count:        2
+
+Top 5 by cap count:
+  #1  sphere  7999: nbrs=1919  caps=512  arcs=19  pts=0
+  #2  sphere  3915: nbrs=1771  caps=512  arcs=13  pts=0
+  #3  sphere  3972: nbrs=1502  caps=512  arcs=22  pts=0
+  #4  sphere  3971: nbrs=1347  caps=512  arcs=12  pts=0
+  #5  sphere  3970: nbrs=1169  caps=512  arcs=6  pts=0
