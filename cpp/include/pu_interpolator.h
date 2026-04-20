@@ -21,7 +21,8 @@ public:
                    int min_points = 10,
                    int max_points = 200,
                    double reg=1e-5,
-                   const std::string& partition = "box");
+                   const std::string& partition = "box",
+                   bool verbose = true);
 
     void fit(const Eigen::MatrixXd& points,
              const Eigen::VectorXd& values,
@@ -47,7 +48,7 @@ private:
                              const Eigen::Vector3d& center,
                              const Eigen::Vector3d& half_ext);
 
-    static void deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values, double tol = 1e-8);
+    void deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values, double tol = 1e-8) const;
 
     struct PatchInfo {
         Eigen::Vector3d center;

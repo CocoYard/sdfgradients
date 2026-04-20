@@ -32,11 +32,13 @@ Eigen::MatrixXd iterative_projection_3d(
         double cos_sum = 0.0;
         for (int i = 0; i < N; i++)
             cos_sum += gradients.row(i).dot(gt_gradients->row(i));
-        std::cout << "cos_sim mean to the ground truth gradients: " << cos_sum / N << "\n";
+        if (options.verbose)
+            std::cout << "cos_sim mean to the ground truth gradients: " << cos_sum / N << "\n";
     }
 
     for (int it = 0; it < num_iter; it++) {
-        std::cout << "Iter " << (it + 1) << " | ";
+        if (options.verbose)
+            std::cout << "Iter " << (it + 1) << " | ";
         // ── Step 1: Find best gradient via angular search ──────────
         auto t_sbg0 = std::chrono::high_resolution_clock::now();
         Eigen::MatrixXd new_gradients;
@@ -47,10 +49,11 @@ Eigen::MatrixXd iterative_projection_3d(
             new_gradients = interpolator.sample_best_gradients(
                 points, values, num_coarse, /*refine_steps=*/4, /*num_refine=*/5, &gradients);
         }
-        std::cout << "[" << options.iter_gradient_finding << "_best_gradients] "
-                  << std::chrono::duration<double>(
-                         std::chrono::high_resolution_clock::now() - t_sbg0).count()
-                  << "s\n";
+        if (options.verbose)
+            std::cout << "[" << options.iter_gradient_finding << "_best_gradients] "
+                      << std::chrono::duration<double>(
+                             std::chrono::high_resolution_clock::now() - t_sbg0).count()
+                      << "s\n";
 
         // ── Clamp to arcs ──────────────────────────────────────────
         // Throughput-bound (N × neighbors), so bump threads up to predict
@@ -79,8 +82,9 @@ Eigen::MatrixXd iterative_projection_3d(
         Eigen::MatrixXd proj_new(N, 3);
         for (int i = 0; i < N; i++)
             proj_new.row(i) = points.row(i) - values(i) * new_gradients.row(i);
-        std::cout << "Checking visibility ...\n";
-        Eigen::VectorXi vis_new = are_points_visible(proj_new, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh);
+        if (options.verbose)
+            std::cout << "Checking visibility ...\n";
+        Eigen::VectorXi vis_new = are_points_visible(proj_new, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 1e-8, options.verbose);
         Eigen::VectorXi vis_old;
         if (vis_cache_valid) {
             vis_old = vis_cached;
@@ -88,7 +92,7 @@ Eigen::MatrixXd iterative_projection_3d(
             Eigen::MatrixXd proj_old(N, 3);
             for (int i = 0; i < N; i++)
                 proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
-            vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh);
+            vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 1e-8, options.verbose);
         }
         // Don't update gradients that would make visible projections invisible
         // Don't update degenerate-arc points
@@ -102,8 +106,9 @@ Eigen::MatrixXd iterative_projection_3d(
         vis_cached = vis_next;
         vis_cache_valid = true;
 
-        std::cout << "  visible old: " << vis_old.sum() << ", "
-                  << "visible new: " << vis_new.sum() << std::endl;
+        if (options.verbose)
+            std::cout << "  visible old: " << vis_old.sum() << ", "
+                      << "visible new: " << vis_new.sum() << std::endl;
 
         // Compute visible mask (union of old and new)
         Eigen::VectorXi vis_mask(N);
@@ -114,10 +119,12 @@ Eigen::MatrixXd iterative_projection_3d(
             // vis_mask(i) = (vis_new(i) || vis_old(i)) && std::abs(values[i]) > 1e-2;
             if (vis_mask(i)) visible_num++;
         }
-        std::cout << "Iter " << (it + 1) << " | ";
-        std::cout << "Number of visible projected points: " << visible_num
-                  << " out of " << N << ". Percentage: "
-                  << (100.0 * visible_num / N) << "%\n";
+        if (options.verbose) {
+            std::cout << "Iter " << (it + 1) << " | ";
+            std::cout << "Number of visible projected points: " << visible_num
+                      << " out of " << N << ". Percentage: "
+                      << (100.0 * visible_num / N) << "%\n";
+        }
 
         // ── MES contact points: when visibility improvement stalls ─
         // Mirrors optimization.py:589-594. Trigger once when new-vs-old
@@ -128,7 +135,8 @@ Eigen::MatrixXd iterative_projection_3d(
             int vis_old_sum = vis_old.sum();
             double gain = (double)(visible_num - vis_old_sum) / N;
             if (!MES_used && gain < 0.01) {
-                std::cout << "========= Using MES points... =========\n";
+                if (options.verbose)
+                    std::cout << "========= Using MES points... =========\n";
                 auto mes_t0 = std::chrono::steady_clock::now();
                 Eigen::MatrixXd contact_pts, mes_normals;
                 mes_contact_core::contact_points_from_sdf(
@@ -142,7 +150,8 @@ Eigen::MatrixXd iterative_projection_3d(
                 }
                 auto mes_t1 = std::chrono::steady_clock::now();
                 double mes_ms = std::chrono::duration<double, std::milli>(mes_t1 - mes_t0).count();
-                std::cout << "MES contact points elapsed: " << mes_ms/1000 << " s\n";
+                if (options.verbose)
+                    std::cout << "MES contact points elapsed: " << mes_ms/1000 << " s\n";
 
                 MES_used = true;
                 vis_cache_valid = false;  // MES rewrote some gradients; cache stale
@@ -158,7 +167,8 @@ Eigen::MatrixXd iterative_projection_3d(
             double gt_cos = 0.0;
             for (int i = 0; i < N; i++)
                 gt_cos += gradients.row(i).dot(gt_gradients->row(i));
-            std::cout << "cos_sim mean to the ground truth gradients: " << gt_cos / N << "\n";
+            if (options.verbose)
+                std::cout << "cos_sim mean to the ground truth gradients: " << gt_cos / N << "\n";
         }
     }
 

@@ -47,7 +47,8 @@ Eigen::VectorXi are_points_visible(
     const std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
     const std::vector<std::vector<int>>& ngbrs_list,
     const SphereBVH& bvh,
-    double epsilon)
+    double epsilon,
+    bool verbose)
 {
     int N = (int)query_points.rows();
     Eigen::VectorXi result = Eigen::VectorXi::Ones(N);
@@ -80,8 +81,9 @@ Eigen::VectorXi are_points_visible(
         if (occluded) result(i) = 0;
     }
     auto t1 = std::chrono::high_resolution_clock::now();
-    std::cout << "  [are_points_visible] hit_rate=" << (1.0 * fast_hits.load() / (fast_hits.load() + bvh_fallbacks.load()))
-              << " total=" << std::chrono::duration<double>(t1 - t0).count() << "s\n";
+    if (verbose)
+        std::cout << "  [are_points_visible] hit_rate=" << (1.0 * fast_hits.load() / (fast_hits.load() + bvh_fallbacks.load()))
+                  << " total=" << std::chrono::duration<double>(t1 - t0).count() << "s\n";
     return result;
 }
 

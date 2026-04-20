@@ -29,6 +29,10 @@ public:
 
     virtual bool is_trained() const = 0;
 
+    /// Toggle stdout logging in fit() / extract_surface(). Default: true.
+    void set_verbose(bool v) { verbose_ = v; }
+    bool verbose() const { return verbose_; }
+
     /// Find best gradient directions via coarse Fibonacci sweep + cone refinement.
     /// Concrete method — works for any subclass since it only calls predict().
     /// Mirrors Python Interpolator._sample_best_gradients_3d().
@@ -89,6 +93,8 @@ protected:
     // sample's SDF sphere — skips the interpolator on those points.
     Eigen::MatrixXd sample_points_;
     Eigen::VectorXd sample_values_;
+
+    bool verbose_ = true;
 };
 
 }  // namespace sdf

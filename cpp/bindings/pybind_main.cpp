@@ -31,6 +31,7 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def_readwrite("use_MES", &sdf::Options::use_MES)
         .def_readwrite("export_projections", &sdf::Options::export_projections)
         .def_readwrite("export_short_arcs",  &sdf::Options::export_short_arcs)
+        .def_readwrite("verbose", &sdf::Options::verbose)
         .def_readwrite("reg", &sdf::Options::reg)
         .def_readwrite("interpolator_type", &sdf::Options::interpolator_type)
         .def_readwrite("interp_partition", &sdf::Options::interp_partition)
@@ -67,6 +68,9 @@ PYBIND11_MODULE(sdf_cpp, m) {
              py::arg("x_new"), py::arg("chunk_size") = 5000)
         .def("predict_gradients", &sdf::Interpolator::predict_gradients,
              py::arg("x_new"), py::arg("chunk_size") = 5000)
+        .def_property("verbose",
+             &sdf::Interpolator::verbose,
+             &sdf::Interpolator::set_verbose)
         .def("extract_surface", extract_surface_wrapper,
              py::arg("bbox_min"), py::arg("bbox_max"),
              py::arg("nx"), py::arg("ny"), py::arg("nz"),

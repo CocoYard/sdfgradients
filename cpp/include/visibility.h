@@ -37,6 +37,7 @@ Eigen::VectorXi are_points_visible(
     const std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
     const std::vector<std::vector<int>>& ngbrs_list,
     const SphereBVH& bvh,
-    double epsilon = 1e-8);
+    double epsilon = 1e-8,
+    bool verbose = true);
 
 }  // namespace sdf

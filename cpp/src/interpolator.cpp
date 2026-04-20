@@ -690,7 +690,8 @@ void Interpolator::extract_surface(
                 GV(idx, 2) = bbox_min.z() + zi * step.z();
             }
 
-    std::cout << "[extract_surface] build GV: " << sec_since(t_gv) << " s\n";
+    if (verbose_)
+        std::cout << "[extract_surface] build GV: " << sec_since(t_gv) << " s\n";
 
     // ── Coarse pass ──────────────────────────────────────────────────
     auto t_coarse = clk::now();
@@ -718,8 +719,9 @@ void Interpolator::extract_surface(
                 CGV(idx, 2) = bbox_min.z() + ck * cstep.z();
             }
     Eigen::VectorXd CS = this->predict(CGV, chunk_size);
-    std::cout << "[extract_surface] coarse predict (" << CN
-              << " pts): " << sec_since(t_coarse) << " s\n";
+    if (verbose_)
+        std::cout << "[extract_surface] coarse predict (" << CN
+                  << " pts): " << sec_since(t_coarse) << " s\n";
 
     // ── Fill fine S by trilinear interpolation from coarse ───────────
     auto t_tri = clk::now();
@@ -755,7 +757,8 @@ void Interpolator::extract_surface(
         }
     }
 
-    std::cout << "[extract_surface] trilinear fill S: " << sec_since(t_tri) << " s\n";
+    if (verbose_)
+        std::cout << "[extract_surface] trilinear fill S: " << sec_since(t_tri) << " s\n";
 
     // ── Narrow-band detection ────────────────────────────────────────
     auto t_nb = clk::now();
@@ -804,7 +807,8 @@ void Interpolator::extract_surface(
             need_refine[fine_idx(xi, yi, zi)] = 1;
     }
 
-    std::cout << "[extract_surface] narrow-band mark: " << sec_since(t_nb) << " s\n";
+    if (verbose_)
+        std::cout << "[extract_surface] narrow-band mark: " << sec_since(t_nb) << " s\n";
 
     // ── Fine predict on narrow band ──────────────────────────────────
     auto t_fine = clk::now();
@@ -825,9 +829,10 @@ void Interpolator::extract_surface(
             S(refine_idx[k]) = RS(k);
     }
 
-    std::cout << "[extract_surface] fine predict ("
-              << refine_idx.size() << " pts): "
-              << sec_since(t_fine) << " s\n";
+    if (verbose_)
+        std::cout << "[extract_surface] fine predict ("
+                  << refine_idx.size() << " pts): "
+                  << sec_since(t_fine) << " s\n";
 
     // ── Lipschitz post-fix on narrow band + adaptive expansion ──────
     // Walk BVH over sample AABBs for each narrow-band vertex. If predict()
@@ -973,27 +978,31 @@ void Interpolator::extract_surface(
             }
         }
 
-        std::cout << "[extract_surface] lipschitz post-fix: "
-                  << n_sign_flip << " sign flips, "
-                  << n_mag_clamp << " magnitude clamps, "
-                  << n_expanded << " expanded ("
-                  << sec_since(t_fix) << " s)\n";
+        if (verbose_)
+            std::cout << "[extract_surface] lipschitz post-fix: "
+                      << n_sign_flip << " sign flips, "
+                      << n_mag_clamp << " magnitude clamps, "
+                      << n_expanded << " expanded ("
+                      << sec_since(t_fix) << " s)\n";
     }
 
     // ── Surface extraction ───────────────────────────────────────────
     auto t_mc = clk::now();
     if (use_dual_contouring) {
         dc_impl::dual_contour(*this, S, GV, nx, ny, nz, iso, chunk_size, V, F);
-        std::cout << "[extract_surface] dual_contouring: "
-                  << sec_since(t_mc) << " s\n";
+        if (verbose_)
+            std::cout << "[extract_surface] dual_contouring: "
+                      << sec_since(t_mc) << " s\n";
     } else {
         igl::marching_cubes(S, GV,
                             (unsigned)nx, (unsigned)ny, (unsigned)nz,
                             iso, V, F);
-        std::cout << "[extract_surface] marching_cubes: "
-                  << sec_since(t_mc) << " s\n";
+        if (verbose_)
+            std::cout << "[extract_surface] marching_cubes: "
+                      << sec_since(t_mc) << " s\n";
     }
-    std::cout << "[extract_surface] total: " << sec_since(t_total) << " s\n";
+    if (verbose_)
+        std::cout << "[extract_surface] total: " << sec_since(t_total) << " s\n";
 
 #else  // plain marching cubes
 
@@ -1043,8 +1052,9 @@ void Interpolator::extract_surface(
             }
         }
     }
-    std::cout << "[extract_surface] lipschitz pre-fill: " << prefilled << " / " << N
-              << " pts  (" << sec_since(t_prefill) << " s)\n";
+    if (verbose_)
+        std::cout << "[extract_surface] lipschitz pre-fill: " << prefilled << " / " << N
+                  << " pts  (" << sec_since(t_prefill) << " s)\n";
 
     // ── Interpolator for remaining uncertain points ──────────────────
     auto t_pred = clk::now();
@@ -1060,13 +1070,16 @@ void Interpolator::extract_surface(
         Eigen::VectorXd QS = this->predict(QV, chunk_size);
         for (int k = 0; k < M; k++) S(interp_idx[k]) = QS(k);
     }
-    std::cout << "[extract_surface] predict (" << interp_idx.size() << " pts): "
-              << sec_since(t_pred) << " s\n";
+    if (verbose_)
+        std::cout << "[extract_surface] predict (" << interp_idx.size() << " pts): "
+                  << sec_since(t_pred) << " s\n";
 
     auto t_mc = clk::now();
     igl::marching_cubes(S, GV, (unsigned)nx, (unsigned)ny, (unsigned)nz, iso, V, F);
-    std::cout << "[extract_surface] marching_cubes: " << sec_since(t_mc) << " s\n";
-    std::cout << "[extract_surface] total: " << sec_since(t_total) << " s\n";
+    if (verbose_) {
+        std::cout << "[extract_surface] marching_cubes: " << sec_since(t_mc) << " s\n";
+        std::cout << "[extract_surface] total: " << sec_since(t_total) << " s\n";
+    }
 
 #endif
 }

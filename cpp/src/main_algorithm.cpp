@@ -55,6 +55,7 @@ static void export_short_arcs_ply(
 static void filter_degenerate_pts(
     std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
     const Interpolator& interpolator,
+    bool verbose = true,
     double dist_tol = 0.1,
     double spatial_dedup_tol = 1e-4)
 {
@@ -165,15 +166,16 @@ static void filter_degenerate_pts(
                 }
             }
         }
-        if (dedup_cnt > 0)
+        if (dedup_cnt > 0 && verbose)
             std::cout << "Cross-sphere dedup removed " << dedup_cnt
                       << " near-duplicate degenerate points (tol="
                       << spatial_dedup_tol << ")\n";
     }
 
     for (int idx : to_remove) degenerate_pts.erase(idx);
-    std::cout << "Filtered out " << to_remove.size()
-              << " degenerate points. Remaining: " << degenerate_pts.size() << "\n";
+    if (verbose)
+        std::cout << "Filtered out " << to_remove.size()
+                  << " degenerate points. Remaining: " << degenerate_pts.size() << "\n";
 }
 
 // ── init_gradients_by_collinear_pairs ───────────────────────────────
@@ -212,8 +214,9 @@ Eigen::MatrixXd init_gradients_by_collinear_pairs(
         grads.row(i) = (grad_sum[i] / norm).transpose();
         filled++;
     }
-    std::cout << "[init_gradients_by_collinear_pairs] filled " << filled
-              << " / " << N << " gradients\n";
+    if (options.verbose)
+        std::cout << "[init_gradients_by_collinear_pairs] filled " << filled
+                  << " / " << N << " gradients\n";
     return grads;
 }
 
@@ -229,10 +232,11 @@ Eigen::MatrixXd init_gradients_by_degenerate_pts(
     auto& degenerate_pts = options.degenerate_pts;
     // 1. Initial fit without gradients
     interpolator.fit(sdf_points, sdf_values);
-    std::cout << "======== first fit done with input " << N << " points\n";
+    if (options.verbose)
+        std::cout << "======== first fit done with input " << N << " points\n";
 
     // Filter degenerate points
-    filter_degenerate_pts(degenerate_pts, interpolator);
+    filter_degenerate_pts(degenerate_pts, interpolator, options.verbose);
 
     if (options.export_short_arcs)
         export_short_arcs_ply(sdf_points, options, "out/" + options.name);
@@ -265,12 +269,15 @@ Eigen::MatrixXd init_gradients_by_degenerate_pts(
         to_train_sdf = new_vals;
     }
 
-    std::cout << "After adding points for degenerate arcs, total points: "
-              << to_train_points.rows() << "\n";
+    if (options.verbose)
+        std::cout << "After adding points for degenerate arcs, total points: "
+                  << to_train_points.rows() << "\n";
     interpolator.fit(to_train_points, to_train_sdf);
-    std::cout << "======== second fit done with input " << to_train_points.rows()
-              << " points (including " << pts_to_add.size() << " degenerate arc points)\n";
-    std::cout << "initial gradient estimation done\n";
+    if (options.verbose) {
+        std::cout << "======== second fit done with input " << to_train_points.rows()
+                  << " points (including " << pts_to_add.size() << " degenerate arc points)\n";
+        std::cout << "initial gradient estimation done\n";
+    }
 
     // Debug check
     // for (auto& [i, pts] : degenerate_pts) {
@@ -305,8 +312,9 @@ void get_visible_arcs(
     {
         auto t = clk::now();
         options.sphere_bvh = std::make_unique<SphereBVH>(sdf_points, sdf_values);
-        std::cout << "[get_visible_arcs] build SphereBVH: "
-                  << ms_since(t)/1000.0 << " s\n";
+        if (options.verbose)
+            std::cout << "[get_visible_arcs] build SphereBVH: "
+                      << ms_since(t)/1000.0 << " s\n";
     }
 
     if (options.turn_off_short_arcs && !options.clamp) {
@@ -328,7 +336,8 @@ void get_visible_arcs(
         auto t = clk::now();
         sphere_intersect_core::find_intersections(
             pts_rm.data(), radii.data(), N, options.ngbrs_list);
-        std::cout << "[get_visible_arcs] find_intersections: " << ms_since(t)/1000.0 << " s\n";
+        if (options.verbose)
+            std::cout << "[get_visible_arcs] find_intersections: " << ms_since(t)/1000.0 << " s\n";
 
         sphere_exposed_core::compute_exposed_batch(
             pts_rm.data(), radii.data(), N,
@@ -345,7 +354,8 @@ void get_visible_arcs(
         bool has_ngbrs = !options.ngbrs_list[i].empty();
         if (no_arcs && no_pts && has_ngbrs) fully_covered++;
     }
-    std::cout << fully_covered << " fully covered spheres\n";
+    if (options.verbose)
+        std::cout << fully_covered << " fully covered spheres\n";
 
     // Extract degenerate points
     options.degenerate_pts.clear();
@@ -367,14 +377,16 @@ MainResult main_algorithm(
     int N = (int)sdf_points.rows();
 
     auto t0 = clk::now();
-    std::cout << "Starting main_algorithm with " << N << " points\n";
+    if (options.verbose)
+        std::cout << "Starting main_algorithm with " << N << " points\n";
 
     // Step 1: Compute visible arcs + degenerate points
     auto t1 = clk::now();
     get_visible_arcs(sdf_points, sdf_values, options);
     if (options.turn_off_short_arcs)
         options.degenerate_pts.clear();
-    std::cout << "[main_algorithm] get_visible_arcs: " << ms_since(t1)/1000.0 << " s\n";
+    if (options.verbose)
+        std::cout << "[main_algorithm] get_visible_arcs: " << ms_since(t1)/1000.0 << " s\n";
 
     // Create interpolator
     auto t2 = clk::now();    
@@ -386,12 +398,15 @@ MainResult main_algorithm(
     if (options.interpolator_type == "Duchon") {
         interpolator = std::make_shared<DuchonInterpolator>("cubic");
     } else {
-        std::cout << "Using regularization " << options.reg << " for PUInterpolator\n";
+        if (options.verbose)
+            std::cout << "Using regularization " << options.reg << " for PUInterpolator\n";
         interpolator = std::make_shared<PUInterpolator>(
             "cubic", options.interp_overlap,
-            10, 200, options.reg, options.interp_partition);
+            10, 200, options.reg, options.interp_partition,
+            options.verbose);
     }
-    std::cout << "[main_algorithm] interpolator ctor: " << ms_since(t2)/1000.0 << " s\n";
+    if (options.verbose)
+        std::cout << "[main_algorithm] interpolator ctor: " << ms_since(t2)/1000.0 << " s\n";
 
     Eigen::MatrixXd gradients;
     if (options.gt_gradients) {
@@ -401,15 +416,17 @@ MainResult main_algorithm(
         Eigen::VectorXi all_vis = Eigen::VectorXi::Ones(N);
         interpolator->fit(sdf_points, sdf_values, &gt, &all_vis);
         gradients = gt;
-        std::cout << "[main_algorithm] gt_gradients mode, fit: "
-                  << ms_since(tgt)/1000.0 << " s\n";
+        if (options.verbose)
+            std::cout << "[main_algorithm] gt_gradients mode, fit: "
+                      << ms_since(tgt)/1000.0 << " s\n";
     } else {
         // Step 1b: Initial gradient estimation using degenerate points
         auto t3 = clk::now();
         Eigen::MatrixXd init_grads = init_gradients_by_degenerate_pts(
             sdf_points, sdf_values, *interpolator, options);
-        std::cout << "[main_algorithm] init_gradients_by_degenerate_pts: "
-                  << ms_since(t3)/1000.0 << " s\n";
+        if (options.verbose)
+            std::cout << "[main_algorithm] init_gradients_by_degenerate_pts: "
+                      << ms_since(t3)/1000.0 << " s\n";
 
         // Step 2: Iterative optimization
         auto t4 = clk::now();
@@ -417,8 +434,9 @@ MainResult main_algorithm(
             sdf_points, sdf_values, init_grads,
             *interpolator, options,
             options.max_iters);
-        std::cout << "[main_algorithm] iterative_projection_3d: "
-                  << ms_since(t4)/1000.0 << " s\n";
+        if (options.verbose)
+            std::cout << "[main_algorithm] iterative_projection_3d: "
+                      << ms_since(t4)/1000.0 << " s\n";
     }
 
     // Final projection + visibility check
@@ -429,10 +447,12 @@ MainResult main_algorithm(
 
     Eigen::VectorXi vis = are_points_visible(
         projections, sdf_values, options.degenerate_pts,
-        options.ngbrs_list, *options.sphere_bvh);
-    std::cout << "[main_algorithm] final projection + visibility: "
-              << ms_since(t5)/1000.0 << " s\n";
-    std::cout << "[main_algorithm] total: " << ms_since(t0)/1000.0 << " s\n";
+        options.ngbrs_list, *options.sphere_bvh, 1e-8, options.verbose);
+    if (options.verbose) {
+        std::cout << "[main_algorithm] final projection + visibility: "
+                  << ms_since(t5)/1000.0 << " s\n";
+        std::cout << "[main_algorithm] total: " << ms_since(t0)/1000.0 << " s\n";
+    }
 
     if (options.export_projections)
         export_projection_ply(sdf_points, projections, vis, options, "out/" + options.name);

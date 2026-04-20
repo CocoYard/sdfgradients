@@ -142,18 +142,6 @@ void contact_points_from_sdf(
     out_normals = Eigen::MatrixXd::Constant(N, 3, nan);
     if (N == 0) return;
 
-    // Dump exact inputs so we can reproduce standalone with test_mes_bench.
-    {
-        std::ofstream f("/tmp/mes_input.csv");
-        f.precision(17);
-        for (int i = 0; i < N; i++) {
-            f << points(i,0) << "," << points(i,1) << ","
-              << points(i,2) << "," << sdf_values(i) << "\n";
-        }
-        std::cout << "[mes_contact_core] dumped " << N
-                  << " rows to /tmp/mes_input.csv\n";
-    }
-
     std::vector<int> pos_orig, neg_orig;
     for (int i = 0; i < N; i++) {
         if (sdf_values(i) >= 0) pos_orig.push_back(i);

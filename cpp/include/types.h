@@ -33,6 +33,7 @@ struct Options {
     bool use_MES = false;  // whether to use MES normals for invisible points with small visibility gain
     bool export_projections = true;   // write PLY visualization files after main_algorithm
     bool export_short_arcs  = true;   // write PLY of degenerate-arc points after init
+    bool verbose = true;              // if false, main_algorithm suppresses stdout logging
 
     std::string interpolator_type = "PU";     // "PU" or "Duchon"
     std::string interp_partition  = "box";    // "box" or "sphere"

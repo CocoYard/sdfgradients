@@ -14,10 +14,12 @@ namespace sdf {
 
 PUInterpolator::PUInterpolator(const std::string& kernel, double overlap,
                                  int min_points, int max_points,
-                                 double reg, const std::string& partition)
+                                 double reg, const std::string& partition,
+                                 bool verbose)
     : kernel_(kernel), partition_type_(partition), overlap_(overlap),
       min_points_(min_points), max_points_(max_points), reg_(reg)
 {
+    verbose_ = verbose;
     use_box_ = (partition == "box");
 }
 
@@ -43,7 +45,7 @@ double PUInterpolator::box_weight(const Eigen::Vector3d& pt,
 
 // ── Deduplication ───────────────────────────────────────────────────
 
-void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values, double tol) {
+void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values, double tol) const {
     int n = (int)points.rows();
     if (n == 0) return;
 
@@ -69,7 +71,8 @@ void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& value
         new_pts.row(i) = points.row(kept[i]);
         new_vals(i) = values(kept[i]);
     }
-    std::cout << "  [PU fit] deduplication removed: " << (n - kept.size()) << " points\n";
+    if (verbose_)
+        std::cout << "  [PU fit] deduplication removed: " << (n - kept.size()) << " points\n";
     points = new_pts;
     values = new_vals;
 }
@@ -339,8 +342,8 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     }
 
     // Deduplicate
-    deduplicate(pts, vals, 1e-4);
-    if (vals.size() > 5000) {
+    deduplicate(pts, vals, 1e-3);
+    if (vals.size() > 5000 && verbose_) {
         std::cout << "  [PU fit] Warning: too many points, only keeping " << pts.rows()
                   << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";
     }
@@ -353,16 +356,18 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     // Build KDTree for partitioning
     KDTree3D tree(pts);
     auto t1 = clock::now();
-    std::cout << "  [PU fit] build KDTree: "
-              << std::chrono::duration<double>(t1-t0).count() << "s\n";
+    if (verbose_)
+        std::cout << "  [PU fit] build KDTree: "
+                  << std::chrono::duration<double>(t1-t0).count() << "s\n";
 
     // ── Partition ───────────────────────────────────────────────────
     auto patches_info = kdtree_partition(pts, tree);
 
     auto t2 = clock::now();
-    std::cout << "  [PU fit] greedy cover: "
-              << std::chrono::duration<double>(t2-t1).count() << "s  ("
-              << patches_info.size() << " patches)\n";
+    if (verbose_)
+        std::cout << "  [PU fit] greedy cover: "
+                  << std::chrono::duration<double>(t2-t1).count() << "s  ("
+                  << patches_info.size() << " patches)\n";
 
     // ── Fit local interpolators ────────────────────────────────────
     // Each patch fit is independent. Parallelize over patches and compact
@@ -410,10 +415,11 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     }
 
     auto t3 = clock::now();
-    std::cout << "  [PU fit] patch loop: "
-              << std::chrono::duration<double>(t3-t2).count() << "s  (local fit: "
-              << t_local_fit << "s)\n";
-    if (!patch_sizes.empty()) {
+    if (verbose_)
+        std::cout << "  [PU fit] patch loop: "
+                  << std::chrono::duration<double>(t3-t2).count() << "s  (local fit: "
+                  << t_local_fit << "s)\n";
+    if (!patch_sizes.empty() && verbose_) {
         int ps_min = *std::min_element(patch_sizes.begin(), patch_sizes.end());
         int ps_max = *std::max_element(patch_sizes.begin(), patch_sizes.end());
         double ps_mean = std::accumulate(patch_sizes.begin(), patch_sizes.end(), 0.0) / patch_sizes.size();
@@ -437,9 +443,10 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     build_patch_bvh();
 
     trained_ = true;
-    std::cout << "  [PU fit] total: "
-              << std::chrono::duration<double>(clock::now()-t0).count() << "s  ("
-              << patches_.size() << " patches)\n";
+    if (verbose_)
+        std::cout << "  [PU fit] total: "
+                  << std::chrono::duration<double>(clock::now()-t0).count() << "s  ("
+                  << patches_.size() << " patches)\n";
 }
 
 // ── Patch BVH ───────────────────────────────────────────────────────
