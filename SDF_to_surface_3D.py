@@ -209,11 +209,17 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True):
     os.makedirs(out_dir, exist_ok=True)
     Vr, Fr = gpy.reach_for_the_arcs(points, distances, screening_weight=screening_weight, parallel=parallel)
     rfta = trimesh.Trimesh(vertices=Vr, faces=Fr)
-    # only keep the largest connected component
+    # keep the largest component plus any components fully inside the points' bbox
+    bbox_min = points.min(axis=0)
+    bbox_max = points.max(axis=0)
     components = rfta.split(only_watertight=False)
     largest = max(components, key=lambda m: len(m.faces))
-    largest.export(f'{out_dir}/rfta_{grid_len}.obj')
-    print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept largest component: {len(largest.faces)} faces out of {len(Fr)})")
+    kept = [c for c in components
+            if c is largest
+            or (np.all(c.vertices >= bbox_min) and np.all(c.vertices <= bbox_max))]
+    filtered = trimesh.util.concatenate(kept)
+    filtered.export(f'{out_dir}/rfta_{grid_len}.obj')
+    print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept {len(kept)}/{len(components)} components, {len(filtered.faces)} faces out of {len(Fr)})")
 
 def test_mes(options, save_gtmesh=False, screening_weight=10):
     """
@@ -521,10 +527,14 @@ def test_our_method(options : Options, save_gtmesh=False):
     timer = time.perf_counter()
     """ ========================= output post+dc ========================= """
     use_cpp = True
-    resolution = 256
+    bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
+    bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
+    extent = (bbox_max - bbox_min).max()
+    hint_spacing = extent / max(options.grid_len - 1, 1)
+    target_cells_per_hint = 4
+    resolution = int(np.clip(np.ceil(extent / (hint_spacing / target_cells_per_hint)), 64, 256))
+
     if use_cpp:
-        bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
-        bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
         result.interpolator.verbose = options.verbose
         verts, faces = result.interpolator.extract_surface(
             bbox_min=bbox_min, bbox_max=bbox_max,
@@ -686,35 +696,37 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
     for mesh_file in meshes:
         if mesh_file.endswith('.obj'):
             mesh = trimesh.load(os.path.join(dir_to_meshes, mesh_file))
-            haus, chamfer = mesh_distances(mesh, gt_mesh)
+            haus, chamfer, f1 = mesh_distances(mesh, gt_mesh)
             print(f"{mesh_file:<50} against ground truth...", end='')
-            print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}")
+            print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}  F1: {f1:.4f}")
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
-    batch = False  
+    batch = True
     data_dir = 'examples'
     if batch:
-        for name in ['eiffel', 'loewe', 'horse']:
+        for name in ['loewe']:
             for grid_len in [10, 15, 20, 25, 30, 35, 40, 45, 50, 75, 100]:  # 20^3=8000 points, 30^3=27000 points
-                for turn_off_short_arcs in [True, False]:
-                    for clamp in [False, True]:
-                        for use_MES in [False, True]:
-                            for post_processing in [False, True]:
-                                options = Options(name=name, grid_len=grid_len, max_iters=13, clamp=clamp, cpp_dc=True,
-                                    export_short_arcs=True, export_projections=False, turn_off_short_arcs=turn_off_short_arcs,
-                                    use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                                    overlap=0.2, reg=0, use_MES=use_MES, post_processing=post_processing, iter_gradient_finding='optimize')
-                                options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
-                                plt = test_our_method(options, save_gtmesh=False)
-                # options = Options(name=name, grid_len=grid_len, max_iters=13, clamp=False, cpp_dc=True,
-                #         export_short_arcs=False, export_projections=False, turn_off_short_arcs=True,
-                #         use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                #         overlap=0.2, reg=0, use_MES=True, post_processing=False, iter_gradient_finding='optimize')
-                test_rfta(options, screening_weight=10, parallel=True)
+                # for turn_off_short_arcs in [True, False]:
+                #     for clamp in [False, True]:
+                #         for use_MES in [False, True]:
+                #             for post_processing in [False, True]:
+                #                 options = Options(name=name, grid_len=grid_len, max_iters=13, clamp=clamp, cpp_dc=True,
+                #                     export_short_arcs=False, export_projections=False, turn_off_short_arcs=turn_off_short_arcs,
+                #                     use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
+                #                     overlap=0.2, reg=0, use_MES=use_MES, post_processing=post_processing, iter_gradient_finding='optimize')
+                #                 options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
+                #                 plt = test_our_method(options, save_gtmesh=False)
+                options = Options(name=name, grid_len=grid_len, max_iters=13, clamp=False, cpp_dc=True, verbose=True,
+                        export_short_arcs=False, export_projections=False, turn_off_short_arcs=True,
+                        use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
+                        overlap=0.2, reg=0, use_MES=True, post_processing=False, iter_gradient_finding='optimize')
+                # plt = test_our_method(options, save_gtmesh=False)
+                # test_rfta(options, screening_weight=10, parallel=True)
+                # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [20]:
+        for length in [10, 15]:
             options = Options(name='eiffel', grid_len=length, max_iters=13, clamp=False, cpp_dc=True, verbose=True,
                             export_short_arcs=False, export_projections=False, turn_off_short_arcs=True,
                             use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
@@ -722,8 +734,8 @@ if __name__ == "__main__":
             options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
             # # # plt = test_mesh(grid_len=20, path_to_obj='{data_dir}/holes.obj')
             # plt = test_our_method(options, save_gtmesh=False)
-            # test_rfta(options, screening_weight=10, parallel=True)
-            test_mes(options, save_gtmesh=False, screening_weight=10)
+            test_rfta(options, screening_weight=10, parallel=True)
+            # test_mes(options, save_gtmesh=False, screening_weight=10)
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0

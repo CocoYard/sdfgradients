@@ -7,7 +7,10 @@ import util
 from util import print_shape_distances
 from util import are_points_visible
 from SDF_to_surface_3D import Tolerance, Options
-import mes_contact
+try:
+    import mes_contact
+except ImportError:
+    mes_contact = None
 
 def iterative_gradient_alignment(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10, gt=None):
     """
@@ -587,6 +590,8 @@ def iterative_projection_3d(points, values, init_gradients, interpolator : Inter
         print(f"Number of visible projected points: {visible_num} out of {len(points)}. Percentage: {visible_num / len(points) * 100:.2f}%")
 
         if not MES_used and (visible_num - visible_mask_old.sum())/len(points) < 0.01: # it is time to use MES points
+            if mes_contact is None:
+                raise ImportError("mes_contact module not available — build it via build_mes_contact.py (needs CGAL + GMP/MPFR)")
             print("========= Using MES points... =========")
             contact_pts, MES_normals = mes_contact.contact_points_from_sdf(points, values, debug_level=0)
             valid_mask = ~np.isnan(MES_normals).any(axis=1)

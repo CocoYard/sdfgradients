@@ -5,8 +5,11 @@ __pycache__/
 *.pyo
 *.pyd
 gpytoolbox_env/
-out*
-out.bak
+out/*
+!out/build_metrics.py
+!out/metrics.json
+!out/render_thumbs.py
+out?*
 test.py
 .DS_Store
 *.glb
@@ -14,3 +17,5 @@ test.py
 misc
 build
 third_party
+examples
+normalized_examples

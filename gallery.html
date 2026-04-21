@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SDF reconstruction gallery</title>
+<style>
+  :root {
+    --bg:            #1c2029;
+    --panel:         #252a35;
+    --panel-2:       #2d3340;
+    --border:        #3a4150;
+    --text:          #eef0f5;
+    --text-dim:      #adb5c2;
+    --accent:        #7ab4ff;
+    --accent-soft:   #7ab4ff22;
+    --danger:        #ff8080;
+    --radius:        10px;
+    --shadow:        0 1px 2px rgba(0,0,0,.25), 0 8px 24px rgba(0,0,0,.2);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; height:100%; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 20% -10%, #2a3040 0%, var(--bg) 60%) fixed;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+  }
+  .header {
+    position: sticky; top: 0; z-index: 10;
+    padding: 14px 24px;
+    background: rgba(28,32,41,0.82);
+    backdrop-filter: saturate(160%) blur(12px);
+    -webkit-backdrop-filter: saturate(160%) blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .header-row { display:flex; align-items:center; gap: 18px; flex-wrap: wrap; }
+  h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text);
+    display: flex; align-items: center; gap: 10px;
+  }
+  h1::before {
+    content: ""; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 12px var(--accent);
+  }
+  .controls { display:flex; align-items:center; gap: 14px; flex-wrap: wrap; }
+  .controls label {
+    display: inline-flex; align-items: center; gap: 8px;
+    color: var(--text-dim); font-size: 13px;
+  }
+  select {
+    appearance: none;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 30px 6px 10px;
+    font: inherit;
+    cursor: pointer;
+    background-image:
+      linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+      linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+    background-position:
+      calc(100% - 14px) 50%,
+      calc(100% - 9px)  50%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  select:hover { border-color: #3a4150; }
+  select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; }
+  .hint { color: var(--text-dim); font-size: 12px; }
+
+  #grid { padding: 20px 24px 40px; position: relative; }
+  table {
+    border-collapse: separate;
+    border-spacing: 8px;
+  }
+  th, td { padding: 0; text-align: center; vertical-align: middle; }
+  thead th {
+    color: var(--text-dim);
+    font-weight: 500;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0 0 6px;
+    background: transparent;
+  }
+  td {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    transition: border-color .15s, transform .15s;
+  }
+  td:hover { border-color: #3a4150; }
+  .rowlabel {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    font-weight: 500;
+    padding-right: 8px !important;
+    min-width: 56px;
+  }
+  .rowlabel .n { color: var(--text); font-weight: 600; font-size: 13px; }
+  .cellwrap { display: flex; flex-direction: column; }
+  .cell {
+    width: 320px; height: 300px;
+    position: relative;
+    cursor: grab;
+    border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
+    background:
+      radial-gradient(circle at 30% 20%, #363d4c 0%, transparent 60%),
+      linear-gradient(180deg, #2b313d 0%, #232836 100%);
+  }
+  .metrics {
+    width: 320px;
+    padding: 6px 10px 8px;
+    display: flex; justify-content: space-between; gap: 8px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-dim);
+    background: rgba(0,0,0,0.15);
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px);
+  }
+  .metrics .label { color: #7d8594; margin-right: 4px; text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; }
+  .metrics .val   { color: var(--text); font-weight: 500; }
+  .metrics .na    { color: #666; }
+  .cell.grabbing { cursor: grabbing; }
+  .cell::after {
+    content: ""; position: absolute; inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.02);
+    pointer-events: none;
+  }
+  .missing {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--danger); font-size: 12px;
+    background: repeating-linear-gradient(
+      45deg, #1b1013, #1b1013 8px, #221418 8px, #221418 16px);
+  }
+
+  /* A single fixed canvas that covers the viewport; we render per-cell via scissor.
+     Put it ABOVE the header (z:10) and the GT panel (z:20) so WebGL rendering isn't
+     blurred by the panel's backdrop-filter. pointer-events:none lets clicks through. */
+  #renderCanvas {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    pointer-events: none;
+    z-index: 30;
+  }
+
+  /* Floating ground-truth panel */
+  #gtPanel {
+    position: fixed;
+    right: 24px;
+    top: 96px;
+    width: 320px;
+    background: rgba(37,42,53,0.92);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 12px 48px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.4);
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    z-index: 20;
+    overflow: hidden;
+    transition: opacity .2s, transform .2s;
+  }
+  #gtPanel.hidden { opacity: 0; transform: translateX(10px); pointer-events: none; }
+  .gt-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    cursor: move;
+    user-select: none;
+  }
+  .gt-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .gt-title::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: #7fd68a; box-shadow: 0 0 8px #7fd68a;
+  }
+  .gt-close {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    width: 22px; height: 22px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .gt-close:hover { background: var(--panel-2); color: var(--text); }
+  #gtCell { width: 100%; height: 300px; position: relative; cursor: grab; }
+  #gtCell.grabbing { cursor: grabbing; }
+  #showGt {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font: inherit;
+    cursor: pointer;
+  }
+  #showGt:hover { border-color: var(--accent); color: var(--accent); }
+  #showGt[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-row">
+    <h1>SDF reconstruction gallery</h1>
+    <div class="controls">
+      <label>Model
+        <select id="model">
+          <option value="eiffel">eiffel</option>
+          <option value="horse">horse</option>
+          <option value="loewe">loewe</option>
+        </select>
+      </label>
+      <label>
+        <input type="checkbox" id="syncCams" checked> sync cameras
+      </label>
+      <button id="showGt" hidden>Show ground truth</button>
+      <span class="hint">drag to rotate · scroll to zoom</span>
+    </div>
+  </div>
+</div>
+<canvas id="renderCanvas"></canvas>
+<div id="grid"></div>
+
+<div id="gtPanel">
+  <div class="gt-head" id="gtHead">
+    <span class="gt-title">Ground truth · <span id="gtName">eiffel</span></span>
+    <button class="gt-close" id="gtClose" title="close">×</button>
+  </div>
+  <div id="gtCell"></div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OBJLoader } from './vendor/OBJLoader.js';
+import { OrbitControls } from './vendor/OrbitControls.js';
+
+const SAMPLES = [10,15,20,25,30,35,40,45,50,75,100];
+
+let METRICS = {};
+fetch('out/metrics.json').then(r => r.json()).then(d => {
+  METRICS = d;
+  // rebuild if already rendered once without metrics
+  if (cells.length) buildTable(document.getElementById('model').value);
+}).catch(() => {});
+
+// Linear interp on two RGB colors. t=0 → best (green), t=1 → worst (red).
+const BEST_RGB  = [126, 217, 138];  // #7ed98a
+const WORST_RGB = [255, 128, 128];  // #ff8080
+function rankColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  // perceptually a bit better: ease toward midpoint slower
+  const e = Math.pow(t, 0.7);
+  const r = Math.round(BEST_RGB[0] + (WORST_RGB[0] - BEST_RGB[0]) * e);
+  const g = Math.round(BEST_RGB[1] + (WORST_RGB[1] - BEST_RGB[1]) * e);
+  const b = Math.round(BEST_RGB[2] + (WORST_RGB[2] - BEST_RGB[2]) * e);
+  return `rgb(${r},${g},${b})`;
+}
+
+function fmtMetrics(model, algoKey, n, ranges) {
+  const m = METRICS?.[model]?.[algoKey]?.[String(n)];
+  if (!m) return `<span class="na">—</span>`;
+  const h = m.hausdorff.toExponential(2);
+  const c = m.chamfer.toExponential(2);
+  const th = ranges.hSpan > 0 ? (m.hausdorff - ranges.hMin) / ranges.hSpan : 0;
+  const tc = ranges.cSpan > 0 ? (m.chamfer   - ranges.cMin) / ranges.cSpan : 0;
+  let parts = `<span><span class="label">H</span><span class="val" style="color:${rankColor(th)};">${h}</span></span>`
+            + `<span><span class="label">C</span><span class="val" style="color:${rankColor(tc)};">${c}</span></span>`;
+  if (m.f1 != null) {
+    const f = m.f1.toFixed(3);
+    // F1: higher is better, so invert rank so best=green.
+    const tf = ranges.fSpan > 0 ? 1 - (m.f1 - ranges.fMin) / ranges.fSpan : 0;
+    parts += `<span><span class="label">F1</span><span class="val" style="color:${rankColor(tf)};">${f}</span></span>`;
+  }
+  return parts;
+}
+
+function rowRanges(model, n) {
+  let hMin = +Infinity, hMax = -Infinity, cMin = +Infinity, cMax = -Infinity;
+  let fMin = +Infinity, fMax = -Infinity;
+  for (const a of ALGOS) {
+    const m = METRICS?.[model]?.[a.key]?.[String(n)];
+    if (!m) continue;
+    if (m.hausdorff < hMin) hMin = m.hausdorff;
+    if (m.hausdorff > hMax) hMax = m.hausdorff;
+    if (m.chamfer   < cMin) cMin = m.chamfer;
+    if (m.chamfer   > cMax) cMax = m.chamfer;
+    if (m.f1 != null) {
+      if (m.f1 < fMin) fMin = m.f1;
+      if (m.f1 > fMax) fMax = m.f1;
+    }
+  }
+  return {
+    hMin, hMax, cMin, cMax, fMin, fMax,
+    hSpan: hMax - hMin, cSpan: cMax - cMin,
+    fSpan: (fMax > -Infinity) ? fMax - fMin : 0,
+  };
+}
+const ALGOS = [
+  { key: 'interpolation', label: 'interpolation (ours)',
+    path: (m,n) => [
+      `out/${m}/interpolant_${n}_15_noShortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
+      `out/${m}/interpolant_${n}_13_noShortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
+    ] },
+  { key: 'mes',           label: 'MES',
+    path: (m,n) => `out/${m}/mes_${n}.obj` },
+  { key: 'rfta',          label: 'RFTA',
+    path: (m,n) => `out/${m}/rfta_${n}.obj` },
+  { key: 'mc',            label: 'marching cubes',
+    path: (m,n) => `out/${m}/sample_points_${n}.obj` },
+];
+
+// Shared single WebGL renderer for all cells.
+const canvas = document.getElementById('renderCanvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setScissorTest(true);
+renderer.setClearColor(0x000000, 0);  // transparent — cell background shows through
+
+function resizeRenderer() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  renderer.setSize(w, h, false);
+}
+resizeRenderer();
+window.addEventListener('resize', resizeRenderer);
+
+const loader = new OBJLoader();
+const objCache = new Map();
+const cells = [];
+
+function loadObj(urls) {
+  const list = Array.isArray(urls) ? urls : [urls];
+  const key = list.join('|');
+  if (objCache.has(key)) return objCache.get(key);
+  const tryNext = (i) => {
+    if (i >= list.length) return Promise.reject(new Error('no candidate found'));
+    return new Promise((resolve, reject) => { loader.load(list[i], resolve, undefined, reject); })
+      .catch(() => tryNext(i + 1));
+  };
+  const p = tryNext(0);
+  objCache.set(key, p);
+  return p;
+}
+
+let syncing = false;
+function makeCell(div, url) {
+  const scene = new THREE.Scene();
+  scene.background = null;
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+  camera.position.set(1.6, 1.2, 1.8);
+
+  scene.add(new THREE.HemisphereLight(0xbcd2ff, 0x2a2e38, 0.8));
+  const key = new THREE.DirectionalLight(0xffffff, 1.1);
+  key.position.set(2, 3, 2);
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0x6aa6ff, 0.5);
+  rim.position.set(-3, 1, -2);
+  scene.add(rim);
+
+  // OrbitControls needs a DOM element for input. Attach to the cell div.
+  const controls = new OrbitControls(camera, div);
+  controls.enableDamping = true;
+
+  div.addEventListener('pointerdown', () => div.classList.add('grabbing'));
+  window.addEventListener('pointerup',   () => div.classList.remove('grabbing'));
+
+  const cell = { div, scene, camera, controls, url, mesh:null };
+  cells.push(cell);
+
+  controls.addEventListener('change', () => {
+    if (syncing) return;
+    if (!document.getElementById('syncCams').checked) return;
+    syncing = true;
+    for (const c of cells) {
+      if (c === cell) continue;
+      c.camera.position.copy(camera.position);
+      c.camera.quaternion.copy(camera.quaternion);
+      c.controls.target.copy(controls.target);
+      c.controls.update();
+    }
+    syncing = false;
+  });
+
+  loadObj(url).then(obj => {
+    const mat = new THREE.MeshStandardMaterial({
+      color:0xd7dbe3, metalness:0.15, roughness:0.55, flatShading:true, side:THREE.DoubleSide });
+    obj.traverse(o => { if (o.isMesh) o.material = mat; });
+
+    const box = new THREE.Box3().setFromObject(obj);
+    const size = new THREE.Vector3(); box.getSize(size);
+    const center = new THREE.Vector3(); box.getCenter(center);
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+
+    // Put bbox-centered mesh inside a wrapper: wrapper handles uniform scale
+    // + any display-only rotation, so everything rotates around world origin.
+    obj.position.sub(center);
+    const wrap = new THREE.Group();
+    wrap.add(obj);
+    wrap.scale.setScalar(1.0 / maxDim);
+
+    scene.add(wrap);
+    cell.mesh = wrap;
+  }).catch(err => {
+    const span = document.createElement('div');
+    span.className = 'missing';
+    span.textContent = 'err: ' + (err && err.message ? err.message : String(err)).slice(0,80);
+    span.title = (Array.isArray(url) ? url.join('\n') : url) + '\n' + (err && err.stack ? err.stack : '');
+    div.appendChild(span);
+    console.warn('failed', url, err);
+  });
+
+  return cell;
+}
+
+function buildTable(model) {
+  // Remove old cells (controls must be disposed so pointer listeners are removed).
+  for (const c of cells) c.controls.dispose();
+  cells.length = 0;
+  objCache.clear();
+
+  // Rebuild GT cell
+  const gtCellDiv = document.getElementById('gtCell');
+  gtCellDiv.innerHTML = '';
+  document.getElementById('gtName').textContent = model;
+  const gtCell = makeCell(gtCellDiv, `examples/${model}.obj`);
+  gtCell.isGt = true;
+
+  const mount = document.getElementById('grid');
+  mount.innerHTML = '';
+
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  hr.appendChild(document.createElement('th'));
+  for (const a of ALGOS) {
+    const th = document.createElement('th'); th.textContent = a.label; hr.appendChild(th);
+  }
+  thead.appendChild(hr); table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (const n of SAMPLES) {
+    const tr = document.createElement('tr');
+    const th = document.createElement('th');
+    th.className = 'rowlabel';
+    th.innerHTML = `N&nbsp;=&nbsp;<span class="n">${n}</span>`;
+    tr.appendChild(th);
+    const ranges = rowRanges(model, n);
+    for (const a of ALGOS) {
+      const td = document.createElement('td');
+      const wrap = document.createElement('div');
+      wrap.className = 'cellwrap';
+      const div = document.createElement('div');
+      div.className = 'cell';
+      const metrics = document.createElement('div');
+      metrics.className = 'metrics';
+      metrics.innerHTML = fmtMetrics(model, a.key, n, ranges);
+      wrap.appendChild(div);
+      wrap.appendChild(metrics);
+      td.appendChild(wrap);
+      tr.appendChild(td);
+      makeCell(div, a.path(model, n));
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  mount.appendChild(table);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  // three.js setViewport/setScissor operate in CSS pixels and apply pixelRatio internally.
+  const canvasH = renderer.domElement.clientHeight;
+  const canvasW = renderer.domElement.clientWidth;
+
+  const gtHidden = document.getElementById('gtPanel').classList.contains('hidden');
+  const headerH = document.querySelector('.header').offsetHeight;
+
+  // Render grid cells first, then GT last so the GT panel is never occluded by
+  // a grid cell that happens to overlap it on screen.
+  const order = cells.slice().sort((a, b) => (a.isGt ? 1 : 0) - (b.isGt ? 1 : 0));
+
+  let gtClearedAlready = false;
+  for (const c of order) {
+    if (c.isGt && gtHidden) continue;
+
+    // Before drawing the GT cell, clear the entire GT panel rect so grid-cell
+    // pixels (which may overlap) stop leaking onto the panel chrome.
+    if (c.isGt && !gtClearedAlready) {
+      const pr = document.getElementById('gtPanel').getBoundingClientRect();
+      renderer.setScissor(pr.left, canvasH - pr.bottom, pr.width, pr.height);
+      renderer.clear(true, true, false);
+      gtClearedAlready = true;
+    }
+    const r = c.div.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > canvasH || r.right < 0 || r.left > canvasW) continue;
+    if (r.width === 0 || r.height === 0) continue;
+
+    // Clip grid cells so they don't draw over the sticky header. GT panel sits below header.
+    const topClip = c.isGt ? r.top : Math.max(r.top, headerH);
+    if (r.bottom <= topClip) continue;
+
+    // Viewport: full cell rect (so camera aspect matches cell shape).
+    const vpLeft   = r.left;
+    const vpBottom = canvasH - r.bottom;
+    const vpWidth  = r.width;
+    const vpHeight = r.height;
+
+    // Scissor: clipped to the part actually visible (below the header).
+    const scBottom = canvasH - r.bottom;
+    const scHeight = r.bottom - topClip;
+
+    c.camera.aspect = vpWidth / vpHeight;
+    c.camera.updateProjectionMatrix();
+    c.controls.update();
+
+    renderer.setViewport(vpLeft, vpBottom, vpWidth, vpHeight);
+    renderer.setScissor(vpLeft, scBottom, vpWidth, scHeight);
+    renderer.render(c.scene, c.camera);
+  }
+}
+animate();
+
+document.getElementById('model').addEventListener('change', e => buildTable(e.target.value));
+
+// Ground-truth panel toggle
+const gtPanel = document.getElementById('gtPanel');
+const showGtBtn = document.getElementById('showGt');
+document.getElementById('gtClose').addEventListener('click', () => {
+  gtPanel.classList.add('hidden');
+  showGtBtn.hidden = false;
+});
+showGtBtn.addEventListener('click', () => {
+  gtPanel.classList.remove('hidden');
+  showGtBtn.hidden = true;
+});
+
+// Drag to reposition the GT panel
+(function makeDraggable() {
+  const head = document.getElementById('gtHead');
+  let startX = 0, startY = 0, startLeft = 0, startTop = 0, dragging = false;
+  head.addEventListener('pointerdown', e => {
+    if (e.target.closest('.gt-close')) return;
+    dragging = true;
+    const r = gtPanel.getBoundingClientRect();
+    startX = e.clientX; startY = e.clientY;
+    startLeft = r.left; startTop = r.top;
+    gtPanel.style.right = 'auto';
+    gtPanel.style.left = r.left + 'px';
+    gtPanel.style.top  = r.top  + 'px';
+    head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const nx = Math.max(0, Math.min(window.innerWidth  - gtPanel.offsetWidth,  startLeft + (e.clientX - startX)));
+    const ny = Math.max(0, Math.min(window.innerHeight - gtPanel.offsetHeight, startTop  + (e.clientY - startY)));
+    gtPanel.style.left = nx + 'px';
+    gtPanel.style.top  = ny + 'px';
+  });
+  head.addEventListener('pointerup',   () => dragging = false);
+  head.addEventListener('pointercancel', () => dragging = false);
+})();
+
+buildTable('eiffel');
+</script>
+</body>
+</html>

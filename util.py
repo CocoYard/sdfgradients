@@ -76,36 +76,48 @@ def are_points_visible(points, sdf_points, sdf_values, epsilon=1e-8):
     
     return result
 
-def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=False):
+def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=False,
+                   n_samples: int = 100_000, f1_tau: float = 0.01):
     """
-    Compute and print Hausdorff and Chamfer distances between two meshes.
-    Parameters
-    ----------
-    recon : trimesh.Trimesh
-        The reconstructed mesh.
-    gt_mesh : trimesh.Trimesh
-        The ground truth mesh.
-    Returns
-    -------
-    hausdorff : float
-        The Hausdorff distance between the two meshes.
-    chamfer : float
-        The Chamfer distance between the two meshes.
+    Surface-sampled Hausdorff / Chamfer / F1 between two meshes.
+
+    Both meshes are uniformly sampled on their surface (n_samples points each);
+    distances are computed symmetrically between each sample set and the *other*
+    mesh's surface via an AABB tree. This is fair regardless of tessellation
+    density (vertex-only metrics penalise sparsely-sampled reconstructions
+    unfairly even when the surface is correct).
+
+    Hausdorff is the symmetric max (intentionally outlier-sensitive).
+    Chamfer is the L1 symmetric mean of the two directional means.
+    F1 uses threshold `f1_tau` on the unit-normalised scale.
     """
     import igl
+    recon_pts, _ = trimesh.sample.sample_surface(recon, n_samples)
+    gt_pts,    _ = trimesh.sample.sample_surface(gt_mesh, n_samples)
+
     gt_V = np.asarray(gt_mesh.vertices, dtype=np.float64)
     gt_F = np.asarray(gt_mesh.faces, dtype=np.int32)
     rc_V = np.asarray(recon.vertices, dtype=np.float64)
     rc_F = np.asarray(recon.faces, dtype=np.int32)
-    sqrD_r2g, _, _ = igl.point_mesh_squared_distance(rc_V, gt_V, gt_F)
-    sqrD_g2r, _, _ = igl.point_mesh_squared_distance(gt_V, rc_V, rc_F)
+
+    sqrD_r2g, _, _ = igl.point_mesh_squared_distance(
+        np.asarray(recon_pts, dtype=np.float64), gt_V, gt_F)
+    sqrD_g2r, _, _ = igl.point_mesh_squared_distance(
+        np.asarray(gt_pts, dtype=np.float64), rc_V, rc_F)
     d_r2g = np.sqrt(sqrD_r2g)
     d_g2r = np.sqrt(sqrD_g2r)
+
     hausdorff = max(d_r2g.max(), d_g2r.max())
     chamfer = (d_r2g.mean() + d_g2r.mean()) / 2
+
+    precision = float((d_r2g < f1_tau).mean())
+    recall    = float((d_g2r < f1_tau).mean())
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+
     if verbose:
-        print(f"  Hausdorff: {hausdorff:.6f}  Chamfer: {chamfer:.6f}")
-    return hausdorff, chamfer
+        print(f"  Hausdorff: {hausdorff:.6f}  Chamfer: {chamfer:.6f}  "
+              f"F1@{f1_tau}: {f1:.4f} (P={precision:.4f} R={recall:.4f})")
+    return hausdorff, chamfer, f1
 
 def _point_to_polylines_min_dist(points, polylines):
     """Min distance from each query point to the *segments* of polylines."""
