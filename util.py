@@ -87,7 +87,9 @@ def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=F
     density (vertex-only metrics penalise sparsely-sampled reconstructions
     unfairly even when the surface is correct).
 
-    Hausdorff is the symmetric max (intentionally outlier-sensitive).
+    Hausdorff is the symmetric max (intentionally outlier-sensitive), computed
+    from mesh vertices (not samples) so it is deterministic — for triangulated
+    surfaces in generic position the argmax lies on a vertex of one mesh.
     Chamfer is the L1 symmetric mean of the two directional means.
     F1 uses threshold `f1_tau` on the unit-normalised scale.
     """
@@ -107,7 +109,9 @@ def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=F
     d_r2g = np.sqrt(sqrD_r2g)
     d_g2r = np.sqrt(sqrD_g2r)
 
-    hausdorff = max(d_r2g.max(), d_g2r.max())
+    sqrD_rV2g, _, _ = igl.point_mesh_squared_distance(rc_V, gt_V, gt_F)
+    sqrD_gV2r, _, _ = igl.point_mesh_squared_distance(gt_V, rc_V, rc_F)
+    hausdorff = float(np.sqrt(max(sqrD_rV2g.max(), sqrD_gV2r.max())))
     chamfer = (d_r2g.mean() + d_g2r.mean()) / 2
 
     precision = float((d_r2g < f1_tau).mean())
