@@ -8,10 +8,10 @@ gpytoolbox_env/
 out/*
 !out/build_metrics.py
 !out/metrics.json
-!out/render_thumbs.py
 out?*
 test.py
 .DS_Store
+._*
 *.glb
 *.so
 misc

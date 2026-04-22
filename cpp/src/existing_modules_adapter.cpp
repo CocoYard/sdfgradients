@@ -3,6 +3,7 @@
 /// can call them without pybind11.
 
 #include "types.h"
+#include "full_compute_switch.h"
 #include <vector>
 #include <cmath>
 #include <cstring>
@@ -65,10 +66,18 @@ static constexpr double EPS    = 1e-14;
 static constexpr double EPS12  = 1e-12;
 static constexpr double EPS10  = 1e-10;
 
+// Limits controlled by FULL_COMPUTE_30CUBED in full_compute_switch.h.
+#ifdef FULL_COMPUTE_30CUBED
+static constexpr int MAX_CAPS      = 30000;
+static constexpr int MAX_ARCS      = 60000;
+static constexpr int MAX_INTERVALS = 30000;
+static constexpr int MAX_DEGEN_PTS = 10000;
+#else
 static constexpr int MAX_CAPS      = 512;
 static constexpr int MAX_ARCS      = 2048;
 static constexpr int MAX_INTERVALS = 512;
 static constexpr int MAX_DEGEN_PTS = 256;
+#endif
 
 // ── Tolerances ───────────────────────────────────────────────────
 struct Tolerances {
@@ -171,7 +180,11 @@ static bool compute_cap(Vec3 mc, double mr, Vec3 oc, double or_, int idx, Cap &o
 // will scan per sphere. Our per-sphere loop prunes dead caps aggressively, but
 // pathological cases (>30k neighbors, observed) would still waste time scanning
 // neighbors that contribute nothing. Kept as a safety net.
+#ifdef FULL_COMPUTE_30CUBED
+static constexpr int MAX_NEIGHBORS_SCANNED = INT_MAX;
+#else
 static constexpr int MAX_NEIGHBORS_SCANNED = 2048;
+#endif
 
 static inline Vec3 point_on_circle(const Cap &cap, double t) {
     return cap.circle_center + cap.circle_radius * (std::cos(t) * cap.local_u + std::sin(t) * cap.local_v);

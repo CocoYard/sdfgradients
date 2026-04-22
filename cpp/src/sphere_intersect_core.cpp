@@ -15,6 +15,8 @@
 #include <omp.h>
 #endif
 
+#include "full_compute_switch.h"
+
 namespace sphere_intersect_core {
 
 struct BVHNode {
@@ -165,7 +167,11 @@ void find_intersections(const double* centers, const double* radii, int n,
     // Doing arrangement on the full `buf` before truncation keeps the curated
     // picks exact; doing truncation in the same loop keeps peak RSS at the
     // truncated size (critical for N in the millions).
+#ifdef FULL_COMPUTE_30CUBED
+    constexpr int MAX_KEEP    = std::numeric_limits<int>::max();
+#else
     constexpr int MAX_KEEP    = 2048;
+#endif
     constexpr int NEAREST     = 256;
     constexpr int TOP_LARGEST = 64;
     std::vector<float> absr(n);

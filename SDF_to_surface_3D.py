@@ -131,6 +131,7 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False ):
         import os
         os.makedirs('normalized_examples', exist_ok=True)
         mesh.export(f'normalized_examples/{outbase}.obj')
+        print(f"Saved normalized mesh to normalized_examples/{outbase}.obj")
 
     return mesh, points, distances, gradients
 
@@ -532,7 +533,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     extent = (bbox_max - bbox_min).max()
     hint_spacing = extent / max(options.grid_len - 1, 1)
     target_cells_per_hint = 4
-    resolution = int(np.clip(np.ceil(extent / (hint_spacing / target_cells_per_hint)), 64, 256))
+    resolution = int(np.clip(np.ceil(extent / (hint_spacing / target_cells_per_hint)), 64, 512))
 
     if use_cpp:
         result.interpolator.verbose = options.verbose
@@ -683,7 +684,7 @@ def test_our_method(options : Options, save_gtmesh=False):
 def check_mesh_error(dir_to_meshes, path_to_gt):
     """ Compute the mesh distance (Hausdorff and Chamfer) between meshes in dir_to_meshes and the ground truth mesh at path_to_gt. """
     import trimesh, os
-    gt_mesh = trimesh.load(path_to_gt)
+    gt_mesh = trimesh.load(path_to_gt, force='mesh')
     # Normalize the mesh to fit within a unit cube
     min = np.min( gt_mesh.vertices, axis=0 )
     max = np.max( gt_mesh.vertices, axis=0 )
@@ -695,7 +696,7 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
     print(f"{os.path.basename(dir_to_meshes):<30}")
     for mesh_file in meshes:
         if mesh_file.endswith('.obj'):
-            mesh = trimesh.load(os.path.join(dir_to_meshes, mesh_file))
+            mesh = trimesh.load(os.path.join(dir_to_meshes, mesh_file), force='mesh')
             haus, chamfer, f1 = mesh_distances(mesh, gt_mesh)
             print(f"{mesh_file:<50} against ground truth...", end='')
             print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}  F1: {f1:.4f}")

@@ -52,12 +52,23 @@ void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& value
     KDTree3D tree(points);
     std::vector<bool> keep(n, true);
 
-    for (int i = 0; i < n; i++) {
+    // Process non-zero-valued points first so they survive over zero-valued
+    // duplicates (zero values come from projection and are less trustworthy).
+    std::vector<int> order(n);
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        bool za = values(a) == 0.0;
+        bool zb = values(b) == 0.0;
+        if (za != zb) return !za;
+        return a < b;
+    });
+
+    for (int i : order) {
         if (!keep[i]) continue;
         Eigen::Vector3d pt = points.row(i);
         auto neighbors = tree.query_ball_point(pt, tol);
         for (int j : neighbors) {
-            if (j > i) keep[j] = false;
+            if (j != i && keep[j]) keep[j] = false;
         }
     }
 
