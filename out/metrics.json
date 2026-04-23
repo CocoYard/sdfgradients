@@ -1,4 +1,1022 @@
 {
+  "93366_sf": {
+    "interpolation": {
+      "10": {
+        "chamfer": 0.0119943,
+        "f1": 0.5689,
+        "hausdorff": 0.09425
+      },
+      "100": {
+        "chamfer": 0.000299,
+        "f1": 1.0,
+        "hausdorff": 0.00928
+      },
+      "20": {
+        "chamfer": 0.0057574,
+        "f1": 0.7972,
+        "hausdorff": 0.0529
+      },
+      "30": {
+        "chamfer": 0.0035659,
+        "f1": 0.8972,
+        "hausdorff": 0.03937
+      },
+      "40": {
+        "chamfer": 0.0029794,
+        "f1": 0.9212,
+        "hausdorff": 0.03074
+      },
+      "50": {
+        "chamfer": 0.0016926,
+        "f1": 0.9789,
+        "hausdorff": 0.02183
+      },
+      "75": {
+        "chamfer": 0.0005192,
+        "f1": 0.9999,
+        "hausdorff": 0.01305
+      }
+    },
+    "mc": {
+      "10": {
+        "chamfer": 0.0790884,
+        "f1": 0.1537,
+        "hausdorff": 0.4576
+      },
+      "100": {
+        "chamfer": 0.0010469,
+        "f1": 0.9966,
+        "hausdorff": 0.02293
+      },
+      "20": {
+        "chamfer": 0.0153703,
+        "f1": 0.5207,
+        "hausdorff": 0.13676
+      },
+      "30": {
+        "chamfer": 0.012231,
+        "f1": 0.637,
+        "hausdorff": 0.19075
+      },
+      "40": {
+        "chamfer": 0.0066792,
+        "f1": 0.7663,
+        "hausdorff": 0.06649
+      },
+      "50": {
+        "chamfer": 0.0055837,
+        "f1": 0.8214,
+        "hausdorff": 0.07888
+      },
+      "75": {
+        "chamfer": 0.002314,
+        "f1": 0.9735,
+        "hausdorff": 0.0519
+      }
+    },
+    "mes": {
+      "10": {
+        "chamfer": 0.0215552,
+        "f1": 0.324,
+        "hausdorff": 0.13023
+      },
+      "100": {
+        "chamfer": 0.0009771,
+        "f1": 0.9996,
+        "hausdorff": 0.01789
+      },
+      "20": {
+        "chamfer": 0.0092067,
+        "f1": 0.6508,
+        "hausdorff": 0.06726
+      },
+      "30": {
+        "chamfer": 0.0056887,
+        "f1": 0.8041,
+        "hausdorff": 0.0471
+      },
+      "40": {
+        "chamfer": 0.0038764,
+        "f1": 0.8993,
+        "hausdorff": 0.04065
+      },
+      "50": {
+        "chamfer": 0.0029935,
+        "f1": 0.9334,
+        "hausdorff": 0.03553
+      },
+      "75": {
+        "chamfer": 0.001468,
+        "f1": 0.9933,
+        "hausdorff": 0.02551
+      }
+    },
+    "rfta": {
+      "10": {
+        "chamfer": 0.0166583,
+        "f1": 0.4244,
+        "hausdorff": 0.0948
+      },
+      "100": {
+        "chamfer": 0.0012537,
+        "f1": 0.993,
+        "hausdorff": 0.03112
+      },
+      "20": {
+        "chamfer": 0.0068806,
+        "f1": 0.7462,
+        "hausdorff": 0.0591
+      },
+      "30": {
+        "chamfer": 0.0045281,
+        "f1": 0.8612,
+        "hausdorff": 0.04179
+      },
+      "40": {
+        "chamfer": 0.003547,
+        "f1": 0.9153,
+        "hausdorff": 0.03954
+      },
+      "50": {
+        "chamfer": 0.0030141,
+        "f1": 0.9282,
+        "hausdorff": 0.03675
+      },
+      "75": {
+        "chamfer": 0.0016516,
+        "f1": 0.9884,
+        "hausdorff": 0.0245
+      }
+    }
+  },
+  "_examples": {
+    "00000002_001": "examples/abc/00000002_001.obj",
+    "00000003_002": "examples/abc/00000003_002.obj",
+    "00000004_003": "examples/abc/00000004_003.obj",
+    "00000005_000": "examples/abc/00000005_000.obj",
+    "00000006_001": "examples/abc/00000006_001.obj",
+    "00000007_000": "examples/abc/00000007_000.obj",
+    "00000008_000": "examples/abc/00000008_000.obj",
+    "00000009_001": "examples/abc/00000009_001.obj",
+    "00000010_000": "examples/abc/00000010_000.obj",
+    "00000015_000": "examples/abc/00000015_000.obj",
+    "00000016_001": "examples/abc/00000016_001.obj",
+    "00000017_000": "examples/abc/00000017_000.obj",
+    "00000018_001": "examples/abc/00000018_001.obj",
+    "00000019_002": "examples/abc/00000019_002.obj",
+    "00000020_000": "examples/abc/00000020_000.obj",
+    "00000022_002": "examples/abc/00000022_002.obj",
+    "00000026_006": "examples/abc/00000026_006.obj",
+    "00000027_007": "examples/abc/00000027_007.obj",
+    "00000028_008": "examples/abc/00000028_008.obj",
+    "00000029_009": "examples/abc/00000029_009.obj",
+    "00000030_010": "examples/abc/00000030_010.obj",
+    "00000031_011": "examples/abc/00000031_011.obj",
+    "00000032_012": "examples/abc/00000032_012.obj",
+    "00000034_014": "examples/abc/00000034_014.obj",
+    "00000036_000": "examples/abc/00000036_000.obj",
+    "00000037_000": "examples/abc/00000037_000.obj",
+    "00000042_005": "examples/abc/00000042_005.obj",
+    "00000043_006": "examples/abc/00000043_006.obj",
+    "00000047_001": "examples/abc/00000047_001.obj",
+    "00000049_000": "examples/abc/00000049_000.obj",
+    "00000050_000": "examples/abc/00000050_000.obj",
+    "00000053_002": "examples/abc/00000053_002.obj",
+    "00000054_003": "examples/abc/00000054_003.obj",
+    "00000057_006": "examples/abc/00000057_006.obj",
+    "00000058_007": "examples/abc/00000058_007.obj",
+    "00000059_000": "examples/abc/00000059_000.obj",
+    "00000060_001": "examples/abc/00000060_001.obj",
+    "00000061_002": "examples/abc/00000061_002.obj",
+    "00000062_003": "examples/abc/00000062_003.obj",
+    "00000063_004": "examples/abc/00000063_004.obj",
+    "00000065_006": "examples/abc/00000065_006.obj",
+    "00000066_007": "examples/abc/00000066_007.obj",
+    "00000067_008": "examples/abc/00000067_008.obj",
+    "00000068_009": "examples/abc/00000068_009.obj",
+    "00000069_010": "examples/abc/00000069_010.obj",
+    "00000070_011": "examples/abc/00000070_011.obj",
+    "00000071_012": "examples/abc/00000071_012.obj",
+    "00000072_013": "examples/abc/00000072_013.obj",
+    "00000073_014": "examples/abc/00000073_014.obj",
+    "00000074_015": "examples/abc/00000074_015.obj",
+    "00000075_016": "examples/abc/00000075_016.obj",
+    "00000076_017": "examples/abc/00000076_017.obj",
+    "00000077_018": "examples/abc/00000077_018.obj",
+    "00000078_019": "examples/abc/00000078_019.obj",
+    "00000079_020": "examples/abc/00000079_020.obj",
+    "00000080_000": "examples/abc/00000080_000.obj",
+    "00000081_000": "examples/abc/00000081_000.obj",
+    "00000088_000": "examples/abc/00000088_000.obj",
+    "00000089_001": "examples/abc/00000089_001.obj",
+    "00000090_002": "examples/abc/00000090_002.obj",
+    "00000091_003": "examples/abc/00000091_003.obj",
+    "00000093_005": "examples/abc/00000093_005.obj",
+    "00000098_000": "examples/abc/00000098_000.obj",
+    "00000100_000": "examples/abc/00000100_000.obj",
+    "00000102_002": "examples/abc/00000102_002.obj",
+    "00000103_000": "examples/abc/00000103_000.obj",
+    "00000104_001": "examples/abc/00000104_001.obj",
+    "00000105_002": "examples/abc/00000105_002.obj",
+    "00000106_003": "examples/abc/00000106_003.obj",
+    "00000107_000": "examples/abc/00000107_000.obj",
+    "00000110_002": "examples/abc/00000110_002.obj",
+    "00000111_003": "examples/abc/00000111_003.obj",
+    "00000112_004": "examples/abc/00000112_004.obj",
+    "00000113_005": "examples/abc/00000113_005.obj",
+    "00000114_006": "examples/abc/00000114_006.obj",
+    "00000115_007": "examples/abc/00000115_007.obj",
+    "00000116_008": "examples/abc/00000116_008.obj",
+    "00000117_009": "examples/abc/00000117_009.obj",
+    "00000118_010": "examples/abc/00000118_010.obj",
+    "00000119_011": "examples/abc/00000119_011.obj",
+    "00000120_012": "examples/abc/00000120_012.obj",
+    "00000121_000": "examples/abc/00000121_000.obj",
+    "00000123_000": "examples/abc/00000123_000.obj",
+    "00000124_000": "examples/abc/00000124_000.obj",
+    "00000125_000": "examples/abc/00000125_000.obj",
+    "00000126_001": "examples/abc/00000126_001.obj",
+    "00000127_002": "examples/abc/00000127_002.obj",
+    "00000128_003": "examples/abc/00000128_003.obj",
+    "00000129_004": "examples/abc/00000129_004.obj",
+    "00000130_005": "examples/abc/00000130_005.obj",
+    "00000131_000": "examples/abc/00000131_000.obj",
+    "00000132_000": "examples/abc/00000132_000.obj",
+    "00000133_000": "examples/abc/00000133_000.obj",
+    "00000134_000": "examples/abc/00000134_000.obj",
+    "00000135_000": "examples/abc/00000135_000.obj",
+    "00000136_001": "examples/abc/00000136_001.obj",
+    "00000137_000": "examples/abc/00000137_000.obj",
+    "00000138_001": "examples/abc/00000138_001.obj",
+    "00000139_002": "examples/abc/00000139_002.obj",
+    "00000140_003": "examples/abc/00000140_003.obj",
+    "93366_sf": "examples/93366_sf.obj",
+    "alligator": "examples/common3d/alligator.obj",
+    "archer": "examples/archer.obj",
+    "armadillo": "examples/common3d/armadillo.obj",
+    "beast": "examples/common3d/beast.obj",
+    "beetle": "examples/common3d/beetle.obj",
+    "beetle-alt": "examples/common3d/beetle-alt.obj",
+    "bimba": "examples/common3d/bimba.obj",
+    "bunny": "examples/bunny.obj",
+    "cat-low-resolution": "examples/cat-low-resolution.obj",
+    "chair": "examples/chair.obj",
+    "cheburashka": "examples/common3d/cheburashka.obj",
+    "common3d__armadillo": "examples/benchmark/common3d__armadillo.obj",
+    "common3d__beast": "examples/benchmark/common3d__beast.obj",
+    "common3d__bimba": "examples/benchmark/common3d__bimba.obj",
+    "common3d__cheburashka": "examples/benchmark/common3d__cheburashka.obj",
+    "common3d__cow": "examples/benchmark/common3d__cow.obj",
+    "common3d__fandisk": "examples/benchmark/common3d__fandisk.obj",
+    "common3d__happy": "examples/benchmark/common3d__happy.obj",
+    "common3d__homer": "examples/benchmark/common3d__homer.obj",
+    "common3d__horse": "examples/benchmark/common3d__horse.obj",
+    "common3d__igea": "examples/benchmark/common3d__igea.obj",
+    "common3d__lucy": "examples/benchmark/common3d__lucy.obj",
+    "common3d__max-planck": "examples/benchmark/common3d__max-planck.obj",
+    "common3d__nefertiti": "examples/benchmark/common3d__nefertiti.obj",
+    "common3d__ogre": "examples/benchmark/common3d__ogre.obj",
+    "common3d__rocker-arm": "examples/benchmark/common3d__rocker-arm.obj",
+    "common3d__spot": "examples/benchmark/common3d__spot.obj",
+    "common3d__stanford-bunny": "examples/benchmark/common3d__stanford-bunny.obj",
+    "common3d__teapot": "examples/benchmark/common3d__teapot.obj",
+    "common3d__xyzrgb_dragon": "examples/benchmark/common3d__xyzrgb_dragon.obj",
+    "cow": "examples/common3d/cow.obj",
+    "denker": "examples/denker.obj",
+    "eiffel": "examples/eiffel.obj",
+    "fandisk": "examples/common3d/fandisk.obj",
+    "fertility": "examples/fertility.obj",
+    "happy": "examples/common3d/happy.obj",
+    "holes": "examples/holes.obj",
+    "homer": "examples/common3d/homer.obj",
+    "horse": "examples/horse.obj",
+    "igea": "examples/common3d/igea.obj",
+    "koala": "examples/koala.obj",
+    "loewe": "examples/loewe.obj",
+    "lucy": "examples/common3d/lucy.obj",
+    "max-planck": "examples/common3d/max-planck.obj",
+    "nefertiti": "examples/common3d/nefertiti.obj",
+    "ogre": "examples/common3d/ogre.obj",
+    "rings": "examples/rings.obj",
+    "rocker-arm": "examples/common3d/rocker-arm.obj",
+    "rossignol": "examples/rossignol.obj",
+    "spot": "examples/common3d/spot.obj",
+    "stanford-bunny": "examples/common3d/stanford-bunny.obj",
+    "suzanne": "examples/common3d/suzanne.obj",
+    "teapot": "examples/common3d/teapot.obj",
+    "thingi32__thingi_101634": "examples/benchmark/thingi32__thingi_101634.obj",
+    "thingi32__thingi_109729": "examples/benchmark/thingi32__thingi_109729.obj",
+    "thingi32__thingi_118678": "examples/benchmark/thingi32__thingi_118678.obj",
+    "thingi32__thingi_129789": "examples/benchmark/thingi32__thingi_129789.obj",
+    "thingi32__thingi_1312963": "examples/benchmark/thingi32__thingi_1312963.obj",
+    "thingi32__thingi_1501549": "examples/benchmark/thingi32__thingi_1501549.obj",
+    "thingi32__thingi_1592666": "examples/benchmark/thingi32__thingi_1592666.obj",
+    "thingi32__thingi_208732": "examples/benchmark/thingi32__thingi_208732.obj",
+    "thingi32__thingi_218731": "examples/benchmark/thingi32__thingi_218731.obj",
+    "thingi32__thingi_252614": "examples/benchmark/thingi32__thingi_252614.obj",
+    "thingi32__thingi_39442": "examples/benchmark/thingi32__thingi_39442.obj",
+    "thingi32__thingi_395055": "examples/benchmark/thingi32__thingi_395055.obj",
+    "thingi32__thingi_425345": "examples/benchmark/thingi32__thingi_425345.obj",
+    "thingi32__thingi_458129": "examples/benchmark/thingi32__thingi_458129.obj",
+    "thingi32__thingi_47096": "examples/benchmark/thingi32__thingi_47096.obj",
+    "thingi32__thingi_472083": "examples/benchmark/thingi32__thingi_472083.obj",
+    "thingi32__thingi_472134": "examples/benchmark/thingi32__thingi_472134.obj",
+    "thingi32__thingi_51637": "examples/benchmark/thingi32__thingi_51637.obj",
+    "thingi32__thingi_55352": "examples/benchmark/thingi32__thingi_55352.obj",
+    "thingi32__thingi_56498": "examples/benchmark/thingi32__thingi_56498.obj",
+    "thingi32__thingi_719790": "examples/benchmark/thingi32__thingi_719790.obj",
+    "thingi32__thingi_72347": "examples/benchmark/thingi32__thingi_72347.obj",
+    "thingi32__thingi_74600": "examples/benchmark/thingi32__thingi_74600.obj",
+    "thingi32__thingi_762604": "examples/benchmark/thingi32__thingi_762604.obj",
+    "thingi32__thingi_77013": "examples/benchmark/thingi32__thingi_77013.obj",
+    "thingi32__thingi_771610": "examples/benchmark/thingi32__thingi_771610.obj",
+    "thingi32__thingi_789073": "examples/benchmark/thingi32__thingi_789073.obj",
+    "thingi32__thingi_81265": "examples/benchmark/thingi32__thingi_81265.obj",
+    "thingi32__thingi_90442": "examples/benchmark/thingi32__thingi_90442.obj",
+    "thingi32__thingi_91339": "examples/benchmark/thingi32__thingi_91339.obj",
+    "thingi32__thingi_91351": "examples/benchmark/thingi32__thingi_91351.obj",
+    "thingi32__thingi_92421": "examples/benchmark/thingi32__thingi_92421.obj",
+    "thingi_101634": "examples/thingi32/thingi_101634.obj",
+    "thingi_109729": "examples/thingi32/thingi_109729.obj",
+    "thingi_118678": "examples/thingi32/thingi_118678.obj",
+    "thingi_129789": "examples/thingi32/thingi_129789.obj",
+    "thingi_1312963": "examples/thingi32/thingi_1312963.obj",
+    "thingi_1501549": "examples/thingi32/thingi_1501549.obj",
+    "thingi_1592666": "examples/thingi32/thingi_1592666.obj",
+    "thingi_208732": "examples/thingi32/thingi_208732.obj",
+    "thingi_218731": "examples/thingi32/thingi_218731.obj",
+    "thingi_252614": "examples/thingi32/thingi_252614.obj",
+    "thingi_39442": "examples/thingi32/thingi_39442.obj",
+    "thingi_395055": "examples/thingi32/thingi_395055.obj",
+    "thingi_425345": "examples/thingi32/thingi_425345.obj",
+    "thingi_458129": "examples/thingi32/thingi_458129.obj",
+    "thingi_47096": "examples/thingi32/thingi_47096.obj",
+    "thingi_472083": "examples/thingi32/thingi_472083.obj",
+    "thingi_472134": "examples/thingi32/thingi_472134.obj",
+    "thingi_51637": "examples/thingi32/thingi_51637.obj",
+    "thingi_55352": "examples/thingi32/thingi_55352.obj",
+    "thingi_56498": "examples/thingi32/thingi_56498.obj",
+    "thingi_719790": "examples/thingi32/thingi_719790.obj",
+    "thingi_72347": "examples/thingi32/thingi_72347.obj",
+    "thingi_74600": "examples/thingi32/thingi_74600.obj",
+    "thingi_762604": "examples/thingi32/thingi_762604.obj",
+    "thingi_77013": "examples/thingi32/thingi_77013.obj",
+    "thingi_771610": "examples/thingi32/thingi_771610.obj",
+    "thingi_789073": "examples/thingi32/thingi_789073.obj",
+    "thingi_81265": "examples/thingi32/thingi_81265.obj",
+    "thingi_90442": "examples/thingi32/thingi_90442.obj",
+    "thingi_91339": "examples/thingi32/thingi_91339.obj",
+    "thingi_91351": "examples/thingi32/thingi_91351.obj",
+    "thingi_92421": "examples/thingi32/thingi_92421.obj",
+    "woody": "examples/common3d/woody.obj",
+    "xyzrgb_dragon": "examples/common3d/xyzrgb_dragon.obj"
+  },
+  "_samples": {
+    "93366_sf": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      75,
+      100
+    ],
+    "cat-low-resolution": [
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "common3d__armadillo": [
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "common3d__cow": [
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "common3d__fandisk": [
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "common3d__igea": [
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "eiffel": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      35,
+      40,
+      45,
+      50,
+      75,
+      100
+    ],
+    "fandisk": [
+      10,
+      20
+    ],
+    "horse": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      35,
+      40,
+      45,
+      50,
+      75,
+      100
+    ],
+    "loewe": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      35,
+      40,
+      45,
+      50,
+      75,
+      100
+    ],
+    "thingi32__thingi_252614": [
+      10,
+      15,
+      20,
+      25,
+      30
+    ]
+  },
+  "cat-low-resolution": {
+    "interpolation": {
+      "10": {
+        "chamfer": 0.0051,
+        "f1": 0.843,
+        "hausdorff": 0.06759
+      },
+      "15": {
+        "chamfer": 0.0018066,
+        "f1": 0.9726,
+        "hausdorff": 0.03569
+      },
+      "20": {
+        "chamfer": 0.0011797,
+        "f1": 0.9878,
+        "hausdorff": 0.03406
+      },
+      "25": {
+        "chamfer": 0.0008146,
+        "f1": 0.9934,
+        "hausdorff": 0.02658
+      },
+      "30": {
+        "chamfer": 0.0005313,
+        "f1": 0.9991,
+        "hausdorff": 0.01576
+      }
+    },
+    "mc": {
+      "10": {
+        "chamfer": 0.0191413,
+        "f1": 0.4651,
+        "hausdorff": 0.21188
+      },
+      "15": {
+        "chamfer": 0.0101454,
+        "f1": 0.7356,
+        "hausdorff": 0.15346
+      },
+      "20": {
+        "chamfer": 0.0047334,
+        "f1": 0.884,
+        "hausdorff": 0.07835
+      },
+      "25": {
+        "chamfer": 0.0034005,
+        "f1": 0.9359,
+        "hausdorff": 0.05326
+      },
+      "30": {
+        "chamfer": 0.0021433,
+        "f1": 0.9785,
+        "hausdorff": 0.03998
+      }
+    },
+    "mes": {
+      "10": {
+        "chamfer": 0.0091475,
+        "f1": 0.7064,
+        "hausdorff": 0.10311
+      },
+      "15": {
+        "chamfer": 0.003826,
+        "f1": 0.8962,
+        "hausdorff": 0.05322
+      },
+      "20": {
+        "chamfer": 0.0020357,
+        "f1": 0.9685,
+        "hausdorff": 0.03565
+      },
+      "25": {
+        "chamfer": 0.0012784,
+        "f1": 0.9857,
+        "hausdorff": 0.03438
+      },
+      "30": {
+        "chamfer": 0.0008679,
+        "f1": 0.9939,
+        "hausdorff": 0.02922
+      }
+    },
+    "rfta": {
+      "10": {
+        "chamfer": 0.0092826,
+        "f1": 0.6874,
+        "hausdorff": 0.09288
+      },
+      "15": {
+        "chamfer": 0.004261,
+        "f1": 0.8759,
+        "hausdorff": 0.06508
+      },
+      "20": {
+        "chamfer": 0.0022301,
+        "f1": 0.9561,
+        "hausdorff": 0.03711
+      },
+      "25": {
+        "chamfer": 0.0013662,
+        "f1": 0.9841,
+        "hausdorff": 0.03477
+      },
+      "30": {
+        "chamfer": 0.0009546,
+        "f1": 0.9946,
+        "hausdorff": 0.03174
+      }
+    }
+  },
+  "common3d__armadillo": {
+    "interpolation": {
+      "10": {
+        "chamfer": 0.0065862,
+        "f1": 0.7811,
+        "hausdorff": 0.06824
+      },
+      "15": {
+        "chamfer": 0.0034602,
+        "f1": 0.9273,
+        "hausdorff": 0.03936
+      },
+      "20": {
+        "chamfer": 0.0022464,
+        "f1": 0.9786,
+        "hausdorff": 0.03226
+      },
+      "25": {
+        "chamfer": 0.0016852,
+        "f1": 0.9914,
+        "hausdorff": 0.03089
+      },
+      "30": {
+        "chamfer": 0.0013654,
+        "f1": 0.9945,
+        "hausdorff": 0.02411
+      }
+    },
+    "mc": {
+      "10": {
+        "chamfer": 0.0224349,
+        "f1": 0.3507,
+        "hausdorff": 0.24939
+      },
+      "15": {
+        "chamfer": 0.0116104,
+        "f1": 0.626,
+        "hausdorff": 0.14669
+      },
+      "20": {
+        "chamfer": 0.0064141,
+        "f1": 0.8296,
+        "hausdorff": 0.0942
+      },
+      "25": {
+        "chamfer": 0.0051237,
+        "f1": 0.9042,
+        "hausdorff": 0.10591
+      },
+      "30": {
+        "chamfer": 0.0033023,
+        "f1": 0.9524,
+        "hausdorff": 0.04811
+      }
+    },
+    "mes": {
+      "10": {
+        "chamfer": 0.0111807,
+        "f1": 0.5842,
+        "hausdorff": 0.07898
+      },
+      "15": {
+        "chamfer": 0.006064,
+        "f1": 0.7873,
+        "hausdorff": 0.04777
+      },
+      "20": {
+        "chamfer": 0.0033783,
+        "f1": 0.9331,
+        "hausdorff": 0.02866
+      },
+      "25": {
+        "chamfer": 0.0025523,
+        "f1": 0.9664,
+        "hausdorff": 0.02755
+      },
+      "30": {
+        "chamfer": 0.0018596,
+        "f1": 0.9853,
+        "hausdorff": 0.02213
+      }
+    },
+    "rfta": {
+      "10": {
+        "chamfer": 0.0139505,
+        "f1": 0.5321,
+        "hausdorff": 0.11002
+      },
+      "15": {
+        "chamfer": 0.0056479,
+        "f1": 0.8091,
+        "hausdorff": 0.05354
+      },
+      "20": {
+        "chamfer": 0.0034754,
+        "f1": 0.9285,
+        "hausdorff": 0.04094
+      },
+      "25": {
+        "chamfer": 0.0023799,
+        "f1": 0.9715,
+        "hausdorff": 0.02429
+      },
+      "30": {
+        "chamfer": 0.0019388,
+        "f1": 0.9849,
+        "hausdorff": 0.02542
+      }
+    }
+  },
+  "common3d__cow": {
+    "interpolation": {
+      "10": {
+        "chamfer": 0.0074815,
+        "f1": 0.7517,
+        "hausdorff": 0.08423
+      },
+      "15": {
+        "chamfer": 0.0023149,
+        "f1": 0.9577,
+        "hausdorff": 0.03172
+      },
+      "20": {
+        "chamfer": 0.0014193,
+        "f1": 0.9831,
+        "hausdorff": 0.04026
+      },
+      "25": {
+        "chamfer": 0.0009448,
+        "f1": 0.995,
+        "hausdorff": 0.0288
+      },
+      "30": {
+        "chamfer": 0.0007896,
+        "f1": 0.9944,
+        "hausdorff": 0.02616
+      }
+    },
+    "mc": {
+      "10": {
+        "chamfer": 0.0156159,
+        "f1": 0.5616,
+        "hausdorff": 0.1971
+      },
+      "15": {
+        "chamfer": 0.0069689,
+        "f1": 0.8419,
+        "hausdorff": 0.11892
+      },
+      "20": {
+        "chamfer": 0.0048388,
+        "f1": 0.9018,
+        "hausdorff": 0.09089
+      },
+      "25": {
+        "chamfer": 0.0037393,
+        "f1": 0.9219,
+        "hausdorff": 0.08847
+      },
+      "30": {
+        "chamfer": 0.0024351,
+        "f1": 0.9606,
+        "hausdorff": 0.0659
+      }
+    },
+    "mes": {
+      "10": {
+        "chamfer": 0.0086889,
+        "f1": 0.7224,
+        "hausdorff": 0.06918
+      },
+      "15": {
+        "chamfer": 0.0037981,
+        "f1": 0.898,
+        "hausdorff": 0.0395
+      },
+      "20": {
+        "chamfer": 0.0025434,
+        "f1": 0.9449,
+        "hausdorff": 0.03544
+      },
+      "25": {
+        "chamfer": 0.0015078,
+        "f1": 0.9824,
+        "hausdorff": 0.03003
+      },
+      "30": {
+        "chamfer": 0.0011243,
+        "f1": 0.9867,
+        "hausdorff": 0.02245
+      }
+    },
+    "rfta": {
+      "10": {
+        "chamfer": 0.0086319,
+        "f1": 0.7189,
+        "hausdorff": 0.08249
+      },
+      "15": {
+        "chamfer": 0.0041266,
+        "f1": 0.8809,
+        "hausdorff": 0.04711
+      },
+      "20": {
+        "chamfer": 0.0022162,
+        "f1": 0.9637,
+        "hausdorff": 0.02682
+      },
+      "25": {
+        "chamfer": 0.0014594,
+        "f1": 0.9833,
+        "hausdorff": 0.02324
+      },
+      "30": {
+        "chamfer": 0.0011154,
+        "f1": 0.9902,
+        "hausdorff": 0.02136
+      }
+    }
+  },
+  "common3d__fandisk": {
+    "interpolation": {
+      "10": {
+        "chamfer": 0.0047334,
+        "f1": 0.8718,
+        "hausdorff": 0.06736
+      },
+      "15": {
+        "chamfer": 0.0020222,
+        "f1": 0.9696,
+        "hausdorff": 0.04105
+      },
+      "20": {
+        "chamfer": 0.000957,
+        "f1": 0.9951,
+        "hausdorff": 0.0204
+      },
+      "25": {
+        "chamfer": 0.0005815,
+        "f1": 0.9994,
+        "hausdorff": 0.01724
+      },
+      "30": {
+        "chamfer": 0.0004191,
+        "f1": 0.9998,
+        "hausdorff": 0.01505
+      }
+    },
+    "mc": {
+      "10": {
+        "chamfer": 0.0132614,
+        "f1": 0.501,
+        "hausdorff": 0.09974
+      },
+      "15": {
+        "chamfer": 0.0072549,
+        "f1": 0.7174,
+        "hausdorff": 0.07303
+      },
+      "20": {
+        "chamfer": 0.0032168,
+        "f1": 0.8872,
+        "hausdorff": 0.0435
+      },
+      "25": {
+        "chamfer": 0.0026927,
+        "f1": 0.9116,
+        "hausdorff": 0.0405
+      },
+      "30": {
+        "chamfer": 0.0016812,
+        "f1": 0.9605,
+        "hausdorff": 0.02611
+      }
+    },
+    "mes": {
+      "10": {
+        "chamfer": 0.01347,
+        "f1": 0.5297,
+        "hausdorff": 0.05782
+      },
+      "15": {
+        "chamfer": 0.0061225,
+        "f1": 0.761,
+        "hausdorff": 0.04057
+      },
+      "20": {
+        "chamfer": 0.003966,
+        "f1": 0.8612,
+        "hausdorff": 0.03157
+      },
+      "25": {
+        "chamfer": 0.0025959,
+        "f1": 0.9626,
+        "hausdorff": 0.02805
+      },
+      "30": {
+        "chamfer": 0.0020838,
+        "f1": 0.9855,
+        "hausdorff": 0.01918
+      }
+    },
+    "rfta": {
+      "10": {
+        "chamfer": 0.0099436,
+        "f1": 0.6425,
+        "hausdorff": 0.09107
+      },
+      "15": {
+        "chamfer": 0.0044206,
+        "f1": 0.8898,
+        "hausdorff": 0.07379
+      },
+      "20": {
+        "chamfer": 0.0021129,
+        "f1": 0.9749,
+        "hausdorff": 0.05621
+      },
+      "25": {
+        "chamfer": 0.001503,
+        "f1": 0.9918,
+        "hausdorff": 0.0274
+      },
+      "30": {
+        "chamfer": 0.0009964,
+        "f1": 0.9978,
+        "hausdorff": 0.02258
+      }
+    }
+  },
+  "common3d__igea": {
+    "interpolation": {
+      "10": {
+        "chamfer": 0.0032837,
+        "f1": 0.9278,
+        "hausdorff": 0.05359
+      },
+      "15": {
+        "chamfer": 0.0016333,
+        "f1": 0.9874,
+        "hausdorff": 0.02925
+      },
+      "20": {
+        "chamfer": 0.0010201,
+        "f1": 0.9988,
+        "hausdorff": 0.01506
+      },
+      "25": {
+        "chamfer": 0.000743,
+        "f1": 0.9996,
+        "hausdorff": 0.0161
+      },
+      "30": {
+        "chamfer": 0.000533,
+        "f1": 0.9999,
+        "hausdorff": 0.01265
+      }
+    },
+    "mc": {
+      "10": {
+        "chamfer": 0.00876,
+        "f1": 0.6834,
+        "hausdorff": 0.0558
+      },
+      "15": {
+        "chamfer": 0.0045999,
+        "f1": 0.9036,
+        "hausdorff": 0.04557
+      },
+      "20": {
+        "chamfer": 0.0028858,
+        "f1": 0.9654,
+        "hausdorff": 0.0382
+      },
+      "25": {
+        "chamfer": 0.0020946,
+        "f1": 0.9843,
+        "hausdorff": 0.02957
+      },
+      "30": {
+        "chamfer": 0.0015968,
+        "f1": 0.9947,
+        "hausdorff": 0.02487
+      }
+    },
+    "mes": {
+      "10": {
+        "chamfer": 0.0042487,
+        "f1": 0.8937,
+        "hausdorff": 0.05707
+      },
+      "15": {
+        "chamfer": 0.0021667,
+        "f1": 0.9763,
+        "hausdorff": 0.03734
+      },
+      "20": {
+        "chamfer": 0.00136,
+        "f1": 0.9946,
+        "hausdorff": 0.02489
+      },
+      "25": {
+        "chamfer": 0.0009,
+        "f1": 0.9991,
+        "hausdorff": 0.01801
+      },
+      "30": {
+        "chamfer": 0.0006442,
+        "f1": 0.9997,
+        "hausdorff": 0.01259
+      }
+    },
+    "rfta": {
+      "10": {
+        "chamfer": 0.0045395,
+        "f1": 0.8802,
+        "hausdorff": 0.08017
+      },
+      "15": {
+        "chamfer": 0.0022058,
+        "f1": 0.9748,
+        "hausdorff": 0.04652
+      },
+      "20": {
+        "chamfer": 0.0014297,
+        "f1": 0.9929,
+        "hausdorff": 0.0348
+      },
+      "25": {
+        "chamfer": 0.000959,
+        "f1": 0.9987,
+        "hausdorff": 0.02543
+      },
+      "30": {
+        "chamfer": 0.0007306,
+        "f1": 0.9995,
+        "hausdorff": 0.01897
+      }
+    }
+  },
   "eiffel": {
     "interpolation": {
       "10": {
@@ -686,6 +1704,116 @@
         "chamfer": 0.0006231,
         "f1": 0.9993,
         "hausdorff": 0.02774
+      }
+    }
+  },
+  "thingi32__thingi_252614": {
+    "interpolation": {
+      "10": {
+        "chamfer": 0.0018428,
+        "f1": 0.9931,
+        "hausdorff": 0.01921
+      },
+      "15": {
+        "chamfer": 0.0009638,
+        "f1": 1.0,
+        "hausdorff": 0.00883
+      },
+      "20": {
+        "chamfer": 0.0008104,
+        "f1": 1.0,
+        "hausdorff": 0.009
+      },
+      "25": {
+        "chamfer": 0.0006439,
+        "f1": 1.0,
+        "hausdorff": 0.00716
+      },
+      "30": {
+        "chamfer": 0.000561,
+        "f1": 1.0,
+        "hausdorff": 0.00822
+      }
+    },
+    "mc": {
+      "10": {
+        "chamfer": 0.00472,
+        "f1": 0.9339,
+        "hausdorff": 0.11884
+      },
+      "15": {
+        "chamfer": 0.0027586,
+        "f1": 0.93,
+        "hausdorff": 0.03459
+      },
+      "20": {
+        "chamfer": 0.0012478,
+        "f1": 0.9818,
+        "hausdorff": 0.04311
+      },
+      "25": {
+        "chamfer": 0.0033171,
+        "f1": 0.9191,
+        "hausdorff": 0.04998
+      },
+      "30": {
+        "chamfer": 0.0008004,
+        "f1": 0.9927,
+        "hausdorff": 0.02364
+      }
+    },
+    "mes": {
+      "10": {
+        "chamfer": 0.0034561,
+        "f1": 0.9828,
+        "hausdorff": 0.02689
+      },
+      "15": {
+        "chamfer": 0.0019365,
+        "f1": 1.0,
+        "hausdorff": 0.0103
+      },
+      "20": {
+        "chamfer": 0.0009739,
+        "f1": 1.0,
+        "hausdorff": 0.00737
+      },
+      "25": {
+        "chamfer": 0.0008034,
+        "f1": 1.0,
+        "hausdorff": 0.00767
+      },
+      "30": {
+        "chamfer": 0.0006168,
+        "f1": 1.0,
+        "hausdorff": 0.00697
+      }
+    },
+    "rfta": {
+      "10": {
+        "chamfer": 0.0035445,
+        "f1": 0.9314,
+        "hausdorff": 0.04184
+      },
+      "15": {
+        "chamfer": 0.0014141,
+        "f1": 1.0,
+        "hausdorff": 0.01535
+      },
+      "20": {
+        "chamfer": 0.0009525,
+        "f1": 0.9998,
+        "hausdorff": 0.0164
+      },
+      "25": {
+        "chamfer": 0.000791,
+        "f1": 1.0,
+        "hausdorff": 0.01117
+      },
+      "30": {
+        "chamfer": 0.0005919,
+        "f1": 1.0,
+        "hausdorff": 0.01054
       }
     }
   }

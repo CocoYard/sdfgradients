@@ -231,11 +231,7 @@
     <h1>SDF reconstruction gallery</h1>
     <div class="controls">
       <label>Model
-        <select id="model">
-          <option value="eiffel">eiffel</option>
-          <option value="horse">horse</option>
-          <option value="loewe">loewe</option>
-        </select>
+        <select id="model"></select>
       </label>
       <label>
         <input type="checkbox" id="syncCams" checked> sync cameras
@@ -268,14 +264,36 @@ import * as THREE from 'three';
 import { OBJLoader } from './vendor/OBJLoader.js';
 import { OrbitControls } from './vendor/OrbitControls.js';
 
-const SAMPLES = [10,15,20,25,30,35,40,45,50,75,100];
+const DEFAULT_SAMPLES = [10,15,20,25,30,35,40,45,50,75,100];
 
 let METRICS = {};
+function samplesFor(model) {
+  const s = METRICS?._samples?.[model];
+  return (Array.isArray(s) && s.length) ? s : DEFAULT_SAMPLES;
+}
+const DEFAULT_MODELS = ['eiffel', 'horse', 'loewe'];
+function populateModelDropdown() {
+  const sel = document.getElementById('model');
+  const fromSamples = METRICS?._samples ? Object.keys(METRICS._samples) : [];
+  const models = fromSamples.length ? fromSamples.slice().sort() : DEFAULT_MODELS;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const m of models) {
+    const o = document.createElement('option');
+    o.value = m; o.textContent = m;
+    sel.appendChild(o);
+  }
+  if (models.includes(prev)) sel.value = prev;
+  return sel.value;
+}
 fetch('out/metrics.json').then(r => r.json()).then(d => {
   METRICS = d;
-  // rebuild if already rendered once without metrics
-  if (cells.length) buildTable(document.getElementById('model').value);
-}).catch(() => {});
+  const model = populateModelDropdown();
+  buildTable(model);
+}).catch(() => {
+  const model = populateModelDropdown();
+  buildTable(model);
+});
 
 // Linear interp on two RGB colors. t=0 → best (green), t=1 → worst (red).
 const BEST_RGB  = [126, 217, 138];  // #7ed98a
@@ -332,6 +350,7 @@ function rowRanges(model, n) {
 const ALGOS = [
   { key: 'interpolation', label: 'interpolation (ours)',
     path: (m,n) => [
+      `out/${m}/interpolant_${n}_15_shortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
       `out/${m}/interpolant_${n}_15_noShortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
       `out/${m}/interpolant_${n}_13_noShortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
     ] },
@@ -456,7 +475,8 @@ function buildTable(model) {
   const gtCellDiv = document.getElementById('gtCell');
   gtCellDiv.innerHTML = '';
   document.getElementById('gtName').textContent = model;
-  const gtCell = makeCell(gtCellDiv, `examples/${model}.obj`);
+  const gtPath = METRICS?._examples?.[model] || `examples/${model}.obj`;
+  const gtCell = makeCell(gtCellDiv, gtPath);
   gtCell.isGt = true;
 
   const mount = document.getElementById('grid');
@@ -472,7 +492,7 @@ function buildTable(model) {
   thead.appendChild(hr); table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  for (const n of SAMPLES) {
+  for (const n of samplesFor(model)) {
     const tr = document.createElement('tr');
     const th = document.createElement('th');
     th.className = 'rowlabel';
@@ -595,7 +615,6 @@ showGtBtn.addEventListener('click', () => {
   head.addEventListener('pointercancel', () => dragging = false);
 })();
 
-buildTable('eiffel');
 </script>
 </body>
 </html>
