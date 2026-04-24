@@ -1,0 +1,9 @@
+numpy
+scipy
+matplotlib
+torch
+trimesh
+gpytoolbox
+libigl
+scikit-learn
+joblib
