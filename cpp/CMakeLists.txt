@@ -126,6 +126,25 @@ find_library(GMPXX_LIBRARY NAMES gmpxx
 find_library(MPFR_LIBRARY  NAMES mpfr
     HINTS /opt/homebrew/lib /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu)
 
+# Reuse the CGAL tree pulled in by the mes_fork submodule if present,
+# to avoid a second ~150MB fetch of CGAL/cgal@v5.6.2.
+if(NOT CGAL_INCLUDE_DIR)
+    set(_mes_cgal_root "")
+    if(MES_FORK_BASE AND EXISTS "${MES_FORK_BASE}/cgal/cgal")
+        set(_mes_cgal_root "${MES_FORK_BASE}/cgal/cgal")
+    elseif(DEFINED mes_fork_SOURCE_DIR AND EXISTS "${mes_fork_SOURCE_DIR}/cgal/cgal")
+        set(_mes_cgal_root "${mes_fork_SOURCE_DIR}/cgal/cgal")
+    endif()
+    if(_mes_cgal_root)
+        file(GLOB _cgal_pkg_incs LIST_DIRECTORIES true "${_mes_cgal_root}/*/include")
+        find_path(CGAL_INCLUDE_DIR CGAL/Epick_d.h
+            HINTS ${_cgal_pkg_incs} NO_DEFAULT_PATH)
+        if(CGAL_INCLUDE_DIR)
+            message(STATUS "Using CGAL from mes_fork submodule at ${_mes_cgal_root}")
+        endif()
+    endif()
+endif()
+
 if(NOT CGAL_INCLUDE_DIR)
     message(STATUS "CGAL headers not found — fetching v5.6.2 (large download)")
     FetchContent_Declare(cgal

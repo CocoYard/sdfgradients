@@ -1,8 +1,6 @@
 import numpy as np
 from scipy.spatial.distance import cdist
 import trimesh
-from bench import sphere_exposed_pybind as sep
-
 def get_sphere_data(batch, i):
     """从 batch 结果里切出第 i 个球的数据"""
     arc_mask = batch['arc_sphere_idx'] == i
@@ -24,6 +22,7 @@ def get_sphere_data(batch, i):
     }
 
 def sample_arcs(i, batch, num_points=100):
+    from bench import sphere_exposed_pybind as sep
     sp = get_sphere_data(batch, i)
     points, _ = sep.sample_arcs(
         sp['cap_centers'],
@@ -38,6 +37,7 @@ def sample_arcs(i, batch, num_points=100):
     return points
 
 def query_closest_on_arcs(query_pts, i, batch):
+    from bench import sphere_exposed_pybind as sep
     sp = get_sphere_data(batch, i)
     closest, distances, _ = sep.query_closest_on_arcs(
         query_pts,

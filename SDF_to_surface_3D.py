@@ -4,10 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from interpolation import Interpolator, PUInterpolator, DuchonInterpolator
 import time
-import optimization as opt
-from util import mesh_distances, are_points_visible
-from bench import sphere_exposed_pybind as sep
-from bench import sphere_intersect
+from util import mesh_distances
 
 class Options:
     def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', 
@@ -210,14 +207,19 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True):
     os.makedirs(out_dir, exist_ok=True)
     Vr, Fr = gpy.reach_for_the_arcs(points, distances, screening_weight=screening_weight, parallel=parallel)
     rfta = trimesh.Trimesh(vertices=Vr, faces=Fr)
-    # keep the largest component plus any components fully inside the points' bbox
-    bbox_min = points.min(axis=0)
-    bbox_max = points.max(axis=0)
+    # Keep only components fully inside the input bbox, so PSR "bubble"
+    # artifacts that wrap outside the sample region get dropped.
+    bbox_min = points.min(axis=0) - 0.1
+    bbox_max = points.max(axis=0) + 0.1
     components = rfta.split(only_watertight=False)
-    largest = max(components, key=lambda m: len(m.faces))
     kept = [c for c in components
-            if c is largest
-            or (np.all(c.vertices >= bbox_min) and np.all(c.vertices <= bbox_max))]
+            if (np.all(c.vertices >= bbox_min)
+                and np.all(c.vertices <= bbox_max))]
+    # Fallback when every component crosses the bbox (possible at very
+    # small grid_len where every PSR output piece is artifact): keep the
+    # largest so we still write a non-empty .obj.
+    if not kept:
+        kept = [max(components, key=lambda m: len(m.faces))]
     filtered = trimesh.util.concatenate(kept)
     filtered.export(f'{out_dir}/rfta_{grid_len}.obj')
     print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept {len(kept)}/{len(components)} components, {len(filtered.faces)} faces out of {len(Fr)})")
@@ -365,6 +367,10 @@ def get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8):
     return batch_res, degenerate_pts, nbr_lists
 
 def main_algorithm(sdf_points, sdf_values, options : Options):
+    import optimization as opt
+    from bench import sphere_exposed_pybind as sep
+    from bench import sphere_intersect
+    from util import mesh_distances, are_points_visible
     gt_gradients, max_iters, gt_mesh = options.gt_gradients, options.max_iters, options.gt_mesh
     """ step 1: initial gradient estimation using degenerate points """
     # collect visible arcs for each point, which will be used to clamp the gradients later
@@ -703,7 +709,7 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
-    batch = True
+    batch = False
     data_dir = 'examples'
     if batch:
         for name in ['loewe']:
@@ -727,15 +733,15 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [10, 15]:
-            options = Options(name='eiffel', grid_len=length, max_iters=13, clamp=False, cpp_dc=True, verbose=True,
+        for length in [6]:
+            options = Options(name='bunny', grid_len=length, max_iters=13, clamp=False, cpp_dc=True, verbose=True,
                             export_short_arcs=False, export_projections=False, turn_off_short_arcs=True,
                             use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
                             overlap=0.2, reg=0, use_MES=True, post_processing=False, iter_gradient_finding='optimize')
             options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
             # # # plt = test_mesh(grid_len=20, path_to_obj='{data_dir}/holes.obj')
             # plt = test_our_method(options, save_gtmesh=False)
-            test_rfta(options, screening_weight=10, parallel=True)
+            test_rfta(options, screening_weight=10, parallel=False)
             # test_mes(options, save_gtmesh=False, screening_weight=10)
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
 
