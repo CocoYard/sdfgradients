@@ -1,0 +1,12 @@
+500 meshes in /scratch/ycheng27/sdfgradients/thingi10k/index.csv
+[50/500] ok=50 skip=0 fail=0 elapsed=4.6s
+[100/500] ok=100 skip=0 fail=0 elapsed=8.6s
+[150/500] ok=150 skip=0 fail=0 elapsed=12.8s
+[200/500] ok=200 skip=0 fail=0 elapsed=16.6s
+[250/500] ok=250 skip=0 fail=0 elapsed=22.1s
+[300/500] ok=300 skip=0 fail=0 elapsed=28.9s
+[350/500] ok=350 skip=0 fail=0 elapsed=37.9s
+[400/500] ok=400 skip=0 fail=0 elapsed=44.6s
+[450/500] ok=450 skip=0 fail=0 elapsed=49.8s
+[500/500] ok=500 skip=0 fail=0 elapsed=54.7s
+DONE ok=500 skip=0 fail=0  total 54.7s  out -> /scratch/ycheng27/sdfgradients/thingi10k/preview_obj
