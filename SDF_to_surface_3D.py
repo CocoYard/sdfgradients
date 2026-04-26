@@ -209,16 +209,23 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True):
     rfta = trimesh.Trimesh(vertices=Vr, faces=Fr)
     # Keep only components fully inside the input bbox, so PSR "bubble"
     # artifacts that wrap outside the sample region get dropped.
-    bbox_min = points.min(axis=0) - 0.1
-    bbox_max = points.max(axis=0) + 0.1
+    bbox_min = points.min(axis=0)
+    bbox_max = points.max(axis=0)
     components = rfta.split(only_watertight=False)
     kept = [c for c in components
             if (np.all(c.vertices >= bbox_min)
                 and np.all(c.vertices <= bbox_max))]
-    # Fallback when every component crosses the bbox (possible at very
-    # small grid_len where every PSR output piece is artifact): keep the
-    # largest so we still write a non-empty .obj.
     if not kept:
+        # First retry with a padded bbox — components that just barely poke
+        # outside the sample region are usually still legitimate.
+        pad = 0.1 * (bbox_max - bbox_min)
+        pmin, pmax = bbox_min - pad, bbox_max + pad
+        kept = [c for c in components
+                if (np.all(c.vertices >= pmin)
+                    and np.all(c.vertices <= pmax))]
+    if not kept:
+        # Last resort: every component crosses even the padded bbox. Keep the
+        # largest so we still write a non-empty .obj.
         kept = [max(components, key=lambda m: len(m.faces))]
     filtered = trimesh.util.concatenate(kept)
     filtered.export(f'{out_dir}/rfta_{grid_len}.obj')
