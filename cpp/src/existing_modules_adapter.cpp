@@ -79,6 +79,16 @@ static constexpr int MAX_INTERVALS = 512;
 static constexpr int MAX_DEGEN_PTS = 256;
 #endif
 
+// Hard safety cap on how many neighbors the incremental loop in compute_one
+// will scan per sphere. Our per-sphere loop prunes dead caps aggressively, but
+// pathological cases (>30k neighbors, observed) would still waste time scanning
+// neighbors that contribute nothing. Kept as a safety net.
+#ifdef FULL_COMPUTE_30CUBED
+static constexpr int MAX_NEIGHBORS_SCANNED = INT_MAX;
+#else
+static constexpr int MAX_NEIGHBORS_SCANNED = 2048;
+#endif
+
 // ── Tolerances ───────────────────────────────────────────────────
 struct Tolerances {
     double tol;
@@ -175,16 +185,6 @@ static bool compute_cap(Vec3 mc, double mr, Vec3 oc, double or_, int idx, Cap &o
     out = {n, dot(n, mc) + h, cc, cr, u, v, phi, idx, DBL_MAX};
     return true;
 }
-
-// Hard safety cap on how many neighbors the incremental loop in compute_one
-// will scan per sphere. Our per-sphere loop prunes dead caps aggressively, but
-// pathological cases (>30k neighbors, observed) would still waste time scanning
-// neighbors that contribute nothing. Kept as a safety net.
-#ifdef FULL_COMPUTE_30CUBED
-static constexpr int MAX_NEIGHBORS_SCANNED = INT_MAX;
-#else
-static constexpr int MAX_NEIGHBORS_SCANNED = 2048;
-#endif
 
 static inline Vec3 point_on_circle(const Cap &cap, double t) {
     return cap.circle_center + cap.circle_radius * (std::cos(t) * cap.local_u + std::sin(t) * cap.local_v);

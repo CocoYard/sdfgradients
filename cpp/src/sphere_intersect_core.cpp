@@ -174,9 +174,9 @@ void find_intersections(const double* centers, const double* radii, int n,
 #endif
     constexpr int NEAREST     = 256;
     constexpr int TOP_LARGEST = 64;
-    std::vector<float> absr(n);
-    for (int i = 0; i < n; i++) absr[i] = std::abs((float)radii[i]);
-    const float* absr_p = absr.data();
+    std::vector<float> absr_sq(n);
+    for (int i = 0; i < n; i++) absr_sq[i] = (float)(radii[i]*radii[i]);
+    const float* absr_sq_p = absr_sq.data();
     const float* cx_p = cx.data(), *cy_p = cy.data(), *cz_p = cz.data();
 
     #pragma omp parallel
@@ -188,6 +188,7 @@ void find_intersections(const double* centers, const double* radii, int n,
 #endif
         std::mt19937 rng((uint32_t)(0x9E3779B1u ^ (uint32_t)tid));
         std::vector<int> buf;
+        std::vector<std::pair<float, int>> sd_tmp;  // (signed_d, neighbor_id), reused across i
 
         #pragma omp for schedule(dynamic, 256)
         for (int i = 0; i < n; i++) {
@@ -201,32 +202,46 @@ void find_intersections(const double* centers, const double* radii, int n,
 
             int sz = (int)buf.size();
             if (sz == 0) continue;
-
+            float r_sq_i = absr_sq[i];
             float qx = cx_p[i], qy = cy_p[i], qz = cz_p[i];
             auto dist2_of = [qx, qy, qz, cx_p, cy_p, cz_p](int j) {
                 float dx = qx - cx_p[j], dy = qy - cy_p[j], dz = qz - cz_p[j];
                 return dx * dx + dy * dy + dz * dz;
             };
             auto cmp_dist = [&dist2_of](int a, int b) { return dist2_of(a) < dist2_of(b); };
-            auto cmp_rad  = [absr_p](int a, int b) { return absr_p[a] > absr_p[b]; };
 
-            // [0, nearest_k): 32 nearest, sorted asc by distance — picked
+            // [0, nearest_k): 256 nearest, sorted asc by distance — picked
             // from the FULL raw list so selection is exact.
             int nearest_k = sz < NEAREST ? sz : NEAREST;
             if (nearest_k < sz)
                 std::nth_element(buf.begin(), buf.begin() + nearest_k, buf.end(), cmp_dist);
             std::sort(buf.begin(), buf.begin() + nearest_k, cmp_dist);
 
+            // [nearest_k, front_used): TOP_LARGEST by smallest signed distance
+            // (= largest coverage). Precompute signed_d once per candidate so
+            // nth_element/sort compare plain floats instead of recomputing
+            // sqrt+div on every comparison.
             int front_used = nearest_k;
             if (sz > front_used) {
                 int after_nearest = sz - nearest_k;
                 int largest_k = after_nearest < TOP_LARGEST ? after_nearest : TOP_LARGEST;
+                sd_tmp.clear();
+                sd_tmp.reserve(after_nearest);
+                for (int k = nearest_k; k < sz; k++) {
+                    int j = buf[k];
+                    float d2 = dist2_of(j);
+                    float sd = (d2 + r_sq_i - absr_sq_p[j]) / std::sqrt(d2);
+                    sd_tmp.emplace_back(sd, j);
+                }
                 if (largest_k < after_nearest)
-                    std::nth_element(buf.begin() + nearest_k,
-                                     buf.begin() + nearest_k + largest_k,
-                                     buf.end(), cmp_rad);
-                std::sort(buf.begin() + nearest_k,
-                          buf.begin() + nearest_k + largest_k, cmp_rad);
+                    std::nth_element(sd_tmp.begin(), sd_tmp.begin() + largest_k, sd_tmp.end());
+                std::sort(sd_tmp.begin(), sd_tmp.begin() + largest_k);
+                // Write the whole range back: top-K (sorted) up front, then the
+                // remainder (nth_element-partitioned). Must write the remainder
+                // too so that the Fisher-Yates sampling pool below contains no
+                // duplicates of the already-picked top-K ids.
+                for (int k = 0; k < after_nearest; k++)
+                    buf[nearest_k + k] = sd_tmp[k].second;
                 front_used += largest_k;
             }
 
