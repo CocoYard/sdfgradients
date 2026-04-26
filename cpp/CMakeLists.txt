@@ -12,8 +12,21 @@ endif()
 # CPU tuning — applied globally so sdf_core and sdf_cpp share the same
 # Eigen vectorization. Per-target -march on sdf_core only causes Eigen
 # ABI mismatch across TU boundaries → segfault in PUInterpolator::fit.
+#
+# Default ``-march=native`` lets the local build pick up whatever ISA
+# extensions the build host supports (AVX-512 on capable CPUs, AVX2
+# elsewhere). This is the right choice when building and running on the
+# same machine.
+#
+# Override on heterogeneous clusters where the build host (e.g. a login
+# node) has more ISA features than some compute nodes (e.g. AMD or older
+# Intel without AVX-512). The portable baseline is x86-64-v3 (AVX2 +
+# FMA3 + BMI2):
+#   cmake -DSDF_MARCH=x86-64-v3 ..
+set(SDF_MARCH "native" CACHE STRING
+    "Compiler -march flag (use 'x86-64-v3' for cluster-portable builds)")
 if(NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(-march=native)
+    add_compile_options(-march=${SDF_MARCH})
 endif()
 
 # ── Options ──────────────────────────────────────────────────────────

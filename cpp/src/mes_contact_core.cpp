@@ -10,7 +10,14 @@
 #include <limits>
 #include <iostream>
 #include <fstream>
+#include <atomic>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace {
 double rss_gb() {
@@ -18,6 +25,140 @@ double rss_gb() {
     getrusage(RUSAGE_SELF, &u);
     // ru_maxrss is in bytes on macOS
     return (double)u.ru_maxrss / (1024.0 * 1024.0 * 1024.0);
+}
+
+// Fork-isolated wrapper around CGAL::maximal_empty_spheres. The CGAL
+// implementation is experimental and can SIGSEGV on certain inputs
+// (observed on AMD compute nodes for very small input groups). Running
+// it in a child process means a crash is contained: the parent recovers,
+// logs the failure, and continues processing.
+//
+// Returns true on success (result + contact_indices populated). Returns
+// false if the child crashed or CGAL threw — in that case we leave
+// result / contact_indices unchanged and the caller should skip this group.
+bool run_cgal_isolated(
+    const Eigen::MatrixXd& G_abs,
+    Eigen::MatrixXd& result,
+    Eigen::MatrixXi& contact_indices,
+    int debug_level)
+{
+    static std::atomic<unsigned> counter{0};
+    unsigned seq = counter.fetch_add(1);
+
+    char path_in[256], path_out[256];
+    pid_t my_pid = getpid();
+    std::snprintf(path_in,  sizeof(path_in),
+                  "/tmp/mes_in_%d_%u.bin",  my_pid, seq);
+    std::snprintf(path_out, sizeof(path_out),
+                  "/tmp/mes_out_%d_%u.bin", my_pid, seq);
+
+    // Write input matrix to a tmp file the child will read after fork.
+    {
+        std::ofstream f(path_in, std::ios::binary);
+        if (!f) {
+            std::cerr << "[MES] failed to open " << path_in
+                      << " for write\n";
+            return false;
+        }
+        long rows = G_abs.rows(), cols = G_abs.cols();
+        f.write(reinterpret_cast<const char*>(&rows), sizeof(long));
+        f.write(reinterpret_cast<const char*>(&cols), sizeof(long));
+        f.write(reinterpret_cast<const char*>(G_abs.data()),
+                rows * cols * sizeof(double));
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::cerr << "[MES] fork() failed: " << std::strerror(errno) << "\n";
+        std::remove(path_in);
+        return false;
+    }
+
+    if (pid == 0) {
+        // ── Child ─────────────────────────────────────────────────
+        // Re-load the input matrix and run CGAL. If CGAL crashes here,
+        // only this child dies; the parent recovers via waitpid.
+        Eigen::MatrixXd G_local;
+        {
+            std::ifstream f(path_in, std::ios::binary);
+            long rows, cols;
+            f.read(reinterpret_cast<char*>(&rows), sizeof(long));
+            f.read(reinterpret_cast<char*>(&cols), sizeof(long));
+            G_local.resize(rows, cols);
+            f.read(reinterpret_cast<char*>(G_local.data()),
+                   rows * cols * sizeof(double));
+        }
+
+        Eigen::MatrixXd r;
+        Eigen::MatrixXi ci;
+        try {
+            CGAL::maximal_empty_spheres<CGAL::Dimension_tag<3>>(
+                G_local, r, &ci, /*atol=*/1e-8, debug_level,
+                /*ncp_max=*/10, /*cone_filter=*/false);
+        } catch (...) {
+            _exit(2);  // CGAL threw — exit non-zero so parent skips
+        }
+
+        // Serialize results so the parent can read them.
+        {
+            std::ofstream f(path_out, std::ios::binary);
+            long rows = r.rows(), cols = r.cols();
+            long ci_rows = ci.rows(), ci_cols = ci.cols();
+            f.write(reinterpret_cast<const char*>(&rows),    sizeof(long));
+            f.write(reinterpret_cast<const char*>(&cols),    sizeof(long));
+            f.write(reinterpret_cast<const char*>(r.data()),
+                    rows * cols * sizeof(double));
+            f.write(reinterpret_cast<const char*>(&ci_rows), sizeof(long));
+            f.write(reinterpret_cast<const char*>(&ci_cols), sizeof(long));
+            f.write(reinterpret_cast<const char*>(ci.data()),
+                    ci_rows * ci_cols * sizeof(int));
+        }
+        _exit(0);
+    }
+
+    // ── Parent ────────────────────────────────────────────────────
+    int status = 0;
+    waitpid(pid, &status, 0);
+    std::remove(path_in);
+
+    if (WIFSIGNALED(status)) {
+        std::cout << "[MES] CGAL subprocess killed by signal "
+                  << WTERMSIG(status) << " — skipping group\n"
+                  << std::flush;
+        std::remove(path_out);
+        return false;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        std::cout << "[MES] CGAL subprocess exited with code "
+                  << (WIFEXITED(status) ? WEXITSTATUS(status) : -1)
+                  << " — skipping group\n" << std::flush;
+        std::remove(path_out);
+        return false;
+    }
+
+    // Read serialized output back into the caller's matrices.
+    {
+        std::ifstream f(path_out, std::ios::binary);
+        if (!f) {
+            std::cerr << "[MES] subprocess output file missing: "
+                      << path_out << "\n";
+            return false;
+        }
+        long rows, cols;
+        f.read(reinterpret_cast<char*>(&rows), sizeof(long));
+        f.read(reinterpret_cast<char*>(&cols), sizeof(long));
+        result.resize(rows, cols);
+        f.read(reinterpret_cast<char*>(result.data()),
+               rows * cols * sizeof(double));
+        long ci_rows, ci_cols;
+        f.read(reinterpret_cast<char*>(&ci_rows), sizeof(long));
+        f.read(reinterpret_cast<char*>(&ci_cols), sizeof(long));
+        contact_indices.resize(ci_rows, ci_cols);
+        f.read(reinterpret_cast<char*>(contact_indices.data()),
+               ci_rows * ci_cols * sizeof(int));
+    }
+    std::remove(path_out);
+    return true;
 }
 }
 
@@ -45,9 +186,15 @@ static void process_group(
               << "  Eigen::nbThreads=" << Eigen::nbThreads()
               << "  RSS before CGAL=" << rss_gb() << " GB\n" << std::flush;
 
-    CGAL::maximal_empty_spheres<CGAL::Dimension_tag<3>>(
-        G_abs, result, &contact_indices, /*atol=*/1e-8, debug_level,
-        /*ncp_max=*/10, /*cone_filter=*/false);
+    // Run CGAL in an isolated child process so a segfault inside the
+    // experimental Maximal_empty_spheres implementation cannot bring the
+    // parent down.
+    if (!run_cgal_isolated(G_abs, result, contact_indices, debug_level)) {
+        // Subprocess crashed or failed; result/contact_indices are left
+        // empty by the caller. Skip this group entirely — it just does
+        // not contribute contact points to out_pts/out_nrm.
+        return;
+    }
 
     std::cout << "[MES] process_group M=" << M
               << "  result.rows=" << result.rows()

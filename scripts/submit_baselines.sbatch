@@ -91,9 +91,21 @@ echo "StartTime   : $(date -Iseconds)"
 echo
 
 cd "${REPO}"
+# RUN_ALGOS lets you submit a single-algo run via the env, e.g.:
+#   sbatch --export=ALL,RUN_ALGOS=ours scripts/submit_baselines.sbatch
+# Default keeps all three algorithms (existing rfta/mes outputs are
+# idempotently skipped, so re-running with the default after baselines
+# are done only adds 'ours' work).
+RUN_ALGOS_ARG=()
+if [[ -n "${RUN_ALGOS:-}" ]]; then
+    RUN_ALGOS_ARG=(--algos "${RUN_ALGOS}")
+    echo "RunAlgos    : ${RUN_ALGOS}"
+fi
+
 # Run python as a background child so bash keeps a live signal handler.
 # 'wait' is interruptible; on SIGTERM the trap fires and does the resubmit.
-"${PYTHON}" scripts/run_baseline.py --task-id "${SLURM_ARRAY_TASK_ID}" &
+"${PYTHON}" scripts/run_baseline.py --task-id "${SLURM_ARRAY_TASK_ID}" \
+    "${RUN_ALGOS_ARG[@]}" &
 PY_PID=$!
 wait "${PY_PID}"
 RC=$?

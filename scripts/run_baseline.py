@@ -29,7 +29,7 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_INDEX = '/scratch/ycheng27/sdfgradients/thingi10k/index.csv'
 DEFAULT_OUT = '/scratch/ycheng27/sdfgradients/baselines'
 DEFAULT_GRIDS = [6, 10, 20, 30, 40, 50, 60, 80, 100]
-DEFAULT_ALGOS = ['rfta', 'mes']
+DEFAULT_ALGOS = ['rfta', 'mes', 'ours']
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,7 +89,8 @@ def main() -> int:
     import SDF_to_surface_3D as sdf3d
     sdf3d.data_dir = str(REPO / 'examples')  # fallback; path_to_obj is overridden
     from SDF_to_surface_3D import (                                    # noqa: E402
-        Options, generate_test_mesh_data, test_rfta, test_mes
+        Options, generate_test_mesh_data, test_rfta, test_mes,
+        test_our_method,
     )
 
     # test_rfta/test_mes write to "out/<basename>/<algo>_<gl>.obj" relative
@@ -120,13 +121,17 @@ def main() -> int:
 
     for gl in grid_lens:
         # Check whether anything is still missing at this gl before we bother
-        # with SDF generation.
+        # with SDF generation. 'ours' implicitly produces 'mc' as a side
+        # product, so include 'mc' in the expected set whenever 'ours' is
+        # requested — otherwise an old ours_<gl>.obj could mask a missing
+        # mc_<gl>.obj.
         expected = {algo: out_dir / f'{algo}_{gl}.obj' for algo in algos}
+        if 'ours' in algos:
+            expected['mc'] = out_dir / f'mc_{gl}.obj'
         need_any = any(not (p.exists() and p.stat().st_size > 0)
                        for p in expected.values())
         if not need_any:
-            for algo in algos:
-                p = expected[algo]
+            for algo, p in expected.items():
                 rows.append((algo, gl, 'skipped', 0.0, p.stat().st_size, ''))
             print(f'[{file_id}] gl={gl}: all outputs present, skipping',
                   flush=True)
@@ -158,10 +163,28 @@ def main() -> int:
                              out_file.stat().st_size, ''))
                 continue
 
-            opts = Options(name=mesh_basename, grid_len=gl,
-                           max_iters=5, clamp=False,
-                           export_short_arcs=False, export_projections=False,
-                           verbose=False)
+            if algo == 'ours':
+                # Pinned "main config" for our method. Mirrors the __main__
+                # block of SDF_to_surface_3D.py — change here if the canonical
+                # config evolves. verbose=True so per-step prints land in the
+                # SLURM stdout for later inspection.
+                opts = Options(name=mesh_basename, grid_len=gl,
+                               max_iters=15, clamp=False, cpp_dc=True,
+                               export_short_arcs=False,
+                               export_projections=False,
+                               turn_off_short_arcs=False,
+                               use_gt_gradients=False,
+                               interpolator_type='PU',
+                               interp_partition='sphere',
+                               overlap=0.2, reg=0,
+                               use_MES=True, post_processing=False,
+                               iter_gradient_finding='optimize',
+                               verbose=True)
+            else:
+                opts = Options(name=mesh_basename, grid_len=gl,
+                               max_iters=5, clamp=False,
+                               export_short_arcs=False, export_projections=False,
+                               verbose=False)
             opts.path_to_obj = str(mesh_path)
             opts.path_to_sdf = str(sdf_cache)
 
@@ -175,10 +198,37 @@ def main() -> int:
                 elif algo == 'mes':
                     test_mes(opts, save_gtmesh=False,
                              screening_weight=args.screening_weight)
+                elif algo == 'ours':
+                    test_our_method(opts, save_gtmesh=False)
                 else:
                     raise ValueError(f'unknown algo: {algo}')
             except Exception:
                 err = traceback.format_exc().strip().splitlines()[-1]
+
+            # 'ours' produces two outputs we care about, and may raise
+            # *after* both are exported (a downstream block in
+            # test_our_method only works when path_to_sdf is None and hits
+            # an UnboundLocalError on 'mesh' otherwise). Look for both
+            # files independently of the traceback.
+            #   interpolant_<gl>_*.obj  -> ours_<gl>.obj   (our method)
+            #   sample_points_<gl>.obj  -> mc_<gl>.obj     (MC-on-samples baseline)
+            mc_size = 0
+            mc_status = ''
+            if algo == 'ours':
+                interp = sorted(out_dir.glob(f'interpolant_{gl}_*.obj'),
+                                key=lambda p: p.stat().st_mtime, reverse=True)
+                if interp:
+                    interp[0].rename(out_file)
+                sp = out_dir / f'sample_points_{gl}.obj'
+                mc_dst = out_dir / f'mc_{gl}.obj'
+                if sp.exists():
+                    sp.rename(mc_dst)
+                # If both expected outputs landed, the post-export crash is benign.
+                if out_file.exists() and mc_dst.exists():
+                    err = None
+                mc_size = mc_dst.stat().st_size if mc_dst.exists() else 0
+                mc_status = 'ok' if mc_size > 0 else 'fail'
+
             dt = time.perf_counter() - t0
             size = out_file.stat().st_size if out_file.exists() else 0
             status = 'ok' if size > 0 and err is None else 'fail'
@@ -186,6 +236,16 @@ def main() -> int:
                   f'{status:>7} {dt:>7.2f}s {size:>10}B {err or ""}',
                   flush=True)
             rows.append((algo, gl, status, dt, size, err or ''))
+
+            # 'mc' is a side-product of running 'ours': log a separate
+            # row with wall=0 (we paid the cost under 'ours' already).
+            if algo == 'ours':
+                rows.append(('mc', gl, mc_status, 0.0, mc_size,
+                             '' if mc_status == 'ok' else 'mc not produced'))
+                print(f'[{file_id}]   mc gl={gl:<3} '
+                      f'{mc_status:>7}    0.00s {mc_size:>10}B '
+                      f'{"" if mc_status == "ok" else "mc not produced"}',
+                      flush=True)
 
     # Per-task timing CSV. SLURM concurrency is fine since each task writes
     # its own file.
