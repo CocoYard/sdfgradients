@@ -131,7 +131,7 @@ Eigen::MatrixXd iterative_projection_3d(
         // visibility gain < 1% of N. For points that are still invisible
         // and have a valid MES normal, override new_gradients with that
         // normal. vis_mask above is the union of old/new visibility.
-        if (options.use_MES) {
+        if (options.use_MES && it > 0) {
             int vis_old_sum = vis_old.sum();
             double gain = (double)(visible_num - vis_old_sum) / N;
             double vis_per_sample_area =  visible_num / (std::cbrt(N) * std::cbrt(N));  // heuristic for point density in visible region

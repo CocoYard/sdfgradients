@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <cstdio>
 #include <atomic>
+#include <chrono>
 #include <climits>
 
 #ifdef USE_OPENMP
@@ -87,6 +88,32 @@ static constexpr int MAX_DEGEN_PTS = 256;
 static constexpr int MAX_NEIGHBORS_SCANNED = INT_MAX;
 #else
 static constexpr int MAX_NEIGHBORS_SCANNED = 2048;
+#endif
+
+// ── opt-in profiling (env: SDF_BATCH_PROGRESS=1) ─────────────────
+// All sub-section timing + per-4096 progress lines are gated by this flag,
+// queried once on first call. Default off so the per-iteration now_sec()
+// calls (~1-2s wall on a 1M-sphere run) and atomic adds don't tax the hot
+// path. Counters live regardless but are only fed when enabled.
+static bool sdf_batch_verbose() {
+    static const bool v = (std::getenv("SDF_BATCH_PROGRESS") != nullptr);
+    return v;
+}
+static std::atomic<long long> g_us_compute_one{0};
+static std::atomic<long long> g_us_find_degen{0};
+static std::atomic<long long> g_n_find_degen{0};
+static std::atomic<long long> g_us_clip{0};
+static std::atomic<long long> g_us_exposed{0};
+static std::atomic<long long> g_us_count{0};
+static std::atomic<long long> g_us_dedup{0};
+
+#ifdef USE_OPENMP
+static inline double now_sec() { return omp_get_wtime(); }
+#else
+static inline double now_sec() {
+    using clk = std::chrono::steady_clock;
+    return std::chrono::duration<double>(clk::now().time_since_epoch()).count();
+}
 #endif
 
 // ── Tolerances ───────────────────────────────────────────────────
@@ -228,13 +255,14 @@ static int intersect_circle_with_plane(const Cap &circle_cap, const Cap &cutting
     return 2;
 }
 
-static void clip_arc_by_cap(const BoundaryArc &arc, const Cap &cutting_cap,
-                            const Cap caps[], std::vector<BoundaryArc> &result) {
-    const Cap &host = caps[arc.cap_idx];
-
-    double hits[2];
-    int nhits = intersect_circle_with_plane(host, cutting_cap, hits);
-
+// Variant where the host's circle-plane intersection with cutting_cap has
+// already been computed (hits, nhits). The caller is expected to cache these
+// across all arcs that share the same host, since intersect_circle_with_plane
+// has expensive trig (atan2, acos) and the same host typically owns many arcs.
+static void clip_arc_with_hits(const BoundaryArc &arc, const Cap &host,
+                               const Cap &cutting_cap,
+                               const double hits[2], int nhits,
+                               std::vector<BoundaryArc> &result) {
     double hits_in[2];
     int n_in = 0;
     for (int i = 0; i < nhits; i++) {
@@ -273,6 +301,15 @@ static void clip_arc_by_cap(const BoundaryArc &arc, const Cap &cutting_cap,
             result.push_back({arc.cap_idx, t_s, t_e});
         }
     }
+}
+
+// Original signature kept for callers that don't have hits precomputed.
+static void clip_arc_by_cap(const BoundaryArc &arc, const Cap &cutting_cap,
+                            const Cap caps[], std::vector<BoundaryArc> &result) {
+    const Cap &host = caps[arc.cap_idx];
+    double hits[2];
+    int nhits = intersect_circle_with_plane(host, cutting_cap, hits);
+    clip_arc_with_hits(arc, host, cutting_cap, hits, nhits, result);
 }
 
 static int intersect_intervals(const Interval *a, int na,
@@ -385,47 +422,29 @@ static bool solve3(const double A[9], const double b[3], double x[3]) {
     return true;
 }
 
-static int find_degen_pts(Vec3 mc, double mr, const Cap caps[], int nc,
-                          Vec3 pts[], const Tolerances &tol) {
-    int np = 0;
-    for (int i = 0; i < nc && np < MAX_DEGEN_PTS; i++) {
-        if (caps[i].circle_radius < EPS) continue;
-        for (int j = i + 1; j < nc && np < MAX_DEGEN_PTS; j++) {
-            if (caps[j].circle_radius < EPS) continue;
-
-            Vec3 ni = caps[i].normal, nj = caps[j].normal;
-            Vec3 ld = cross(ni, nj);
-            double ldn = length(ld);
-            if (ldn < 1e-12) continue;
-            ld = ld * (1.0 / ldn);
-
-            double A[9] = {ni.x,ni.y,ni.z, nj.x,nj.y,nj.z, ld.x,ld.y,ld.z};
-            double bv[3] = {caps[i].d, caps[j].d, 0};
-            double p0[3];
-            if (!solve3(A, bv, p0)) continue;
-
-            Vec3 p0v{p0[0], p0[1], p0[2]};
-            Vec3 d = p0v - mc;
-            double bc = 2 * dot(d, ld);
-            double cc = dot(d, d) - mr * mr;
-            double disc = bc * bc - 4 * cc;
-            if (disc < -EPS10) continue;
-            if (disc < 0) disc = 0;
-            double sq = std::sqrt(disc);
-
-            for (int s = -1; s <= 1; s += 2) {
-                double t = (-bc + s * sq) / 2.0;
-                Vec3 pt = p0v + t * ld;
-
-                if (std::fabs(length(pt - mc) - mr) > tol.degen_tol) continue;
-                if (!is_pt_exposed(pt, caps, nc, i, j, tol.tol)) continue;
-                bool dup = false;
-                for (int k = 0; k < np; k++) {
-                    if (length(pt - pts[k]) < tol.degen_tol) { dup = true; break; }
-                }
-                if (!dup) pts[np++] = pt;
-            }
+// Trigger condition: total arc length < degen_tol, meaning the boundary of the
+// exposed region has collapsed to (near) a single point. Each surviving arc is
+// then essentially a degenerate corner — its midpoint on the cap circle is a
+// good 3D candidate. Dedup against existing pts within degen_tol.
+//
+// This replaces the earlier O(nc^3) cap-pair brute force, which re-derived
+// geometry that the arc list already encodes.
+static int find_degen_pts(const Cap caps[],
+                          const std::vector<BoundaryArc>& all_arcs,
+                          Vec3 pts[], int np_in, const Tolerances &tol) {
+    int np = np_in;
+    for (const auto& arc : all_arcs) {
+        if (np >= MAX_DEGEN_PTS) break;
+        const Cap& c = caps[arc.cap_idx];
+        if (c.circle_radius < EPS) continue;
+        double t_mid = 0.5 * (arc.t_start + arc.t_end);
+        double cs = std::cos(t_mid), sn = std::sin(t_mid);
+        Vec3 pt = c.circle_center + c.circle_radius * (cs * c.local_u + sn * c.local_v);
+        bool dup = false;
+        for (int k = 0; k < np; k++) {
+            if (length(pt - pts[k]) < tol.degen_tol) { dup = true; break; }
         }
+        if (!dup) pts[np++] = pt;
     }
     return np;
 }
@@ -453,6 +472,23 @@ static void compute_one(
     int  n_active = 0;
     bool in_active[MAX_CAPS] = {};
 
+    // Per-host caches for clip_arc_by_cap (stamped invalidation).
+    //   host_hits_buf[h]    : intersect_circle_with_plane output for host h
+    //   host_nhits_buf[h]   : 0 or 2
+    //   host_circle_inside_cut[h] : when nhits=0, whether the entire host
+    //                               circle is inside the cutting cap (drop all)
+    //   host_seg_h0h1_inside_cut[h] : when nhits=2, whether the [h0,h1]
+    //                                 segment of host circle is inside cutting
+    // The two side flags let us skip per-arc midpoint trig — once we know
+    // which segment of the host circle is "inside cut", any arc/piece's
+    // segment can be determined by an angle comparison rather than another
+    // is_inside_cap(point_on_circle(...)) call.
+    double host_hits_buf[MAX_CAPS][2];
+    int    host_nhits_buf[MAX_CAPS];
+    bool   host_circle_inside_cut[MAX_CAPS];
+    bool   host_seg_h0h1_inside_cut[MAX_CAPS];
+    int    host_stamp[MAX_CAPS] = {};
+
     std::vector<BoundaryArc> all_arcs;
     std::vector<BoundaryArc> new_arcs;
     all_arcs.reserve(16);
@@ -465,6 +501,8 @@ static void compute_one(
     *out_nc = 0;
 
     int scan_limit = n_others < MAX_NEIGHBORS_SCANNED ? n_others : MAX_NEIGHBORS_SCANNED;
+    const bool prof = sdf_batch_verbose();
+    double t_dedup_acc = 0, t_clip_acc = 0, t_exposed_acc = 0, t_count_acc = 0;
 
     for (int i = 0; i < scan_limit && nc < MAX_CAPS; i++) {
         Cap cap;
@@ -486,6 +524,7 @@ static void compute_one(
         // Dedup against existing caps (live and frozen small-radius ones),
         // matching the original compute_all_caps logic. Dominating new replaces
         // the old in-place; duplicates are skipped.
+        double _t_dd = prof ? now_sec() : 0.0;
         bool dup = false;
         int replaced = -1;
         for (int e = nc - 1; e >= 0; e--) {
@@ -496,6 +535,7 @@ static void compute_one(
                 else { replaced = e; break; }
             }
         }
+        if (prof) t_dedup_acc += now_sec() - _t_dd;
         if (dup) continue;
 
         int new_idx;
@@ -531,23 +571,101 @@ static void compute_one(
             continue;
         }
 
-        // Clip all existing arcs by the new cap.
+        // Clip all existing arcs by the new cap. Two-level caching:
+        //   1. Per host, cache the circle/plane intersection (expensive trig).
+        //   2. Per host, cache "which segment of host circle is inside cutting"
+        //      so per-arc clipping is just angle comparisons, no trig.
+        double _t_cl = prof ? now_sec() : 0.0;
         new_arcs.clear();
-        for (const auto& arc : all_arcs)
-            clip_arc_by_cap(arc, caps[new_idx], caps, new_arcs);
+        const int stamp = i + 1;
+        const Cap& cut = caps[new_idx];
+        for (const auto& arc : all_arcs) {
+            int h = arc.cap_idx;
+            if (host_stamp[h] != stamp) {
+                int nhits = intersect_circle_with_plane(caps[h], cut, host_hits_buf[h]);
+                host_nhits_buf[h] = nhits;
+                if (nhits == 0) {
+                    // Entire host circle is on one side of cutting plane.
+                    Vec3 tp = point_on_circle(caps[h], 0.0);
+                    host_circle_inside_cut[h] = is_inside_cap(tp, cut);
+                } else {
+                    // host circle split by cutting plane into [h0,h1] (S1) and
+                    // [h1, h0+2π] (S2). Test midpoint of S1 to learn which
+                    // segment is "inside cut" (= covered, arcs there get dropped).
+                    double mid_h = 0.5 * (host_hits_buf[h][0] + host_hits_buf[h][1]);
+                    Vec3 tp = point_on_circle(caps[h], mid_h);
+                    host_seg_h0h1_inside_cut[h] = is_inside_cap(tp, cut);
+                }
+                host_stamp[h] = stamp;
+            }
+
+            int nhits = host_nhits_buf[h];
+            if (nhits == 0) {
+                // Whole host circle on one side; per-arc decision is uniform.
+                if (!host_circle_inside_cut[h]) new_arcs.push_back(arc);
+                continue;
+            }
+
+            // nhits == 2: filter the two hits to those lying inside this arc.
+            const double h0 = host_hits_buf[h][0];
+            const double h1 = host_hits_buf[h][1];
+            double hits_in[2];
+            int n_in = 0;
+            if (angle_in_arc(h0, arc.t_start, arc.t_end)) hits_in[n_in++] = h0;
+            if (angle_in_arc(h1, arc.t_start, arc.t_end)) hits_in[n_in++] = h1;
+
+            if (n_in == 0) {
+                // Arc fully on one side. Determine side via midpoint angle vs
+                // [h0,h1] segment — no trig needed (replaces the old midpoint
+                // is_inside_cap test).
+                double mt = fmod_pos(0.5 * (arc.t_start + arc.t_end), TWO_PI);
+                bool in_S1 = (mt >= h0 && mt <= h1);
+                bool inside_cut = (in_S1 == host_seg_h0h1_inside_cut[h]);
+                if (!inside_cut) new_arcs.push_back(arc);
+                continue;
+            }
+
+            if (n_in == 2) {
+                double k0 = fmod_pos(hits_in[0] - arc.t_start, TWO_PI);
+                double k1 = fmod_pos(hits_in[1] - arc.t_start, TWO_PI);
+                if (k0 > k1) std::swap(hits_in[0], hits_in[1]);
+            }
+
+            // Arc crosses cutting plane: split into pieces; per-piece side is
+            // determined by piece midpoint angle vs [h0,h1] segment.
+            double boundaries[4];
+            boundaries[0] = arc.t_start;
+            for (int k = 0; k < n_in; k++) boundaries[1 + k] = hits_in[k];
+            boundaries[1 + n_in] = arc.t_end;
+            int nbnd = 2 + n_in;
+            for (int k = 0; k < nbnd - 1; k++) {
+                double t_s = boundaries[k];
+                double t_e = boundaries[k + 1];
+                if (t_e < t_s - EPS) t_e += TWO_PI;
+                if (t_e - t_s < 1e-15) continue;
+                double mt = fmod_pos(0.5 * (t_s + t_e), TWO_PI);
+                bool in_S1 = (mt >= h0 && mt <= h1);
+                bool inside_cut = (in_S1 == host_seg_h0h1_inside_cut[h]);
+                if (!inside_cut) new_arcs.push_back({arc.cap_idx, t_s, t_e});
+            }
+        }
+        if (prof) t_clip_acc += now_sec() - _t_cl;
 
         // Compute the new cap's own exposed arcs against currently active caps.
         // compute_exposed_arcs_on_circle skips new_idx internally if present.
+        double _t_ex = prof ? now_sec() : 0.0;
         Interval ivs[MAX_INTERVALS];
         int n_new = compute_exposed_arcs_on_circle(new_idx, caps,
                                                    active_caps, n_active,
                                                    ivs, tol);
         for (int a = 0; a < n_new; a++)
             new_arcs.push_back({new_idx, ivs[a].start, ivs[a].end});
+        if (prof) t_exposed_acc += now_sec() - _t_ex;
 
         all_arcs.swap(new_arcs);
 
         // Rebuild arc_count from the surviving arcs.
+        double _t_ct = prof ? now_sec() : 0.0;
         std::memset(arc_count, 0, sizeof(int) * nc);
         for (const auto& a : all_arcs) arc_count[a.cap_idx]++;
 
@@ -567,6 +685,13 @@ static void compute_one(
             }
         }
         n_active = w;
+        if (prof) t_count_acc += now_sec() - _t_ct;
+    }
+    if (prof) {
+        g_us_dedup.fetch_add((long long)(t_dedup_acc * 1e6), std::memory_order_relaxed);
+        g_us_clip.fetch_add((long long)(t_clip_acc * 1e6), std::memory_order_relaxed);
+        g_us_exposed.fetch_add((long long)(t_exposed_acc * 1e6), std::memory_order_relaxed);
+        g_us_count.fetch_add((long long)(t_count_acc * 1e6), std::memory_order_relaxed);
     }
 
     // Build output: compact caps into kept order.
@@ -595,8 +720,17 @@ static void compute_one(
     *out_ncaps = kept;
     *out_total_arc = total;
 
-    if (total < tol.degen_tol && nc > 0)
-        *out_npts = find_degen_pts(mc, mr, caps, nc, out_pts, tol);
+    if (total < tol.degen_tol && nc > 0) {
+        if (prof) {
+            double _t = now_sec();
+            *out_npts = find_degen_pts(caps, all_arcs, out_pts, *out_npts, tol);
+            long long us = (long long)((now_sec() - _t) * 1e6);
+            g_us_find_degen.fetch_add(us, std::memory_order_relaxed);
+            g_n_find_degen.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            *out_npts = find_degen_pts(caps, all_arcs, out_pts, *out_npts, tol);
+        }
+    }
 }
 
 // ── compute_exposed_batch ────────────────────────────────────────
@@ -608,6 +742,17 @@ void compute_exposed_batch(
     sdf::Options::BatchData& out)
 {
     Tolerances tol{tol_v, degen_tol, merge_tol, tangent_tol};
+    const bool prof = sdf_batch_verbose();
+    if (prof) {
+        g_us_compute_one.store(0);
+        g_us_find_degen.store(0);
+        g_n_find_degen.store(0);
+        g_us_clip.store(0);
+        g_us_exposed.store(0);
+        g_us_count.store(0);
+        g_us_dedup.store(0);
+    }
+    double t_loop_start = prof ? now_sec() : 0.0;
 
     MEM_MARK("batch: enter");
     MEM_LOG("[RSS] batch n=%d\n", n);
@@ -698,12 +843,16 @@ void compute_exposed_batch(
 
         int ncaps, narcs, npts, n_pcaps;
         double total_arc;
+        double _t_co = prof ? now_sec() : 0.0;
         compute_one(
             {centers[i*3], centers[i*3+1], centers[i*3+2]}, radii[i],
             oc_buf_v.data(), or_buf_v.data(), n_use, tol,
             &ncaps, &narcs, _ac, _as, _ae, MAX_ARCS,
             &total_arc, &npts, _dp,
             _caps, &n_pcaps, remap);
+        if (prof) g_us_compute_one.fetch_add(
+            (long long)((now_sec() - _t_co) * 1e6),
+            std::memory_order_relaxed);
 
         out.n_arcs[i] = narcs;
         out.n_points[i] = npts;
@@ -731,16 +880,50 @@ void compute_exposed_batch(
         L.pts.assign(_dp, _dp + npts);
 
         int done = progress.fetch_add(1, std::memory_order_relaxed) + 1;
-        if ((done & 4095) == 0) {
+        if (prof && (done & 4095) == 0) {
             #pragma omp critical
             {
-                MEM_LOG("[RSS] loop progress %d/%d  (i=%d n_nbrs=%d ncaps=%d narcs=%d)"
-                    "  RSS=%.2f GB (+%.2f)\n",
-                    done, n, i, n_nbrs, ncaps, narcs,
+                double t_elapsed = now_sec() - t_loop_start;
+                double co_s = g_us_compute_one.load(std::memory_order_relaxed) * 1e-6;
+                double fd_s = g_us_find_degen.load(std::memory_order_relaxed) * 1e-6;
+                double cl_s = g_us_clip.load(std::memory_order_relaxed) * 1e-6;
+                double ex_s = g_us_exposed.load(std::memory_order_relaxed) * 1e-6;
+                double ct_s = g_us_count.load(std::memory_order_relaxed) * 1e-6;
+                double dd_s = g_us_dedup.load(std::memory_order_relaxed) * 1e-6;
+                long long fd_n = g_n_find_degen.load(std::memory_order_relaxed);
+                double inv = co_s > 0 ? 100.0 / co_s : 0.0;
+                std::fprintf(stderr,
+                    "[batch] %d/%d (%.1f%%) wall=%.1fs co=%.1fs  "
+                    "clip=%.1fs(%.0f%%) exposed=%.1fs(%.0f%%) count=%.1fs(%.0f%%) "
+                    "dedup=%.1fs(%.0f%%) find_degen=%.1fs(%.0f%%, n=%lld)  "
+                    "(i=%d n_nbrs=%d ncaps=%d narcs=%d)\n",
+                    done, n, 100.0*done/n, t_elapsed, co_s,
+                    cl_s, cl_s*inv, ex_s, ex_s*inv, ct_s, ct_s*inv,
+                    dd_s, dd_s*inv, fd_s, fd_s*inv, (long long)fd_n,
+                    i, n_nbrs, ncaps, narcs);
+                MEM_LOG("[RSS] RSS=%.2f GB (+%.2f)\n",
                     mem_rss_bytes()/1e9,
                     (mem_rss_bytes() - rss_before_loop)/1e9);
             }
         }
+    }
+    if (prof) {
+        double t_elapsed = now_sec() - t_loop_start;
+        double co_s = g_us_compute_one.load() * 1e-6;
+        double fd_s = g_us_find_degen.load() * 1e-6;
+        double cl_s = g_us_clip.load() * 1e-6;
+        double ex_s = g_us_exposed.load() * 1e-6;
+        double ct_s = g_us_count.load() * 1e-6;
+        double dd_s = g_us_dedup.load() * 1e-6;
+        long long fd_n = g_n_find_degen.load();
+        double inv = co_s > 0 ? 100.0 / co_s : 0.0;
+        std::fprintf(stderr,
+            "[batch] DONE n=%d wall=%.2fs co_sum=%.2fs  "
+            "clip=%.2fs(%.0f%%) exposed=%.2fs(%.0f%%) count=%.2fs(%.0f%%) "
+            "dedup=%.2fs(%.0f%%) find_degen=%.2fs(%.0f%%, n=%lld)\n",
+            n, t_elapsed, co_s,
+            cl_s, cl_s*inv, ex_s, ex_s*inv, ct_s, ct_s*inv,
+            dd_s, dd_s*inv, fd_s, fd_s*inv, (long long)fd_n);
     }
 
     MEM_MARK("after parallel compute");
