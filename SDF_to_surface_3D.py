@@ -7,10 +7,10 @@ import time
 from util import mesh_distances
 
 class Options:
-    def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', 
-                 turn_off_short_arcs=False, export_short_arcs=True, export_projections=True, reg=1e-4,
-                 use_gt_gradients=False, interpolator_type='PU', interp_partition='box', overlap=0.5, cpp_dc=True,
-                 turn_off_projection=False, use_MES=False, post_processing=True, iter_gradient_finding='optimize', verbose=True):
+    def __init__(self, grid_len=20, gt_mesh=None, clamp=False, max_iters=10, name='horse', 
+                 turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
+                 use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
+                use_MES=True, post_processing=False, iter_gradient_finding='optimize', verbose=True):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -207,29 +207,38 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True):
     os.makedirs(out_dir, exist_ok=True)
     Vr, Fr = gpy.reach_for_the_arcs(points, distances, screening_weight=screening_weight, parallel=parallel)
     rfta = trimesh.Trimesh(vertices=Vr, faces=Fr)
-    # Keep only components fully inside the input bbox, so PSR "bubble"
-    # artifacts that wrap outside the sample region get dropped.
-    bbox_min = points.min(axis=0)
-    bbox_max = points.max(axis=0)
+    # Filter spurious components using a 1-Lipschitz upper bound on |sdf|:
+    #   |sdf(sample)| <= |sdf(nearest_input)| + dist(sample, nearest_input)
+    # If the median upper bound on a component is large, it can't be near a true
+    # zero-crossing, so it's a PSR hallucination.
+    from scipy.spatial import cKDTree
+    score_thresh = 0.2
+    n_samples_per_comp = 300
+    tree = cKDTree(points)
+    abs_sdf = np.abs(distances)
     components = rfta.split(only_watertight=False)
-    kept = [c for c in components
-            if (np.all(c.vertices >= bbox_min)
-                and np.all(c.vertices <= bbox_max))]
+    kept, scores = [], []
+    for i, c in enumerate(components):
+        n = min(n_samples_per_comp, max(len(c.faces) * 3, 20))
+        samples, _ = trimesh.sample.sample_surface(c, n)
+        d, idx = tree.query(samples, k=1)
+        score = np.median(abs_sdf[idx] + d)
+        scores.append(score)
+        is_kept = score < score_thresh
+        if is_kept:
+            kept.append(c)
+        print(f"  comp[{i:3d}] faces={len(c.faces):6d}  score={score:.4f}  "
+              f"(median |sdf_nn|={np.median(abs_sdf[idx]):.4f}, median dist={np.median(d):.4f})  "
+              f"{'KEEP' if is_kept else 'drop'}")
     if not kept:
-        # First retry with a padded bbox — components that just barely poke
-        # outside the sample region are usually still legitimate.
-        pad = 0.1 * (bbox_max - bbox_min)
-        pmin, pmax = bbox_min - pad, bbox_max + pad
-        kept = [c for c in components
-                if (np.all(c.vertices >= pmin)
-                    and np.all(c.vertices <= pmax))]
-    if not kept:
-        # Last resort: every component crosses even the padded bbox. Keep the
-        # largest so we still write a non-empty .obj.
-        kept = [max(components, key=lambda m: len(m.faces))]
+        # Last resort: keep the component with the smallest score so we still
+        # write a non-empty .obj.
+        kept = [components[int(np.argmin(scores))]]
+        print(f"  (all dropped — fallback keep comp[{int(np.argmin(scores))}])")
     filtered = trimesh.util.concatenate(kept)
     filtered.export(f'{out_dir}/rfta_{grid_len}.obj')
-    print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept {len(kept)}/{len(components)} components, {len(filtered.faces)} faces out of {len(Fr)})")
+    print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept {len(kept)}/{len(components)} components, "
+          f"{len(filtered.faces)} faces out of {len(Fr)})")
 
 def test_mes(options, save_gtmesh=False, screening_weight=10):
     """
