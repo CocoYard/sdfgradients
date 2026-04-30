@@ -723,42 +723,28 @@ void Interpolator::extract_surface(
         std::cout << "[extract_surface] coarse predict (" << CN
                   << " pts): " << sec_since(t_coarse) << " s\n";
 
-    // ── Fill fine S by trilinear interpolation from coarse ───────────
+    // ── Dummy-fill fine S from nearest coarse corner ─────────────────
+    // Inactive fine vertices never contribute to the extracted surface
+    // (Lipschitz-1 keeps the iso-surface out of inactive coarse cells and
+    // their boundaries), so any sign-correct placeholder works. Copying the
+    // c000 corner of the containing coarse cell gives correct sign and
+    // |value| >= tau for free, at 1 lookup per fine vertex instead of 8.
+    // Active fine vertices get overwritten by predict() below.
     auto t_tri = clk::now();
     Eigen::VectorXd S(N);
     for (int zi = 0; zi < nz; zi++) {
-        double fz = (zi * step.z()) / cstep.z();
-        int ck = std::min((int)fz, cnz - 2);
-        double tz = fz - ck;
+        int ck = std::min((int)((zi * step.z()) / cstep.z()), cnz - 2);
         for (int yi = 0; yi < ny; yi++) {
-            double fy = (yi * step.y()) / cstep.y();
-            int cj = std::min((int)fy, cny - 2);
-            double ty = fy - cj;
+            int cj = std::min((int)((yi * step.y()) / cstep.y()), cny - 2);
             for (int xi = 0; xi < nx; xi++) {
-                double fx = (xi * step.x()) / cstep.x();
-                int ci = std::min((int)fx, cnx - 2);
-                double tx = fx - ci;
-                double c000 = CS(cidx_at(ci  , cj  , ck  ));
-                double c100 = CS(cidx_at(ci+1, cj  , ck  ));
-                double c010 = CS(cidx_at(ci  , cj+1, ck  ));
-                double c110 = CS(cidx_at(ci+1, cj+1, ck  ));
-                double c001 = CS(cidx_at(ci  , cj  , ck+1));
-                double c101 = CS(cidx_at(ci+1, cj  , ck+1));
-                double c011 = CS(cidx_at(ci  , cj+1, ck+1));
-                double c111 = CS(cidx_at(ci+1, cj+1, ck+1));
-                double c00 = c000*(1-tx) + c100*tx;
-                double c10 = c010*(1-tx) + c110*tx;
-                double c01 = c001*(1-tx) + c101*tx;
-                double c11 = c011*(1-tx) + c111*tx;
-                double c0  = c00 *(1-ty) + c10 *ty;
-                double c1  = c01 *(1-ty) + c11 *ty;
-                S(fine_idx(xi, yi, zi)) = c0*(1-tz) + c1*tz;
+                int ci = std::min((int)((xi * step.x()) / cstep.x()), cnx - 2);
+                S(fine_idx(xi, yi, zi)) = CS(cidx_at(ci, cj, ck));
             }
         }
     }
 
     if (verbose_)
-        std::cout << "[extract_surface] trilinear fill S: " << sec_since(t_tri) << " s\n";
+        std::cout << "[extract_surface] dummy fill S: " << sec_since(t_tri) << " s\n";
 
     // ── Narrow-band detection ────────────────────────────────────────
     auto t_nb = clk::now();
