@@ -581,7 +581,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     recon = trimesh.Trimesh(vertices=verts, faces=faces)
     # fname = f'interpolant_{grid_len}_{iters}_clamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj' if options.clamp else f'interpolant_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     clamp_str = 'clamp' if options.clamp else 'noclamp'
-    mes_str = 'MES' if options.use_MES else 'noMES'
+    mes_str = 'noMES' if options.use_MES == -1 else ('MESforce' if options.use_MES == 1 else 'MES')
     post_str = 'post' if options.post_processing else 'nopost'
     if options.cpp_dc:
         post_str = post_str + '_dc'
@@ -590,9 +590,10 @@ def test_our_method(options : Options, save_gtmesh=False):
     short_arc_str = 'noShortArcs' if options.turn_off_short_arcs else 'shortArcs'
     if not use_cpp:
         post_str = 'odc'
-    fname = f'interpolant_{grid_len}_{iters}_{short_arc_str}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}.obj'
-    if options.use_gt_gradients:
-        fname = f'interpolant_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
+    # fname = f'interpolant_{grid_len}_{iters}_{short_arc_str}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}_lr{options.lr}.obj'
+    fname = f'interpolant_{grid_len}_{iters}_{short_arc_str}_{mes_str}.obj'
+    # if options.use_gt_gradients:
+    #     fname = f'interpolant_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
     '''
     # """ ========================= output post+mc ========================= """
