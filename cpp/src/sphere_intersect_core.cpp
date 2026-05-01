@@ -181,17 +181,12 @@ void find_intersections(const double* centers, const double* radii, int n,
 
     #pragma omp parallel
     {
-#ifdef _OPENMP
-        int tid = omp_get_thread_num();
-#else
-        int tid = 0;
-#endif
-        std::mt19937 rng((uint32_t)(0x9E3779B1u ^ (uint32_t)tid));
         std::vector<int> buf;
         std::vector<std::pair<float, int>> sd_tmp;  // (signed_d, neighbor_id), reused across i
 
         #pragma omp for schedule(dynamic, 256)
         for (int i = 0; i < n; i++) {
+            std::mt19937 rng((uint32_t)(0x9E3779B1u ^ (uint32_t)i));  // seed by i, not tid: see Fisher-Yates section below
             buf.clear();
             bvh_query(nodes, leaf_indices,
                       cx.data(), cy.data(), cz.data(), ra.data(),
@@ -247,6 +242,8 @@ void find_intersections(const double* centers, const double* radii, int n,
 
             // Fill remaining kept slots [front_used, MAX_KEEP) with a
             // uniform random sample from [front_used, sz) via Fisher-Yates.
+            // The RNG above is seeded by `i` (not OpenMP thread id) so this
+            // sample is bit-exact across runs regardless of thread scheduling.
             if (sz > front_used) {
                 int remain = sz - front_used;
                 int cap = MAX_KEEP - front_used;
