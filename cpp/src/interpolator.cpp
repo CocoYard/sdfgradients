@@ -372,12 +372,13 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
             dirs.row(i) = fib.row(best_idx);
         }
     }
-
-    // Projected gradient descent on S²
-    // obj_i = sgn(i) * sdf(p_i - s_i * g_i)   — minimize
-    // ∂obj/∂g = sgn(i) * (-s_i) * ∇sdf = -|s_i| * ∇sdf
-    // tangent projection: grad_tan = grad - (grad · g) * g
-    // retraction: g ← normalize(g - lr * grad_tan)
+    // Gradient ascent on ⟨∇D̃(q), g⟩ over S² with retraction by normalization.
+    // The gradient is unit-normalized so the effective step size lr is the
+    // same at every point regardless of ‖∇D̃‖ (which is not 1 in general
+    // because the RBF interpolant is not strictly Eikonal).
+    //   q  = p − s·g
+    //   n̂ = ∇D̃(q) / ‖∇D̃(q)‖
+    //   g  ← normalize(g + lr · n̂)
     Eigen::MatrixXd proj(N, 3);
     for (int step = 0; step < optim_steps; step++) {
         #pragma omp parallel for schedule(static)
@@ -388,14 +389,12 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
 
         #pragma omp parallel for schedule(static)
         for (int i = 0; i < N; i++) {
-            double abs_s = std::abs(sdf_values(i));
-            if (abs_s < 1e-15) continue;
+            Eigen::RowVector3d n = sdf_grad.row(i);
+            double gn = n.norm();
+            if (gn < 1e-15) continue;
+            n /= gn;
 
-            Eigen::RowVector3d raw = -abs_s * sdf_grad.row(i);
-            double dot = raw.dot(dirs.row(i));
-            Eigen::RowVector3d grad_tan = raw - dot * dirs.row(i);
-
-            Eigen::RowVector3d updated = dirs.row(i) - lr * grad_tan;
+            Eigen::RowVector3d updated = dirs.row(i) + lr * n;
             double norm = updated.norm();
             if (norm > 1e-15)
                 dirs.row(i) = updated / norm;
