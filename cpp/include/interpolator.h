@@ -62,7 +62,7 @@ public:
         const Eigen::VectorXd& sdf_values,
         int num_coarse   = 24,
         int optim_steps  = 10,
-        double lr        = 1.0,
+        double lr        = 0.2,
         const Eigen::MatrixXd* initial_guess = nullptr,
         int chunk_size   = 200) const;
 

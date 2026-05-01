@@ -36,7 +36,7 @@ Eigen::MatrixXd iterative_projection_3d(
     int num_iter      = 10,
     int num_coarse    = 24,
     int optim_steps   = 10,
-    double lr         = 1.0,
+    double lr         = 0.2,
     const Eigen::MatrixXd* gt_gradients = nullptr);
 
 }  // namespace sdf

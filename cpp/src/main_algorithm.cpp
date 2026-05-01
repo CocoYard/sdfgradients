@@ -433,7 +433,10 @@ MainResult main_algorithm(
         gradients = iterative_projection_3d(
             sdf_points, sdf_values, init_grads,
             *interpolator, options,
-            options.max_iters);
+            options.max_iters,
+            /*num_coarse=*/24,
+            /*optim_steps=*/10,
+            /*lr=*/options.lr);
         if (options.verbose)
             std::cout << "[main_algorithm] iterative_projection_3d: "
                       << ms_since(t4)/1000.0 << " s\n";
@@ -570,8 +573,9 @@ void export_projection_ply(
         + options.name + "_"
         + std::to_string(options.grid_len) + "_"
         + std::to_string(options.max_iters);
-    if (options.use_MES) stem += "_MES";
-    else stem += "_noMES";
+    if (options.use_MES == -1) stem += "_noMES";
+    else if (options.use_MES == 1) stem += "_MESforce";
+    else stem += "_MES";
 
     std::vector<int> vis_idx, invis_idx;
     for (int i = 0; i < N; i++) {

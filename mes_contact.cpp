@@ -27,6 +27,8 @@
 #include <vector>
 #include <cmath>
 #include <limits>
+#include <chrono>
+#include <iostream>
 
 namespace py = pybind11;
 
@@ -42,6 +44,7 @@ static void process_group(
     py::detail::unchecked_mutable_reference<double, 2>& out_pts,
     py::detail::unchecked_mutable_reference<double, 2>& out_nrm,
     bool filter_bbox,
+    bool cone_filter,
     int  debug_level)
 {
     int M = (int)G.rows();
@@ -55,7 +58,7 @@ static void process_group(
     Eigen::MatrixXi contact_indices; // (K, ncp_max): which input spheres each contacts
     CGAL::maximal_empty_spheres<CGAL::Dimension_tag<3>>(
         G_abs, result, &contact_indices, /*atol=*/1e-8, debug_level,
-        /*ncp_max=*/M, /*cone_filter=*/true);
+        /*ncp_max=*/10, cone_filter);
 
     if (debug_level > 0) {
         std::cout << "[process_group] M=" << M
@@ -138,8 +141,16 @@ py::tuple contact_points_from_sdf(
     py::array_t<double, py::array::c_style | py::array::forcecast> points_arr,
     py::array_t<double, py::array::c_style | py::array::forcecast> sdf_arr,
     bool filter_bbox  = true,
+    bool cone_filter  = true,
     int  debug_level  = 0)
 {
+    int saved_threads = Eigen::nbThreads();
+    Eigen::setNbThreads(1);
+    struct RestoreThreads {
+        int v;
+        ~RestoreThreads() { Eigen::setNbThreads(v); }
+    } restore{saved_threads};
+
     auto pts = points_arr.unchecked<2>();
     auto sdf = sdf_arr.unchecked<1>();
     int N = (int)pts.shape(0);
@@ -173,8 +184,8 @@ py::tuple contact_points_from_sdf(
         for (int j = 0; j < 3; j++)
             p(i, j) = n(i, j) = nan;
 
-    process_group(Gp, pos_orig, p, n, filter_bbox, debug_level);
-    process_group(Gn, neg_orig, p, n, filter_bbox, debug_level);
+    process_group(Gp, pos_orig, p, n, filter_bbox, cone_filter, debug_level);
+    process_group(Gn, neg_orig, p, n, filter_bbox, cone_filter, debug_level);
 
     return py::make_tuple(out_pts, out_nrm);
 }
@@ -187,6 +198,7 @@ PYBIND11_MODULE(mes_contact, m) {
           py::arg("points"),
           py::arg("sdf"),
           py::arg("filter_bbox")  = true,
+          py::arg("cone_filter")  = false,
           py::arg("debug_level")  = 0,
           R"(Compute contact points of maximal empty spheres.
 

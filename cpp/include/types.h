@@ -30,7 +30,7 @@ struct Options {
     bool clamp         = true;
     bool turn_off_short_arcs = false;
     double reg = 1e-5;  // regularization for DuchonInterpolator
-    bool use_MES = false;  // whether to use MES normals for invisible points with small visibility gain
+    int use_MES = 0;  // -1 = off, 0 = adaptive (vis_per_sample_area < 10), 1 = force on
     bool export_projections = true;   // write PLY visualization files after main_algorithm
     bool export_short_arcs  = true;   // write PLY of degenerate-arc points after init
     bool verbose = true;              // if false, main_algorithm suppresses stdout logging
@@ -39,6 +39,7 @@ struct Options {
     std::string interp_partition  = "box";    // "box" or "sphere"
     double interp_overlap         = 0.5;
     std::string iter_gradient_finding = "optimize";  // "optimize" or "sample"
+    double lr = 0.2;  // step size for optimize_best_gradients (S² normalized GD)
 
     Tolerance tolerance;
     bool tolerance_initialized = false;

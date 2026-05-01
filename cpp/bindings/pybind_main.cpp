@@ -38,7 +38,8 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def_readwrite("interp_overlap", &sdf::Options::interp_overlap)
         .def_readwrite("tolerance", &sdf::Options::tolerance)
         .def_readwrite("gt_gradients", &sdf::Options::gt_gradients)
-        .def_readwrite("iter_gradient_finding", &sdf::Options::iter_gradient_finding);
+        .def_readwrite("iter_gradient_finding", &sdf::Options::iter_gradient_finding)
+        .def_readwrite("lr", &sdf::Options::lr);
 
     // ── MainResult ──────────────────────────────────────────────────
     py::class_<sdf::MainResult>(m, "MainResult")
