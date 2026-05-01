@@ -7,10 +7,10 @@ import time
 from util import mesh_distances
 
 class Options:
-    def __init__(self, grid_len=20, gt_mesh=None, clamp=False, max_iters=10, name='horse', 
+    def __init__(self, grid_len=20, gt_mesh=None, clamp=False, max_iters=10, name='horse', lr=0.2,
                  turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
-                use_MES=True, post_processing=False, iter_gradient_finding='optimize', verbose=True):
+                use_MES=0, post_processing=False, iter_gradient_finding='optimize', verbose=True):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -29,6 +29,7 @@ class Options:
         self.iter_gradient_finding = iter_gradient_finding  # 'optimize' or 'sample'
         self.cpp_dc = cpp_dc
         self.verbose = verbose
+        self.lr = lr
 
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
@@ -521,6 +522,7 @@ def test_our_method(options : Options, save_gtmesh=False):
         cpp_opts.export_projections = options.export_projections
         cpp_opts.export_short_arcs  = options.export_short_arcs
         cpp_opts.iter_gradient_finding = options.iter_gradient_finding
+        cpp_opts.lr = options.lr
         cpp_opts.verbose = options.verbose
         if options.use_gt_gradients:
             cpp_opts.gt_gradients = options.gt_gradients
