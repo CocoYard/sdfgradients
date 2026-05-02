@@ -51,7 +51,9 @@ class Options:
               f" use_gt_gradients={self.use_gt_gradients},"
               f" interpolator_type={self.interpolator_type},"
               f" interp_partition={self.interp_partition}",
-              f" interp_overlap={self.interp_overlap}")
+              f" interp_overlap={self.interp_overlap}",
+              f" use_MES={self.use_MES}",
+              f" lr={self.lr}")
 
 class Tolerance:
     def __init__(self, clamp_radius_ratio=0.2, clamp_sdf_tol=1e-3, angle_tol=np.radians(15)):
