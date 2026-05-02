@@ -153,24 +153,42 @@ static inline double fmod_pos(double x, double m) {
 }
 
 // ── Data structures ──────────────────────────────────────────────
+//
+// A `Cap` is the spherical region cut off the main sphere by one neighbor
+// sphere. Its boundary on the main sphere is a small circle ("cap circle").
 struct Cap {
-    Vec3 normal;
-    double d;
-    Vec3 circle_center;
-    double circle_radius;
-    Vec3 local_u, local_v;
-    double phi;
-    int sphere_idx;
-    double containment_gap;
+    Vec3 normal;            // cutting plane normal, oriented from main → neighbor
+    double d;               // plane offset: a point x is "inside the cap"
+                            // (covered by the neighbor) iff normal·x > d
+    Vec3 circle_center;     // 3D center of the cap circle (lies on the cutting plane)
+    double circle_radius;   // radius of the cap circle (≤ main sphere radius);
+                            // 0 when the cap collapses to a point or covers everything
+    Vec3 local_u, local_v;  // orthonormal basis spanning the cutting plane;
+                            // any point on the cap circle is
+                            //   circle_center + circle_radius·(cos t·u + sin t·v)
+    double phi;             // half-opening angle of the cap measured from main
+                            // sphere center: φ=0 → single tangent point,
+                            // φ=π/2 → hemisphere, φ=π → cap covers the whole sphere
+                            // (i.e., main is fully inside the neighbor)
+    int sphere_idx;         // index of the neighbor sphere that produced this cap
+    double containment_gap; // only meaningful when φ ≈ π (containment branch).
+                            // Equal to neighbor.r - dist - main.r, i.e., the
+                            // closest gap between the two sphere surfaces.
+                            // 0 = internally tangent (Δsdf = center distance),
+                            // DBL_MAX = not a containment cap.
 };
 
+// Closed angular interval on a circle, in radians.
 struct Interval {
     double start, end;
 };
 
+// One contiguous arc of the exposed-region boundary, lying on a specific
+// cap's circle. `t_start, t_end` parametrize the arc on that circle via
+// `point_on_circle(caps[cap_idx], t)`.
 struct BoundaryArc {
-    int cap_idx;
-    double t_start, t_end;
+    int cap_idx;            // host cap whose circle this arc lies on
+    double t_start, t_end;  // angular range in [0, 2π) on the host's local_u/v
 };
 
 // ── Geometry helpers ─────────────────────────────────────────────
@@ -509,8 +527,9 @@ static void compute_one(
         if (!compute_cap(mc, mr, {oc[i*3], oc[i*3+1], oc[i*3+2]}, or_[i], i, cap))
             continue;
 
-        // Containment (φ ≥ π): this neighbor swallows us. Emit tangent point if
-        // applicable and bail — exposed region is empty.
+        // (we are fully inside the neighbor). Containment (φ ≥ π): this
+        // neighbor swallows us. Emit tangent point if applicable and
+        // bail — exposed region is empty.
         if (cap.phi >= PI - EPS10) {
             if (cap.containment_gap <= tol.tangent_tol && *out_npts < MAX_DEGEN_PTS) {
                 out_pts[(*out_npts)++] = mc - mr * cap.normal;
