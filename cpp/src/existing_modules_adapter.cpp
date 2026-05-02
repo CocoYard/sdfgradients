@@ -713,7 +713,9 @@ static void compute_one(
         arc_cap[na] = remap[arc.cap_idx];
         arc_s[na]   = arc.t_start;
         arc_e[na]   = arc.t_end;
-        total += arc.t_end - arc.t_start;
+        // Total arc length = sum over arcs of (cap circle radius) × (angular extent).
+        // degen_tol is a length in mesh units, not an angle.
+        total += caps[arc.cap_idx].circle_radius * (arc.t_end - arc.t_start);
         na++;
     }
     *out_narcs = na;
