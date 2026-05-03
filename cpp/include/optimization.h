@@ -34,7 +34,7 @@ Eigen::MatrixXd iterative_projection_3d(
     Interpolator& interpolator,
     Options& options,
     int num_iter      = 10,
-    int num_coarse    = 24,
+    int num_coarse    = 64,
     int optim_steps   = 10,
     double lr         = 0.2,
     const Eigen::MatrixXd* gt_gradients = nullptr);

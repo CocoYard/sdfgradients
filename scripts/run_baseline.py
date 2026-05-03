@@ -177,7 +177,7 @@ def main() -> int:
                                interpolator_type='PU',
                                interp_partition='sphere',
                                overlap=0.2, reg=0,
-                               use_MES=True, post_processing=False,
+                               use_MES=0, post_processing=False,
                                iter_gradient_finding='optimize',
                                verbose=True)
             else:

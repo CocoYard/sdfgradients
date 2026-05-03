@@ -341,14 +341,14 @@ void get_visible_arcs(
 
         // tol args (in order): tol, degen_tol, merge_tol, tangent_tol.
         //   tol         = 1e-4  : cap dedup + plane-side test (length / dimensionless)
-        //   degen_tol   = 1e-4  : collapse exposed region to a tangent point when
+        //   degen_tol   = 1e-8  : collapse exposed region to a tangent point when
         //                         total arc length < this. Length units (mesh).
         //   merge_tol   = 1e-12 : merge near-touching intervals (radians)
         //   tangent_tol = 1e-8  : containment-gap tolerance for emitting tangent pts
         sphere_exposed_core::compute_exposed_batch(
             pts_rm.data(), radii.data(), N,
             options.ngbrs_list,
-            1e-4, 1e-4, 1e-12, 1e-8,
+            1e-4, 1e-8, 1e-12, 1e-8,
             options.batch);
     }  // pts_rm freed here
 
@@ -440,7 +440,7 @@ MainResult main_algorithm(
             sdf_points, sdf_values, init_grads,
             *interpolator, options,
             options.max_iters,
-            /*num_coarse=*/24,
+            /*num_coarse=*/64,
             /*optim_steps=*/10,
             /*lr=*/options.lr);
         if (options.verbose)

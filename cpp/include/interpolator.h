@@ -48,7 +48,7 @@ public:
     Eigen::MatrixXd sample_best_gradients(
         const Eigen::MatrixXd& points,
         const Eigen::VectorXd& sdf_values,
-        int num_coarse   = 24,
+        int num_coarse   = 64,
         int refine_steps = 4,
         int num_refine   = 5,
         const Eigen::MatrixXd* initial_guess = nullptr,
@@ -60,7 +60,7 @@ public:
     Eigen::MatrixXd optimize_best_gradients(
         const Eigen::MatrixXd& points,
         const Eigen::VectorXd& sdf_values,
-        int num_coarse   = 24,
+        int num_coarse   = 64,
         int optim_steps  = 10,
         double lr        = 0.2,
         const Eigen::MatrixXd* initial_guess = nullptr,
