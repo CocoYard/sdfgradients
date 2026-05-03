@@ -353,96 +353,120 @@ def _point_to_polylines_min_dist(points, polylines):
     return min_dists, nearest_points
 
 def iterative_projection(points, values, init_gradients, interpolator : Interpolator, visible_arcs, short_arc_idx, num_iter=10,
-                         num_coarse=24, refine_steps=4, num_refine=12, gt=None, colinear_neighbors=None):
+                         num_coarse=24, refine_steps=4, num_refine=12, optim_steps=10, lr=0.2,
+                         gt=None, colinear_neighbors=None, clamp=True):
     """
     Iteratively refine SDF gradients by projecting sample points onto the zero
-    level set of an interpolant, then finding the best gradient
-    direction via sample_best_gradients (coarse sweep + angular refinement).
+    level set of an interpolant. Mirrors the 3D pipeline in
+    cpp/src/optimization.cpp::iterative_projection_3d so the 2D and 3D
+    algorithms behave identically.
 
-    Algorithm (each iteration):
-      1. Fit an Interpolator with current gradients (use_projection=True).
-      2. For each sample point, search over directions to find the one whose
-         projection P - s*g lands closest to the zero level set of the
-         interpolant (via sample_best_gradients).
-      3. Update gradients := best directions found.
-      4. Repeat.
+    Each iteration:
+      1. Find best gradient via angular search (sample_best_gradients).
+      2. (optional) Clamp updated gradients back into the visible arcs.
+      3. Compute projections q = p - s*g for old & new gradients.
+      4. Visibility check: for each sample, decide whether the new projection
+         lies in a visible region (i.e., not inside any other sphere). Reject
+         updates that would turn a visible projection into an invisible one,
+         and reject updates for degenerate-arc samples.
+      5. Build the fit mask = (vis_old | vis_new) and refit the interpolator
+         using only those samples.
+      6. Cache visibility for the next iteration.
 
-    Parameters
-    ----------
-    points : (N, 2) array
-        Sample point coordinates.
-    values : (N,) array
-        Signed distance values at each sample point.
-    init_gradients : (N, 2) array
-        Initial unit gradient estimates.
-    visible_arcs: a list of lists of tuples: point index -> list of visible arcs
-        A collection of visible arcs that can be used to clamp the gradients.
-    short_arc_idx: a set of point indices whose visible arcs are extremely short, so we skip them.
-    num_iter : int
-        Number of projection-refit iterations (default 10).
-    num_coarse : int
-        Number of uniformly spaced directions in the coarse sweep (default 24).
-    refine_steps : int
-        Number of zoom-in refinement iterations (default 4).
-    num_refine : int
-        Directions evaluated per refinement step (default 12).
+    Note: `visible_arcs` and `colinear_neighbors` are kept in the signature
+    for backwards compatibility but no longer participate in the per-update
+    gating \u2014 visibility is now decided by the projection's containment in
+    other spheres (consistent with the 3D version).
 
     Returns
     -------
     gradients : (N, 2) array
         Refined unit gradient vectors.
-    interpolator : CurlFree_Interpolator
-        The final fitted interpolator (ready for predict / marching cubes).
+    interpolator : Interpolator
+        The final fitted interpolator.
     """
     points = np.asarray(points, dtype=np.float64)
     values = np.asarray(values, dtype=np.float64).ravel()
     gradients = np.array(init_gradients, dtype=np.float64, copy=True)
+    N = len(points)
 
     # Normalize initial gradients
     norms = np.linalg.norm(gradients, axis=1, keepdims=True)
     gradients /= np.maximum(norms, 1e-12)
     init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
-    # no intersection with other circles, so we should not trust the gradient
-    full_arc_mask = np.array([len(arcs) == 1 and arcs[0][1] - arcs[0][0] >= 2 * np.pi - 1e-8 for arcs in visible_arcs])
+
     if gt is not None:
         print_shape_distances("Before refinement", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=400), gt)
+
+    vis_cached = None  # cached vis_old across iters
+
     for it in range(num_iter):
-        # ----- Step 1: Find best gradient via angular search on the interpolant -----
-        new_gradients = interpolator.sample_best_gradients(
+        # \u2500\u2500 Step 1: Find best gradient via projected gradient ascent \u2500\u2500
+        new_gradients = interpolator.optimize_best_gradients(
             points, values,
             num_coarse=num_coarse,
-            refine_steps=refine_steps,
-            num_refine=num_refine,
+            optim_steps=optim_steps,
+            lr=lr,
             initial_guess=init_angles
         )
-        # skip points with short visible arcs or the dir is not in visible arcs, keep original gradients for them
-        angle = np.where(values < 0, np.arctan2(new_gradients[:, 1], new_gradients[:, 0]), np.arctan2(-new_gradients[:, 1], -new_gradients[:, 0]))
-        skip_mask = np.zeros(len(points), dtype=bool)
-        for i in range(len(points)):
-            if i in short_arc_idx or not va.angle_in_arcs(angle[i], visible_arcs[i]) or colinear_neighbors is not None and i in colinear_neighbors:
-                skip_mask[i] = True
-        new_gradients[skip_mask] = gradients[skip_mask]
 
-        # ----- Convergence diagnostic -----
+        # \u2500\u2500 Step 2: Clamp updated gradients to visible arcs \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        # Mirrors `clamp_gradients_to_arcs` in cpp/src/optimization.cpp.
+        # The 2D arc-clamp uses visible_arcs (no tunable tolerance) so we
+        # call it once instead of the C++ retry-with-shrinking-tol loop.
+        if clamp:
+            va.clamp_gradients_to_arcs(
+                new_gradients, visible_arcs, short_arc_idx, values,
+                skip_degenerate=True)
+
+        # \u2500\u2500 Step 3: Visibility checks on projections \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        proj_new = points - values[:, np.newaxis] * new_gradients
+        vis_new = are_points_visible(proj_new, points, values)
+
+        if vis_cached is not None:
+            vis_old = vis_cached
+        else:
+            proj_old = points - values[:, np.newaxis] * gradients
+            vis_old = are_points_visible(proj_old, points, values)
+
+        # \u2500\u2500 Step 4: Reject updates that lose visibility or hit degen \u2500\u2500
+        skip = vis_old & ~vis_new
+        if it == 0:
+            # only use those whose visible arcs are not 2Pi
+            for i in range(N):
+                # print(f"Point {i}: visible arcs = {visible_arcs[i]}")
+                if visible_arcs[i] is not None and visible_arcs[i][0][1] - visible_arcs[i][0][0] >= 2 * np.pi - 1e-3:
+                    skip[i] = True
+
+        for i in range(N):
+            if i in short_arc_idx:
+                skip[i] = True
+        new_gradients[skip] = gradients[skip]
+        vis_next = np.where(skip, vis_old, vis_new)
+        vis_cached = vis_next
+
+        # \u2500\u2500 Visible mask = union of old and new \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        vis_mask = vis_old | vis_new
+        visible_num = int(vis_mask.sum())
+
+        # \u2500\u2500 Convergence diagnostic \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         cos_sim = np.sum(gradients * new_gradients, axis=1)
-        mean_cos = np.mean(cos_sim)
-        max_angle_deg = np.degrees(np.arccos(np.clip(np.min(cos_sim), -1, 1)))
-
-        # Projection error: f(P - s*g) should be ~0
+        mean_cos = float(np.mean(cos_sim))
+        max_angle_deg = float(np.degrees(np.arccos(np.clip(np.min(cos_sim), -1, 1))))
         proj_pts = points - values[:, np.newaxis] * new_gradients
-        proj_vals = interpolator.predict(proj_pts)
-        proj_rmse = np.sqrt(np.mean(proj_vals**2))
+        proj_rmse = float(np.sqrt(np.mean(interpolator.predict(proj_pts) ** 2)))
 
-        print(f"Iter {it+1:3d} | mean cos_sim: {mean_cos:.6f}  "
+        print(f"Iter {it+1:3d} | visible: {visible_num}/{N} ({100.0*visible_num/N:.2f}%)  "
+              f"mean cos_sim: {mean_cos:.6f}  "
               f"max angle change: {max_angle_deg:.2f}\u00b0  "
               f"proj RMSE: {proj_rmse:.6e}")
 
         gradients = new_gradients
         init_angles = np.arctan2(gradients[:, 1], gradients[:, 0])
-        # ----- Step 2: Fit interpolant with current gradients -----
-        interpolator.fit(points, values, gradients, mask=~full_arc_mask&~np.isnan(gradients).any(axis=1))  # optionally skip fitting points with full arcs since they are less reliable
-        # if gt is not None:
-        #     print_shape_distances("    ", interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=500), gt)
+
+        # \u2500\u2500 Step 5: Refit interpolant on the visible subset \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        fit_mask = vis_mask & ~np.isnan(gradients).any(axis=1)
+        interpolator.fit(points, values, gradients, mask=fit_mask)
 
     return gradients, interpolator
 

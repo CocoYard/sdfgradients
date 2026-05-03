@@ -318,6 +318,68 @@ class Interpolator(ABC):
             half_angle /= np.sqrt(num_refine)
         return best_dirs
 
+    def optimize_best_gradients(self, points, sdf, num_coarse=24, optim_steps=10,
+                                lr=0.2, initial_guess=None, chunk_size=200):
+        """
+        2D analogue of C++ Interpolator::optimize_best_gradients. Finds best
+        gradient directions via uniform-angle init + projected gradient ascent
+        on S¹.
+
+        Uses analytic ∇sdf via predict_gradients() instead of sampling many
+        directions per refinement step. The gradient is unit-normalized so the
+        effective step size lr is the same at every point regardless of ‖∇D̃‖
+        (which is not 1 in general because the RBF interpolant is not strictly
+        Eikonal).
+            q  = p − s·g
+            n̂ = ∇D̃(q) / ‖∇D̃(q)‖
+            g  ← normalize(g + lr · n̂)
+
+        initial_guess: (N,) angles or (N,2) unit vectors; NaN entries trigger
+        the coarse sweep.
+        """
+        points = np.asarray(points, dtype=np.float64)
+        sdf = np.asarray(sdf, dtype=np.float64).ravel()
+        N = points.shape[0]
+        sign = np.where(sdf > 0, 1.0, -1.0)
+
+        dirs = np.zeros((N, 2))
+        valid_mask = np.zeros(N, dtype=bool)
+        if initial_guess is not None:
+            guess = np.asarray(initial_guess, dtype=np.float64)
+            if guess.ndim == 2 and guess.shape[1] == 2:
+                norms = np.linalg.norm(guess, axis=1)
+                valid_mask = np.isfinite(guess).all(axis=1) & (norms > 1e-12)
+                dirs[valid_mask] = guess[valid_mask] / norms[valid_mask, None]
+            else:
+                ang = guess.reshape(-1)
+                valid_mask = np.isfinite(ang)
+                dirs[valid_mask] = np.stack([np.cos(ang[valid_mask]),
+                                             np.sin(ang[valid_mask])], axis=1)
+        invalid_mask = ~valid_mask
+
+        if np.any(invalid_mask):
+            angles = np.linspace(0, 2 * np.pi, num_coarse, endpoint=False)
+            coarse = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+            n_inv = int(np.sum(invalid_mask))
+            samples = points[invalid_mask, None, :] - sdf[invalid_mask, None, None] * coarse[None, :, :]
+            preds = self.predict(samples.reshape(-1, 2), chunk_size=chunk_size).reshape(n_inv, num_coarse)
+            obj = preds * sign[invalid_mask, None]
+            best_idx = np.argmin(obj, axis=1)
+            dirs[invalid_mask] = coarse[best_idx]
+
+        for _ in range(optim_steps):
+            proj = points - sdf[:, None] * dirs
+            sdf_grad = self.predict_gradients(proj, chunk_size=chunk_size)
+            gn = np.linalg.norm(sdf_grad, axis=1, keepdims=True)
+            n_hat = sdf_grad / np.maximum(gn, 1e-15)
+            updated = dirs + lr * n_hat
+            upd_norm = np.linalg.norm(updated, axis=1, keepdims=True)
+            valid = (gn.ravel() > 1e-15) & (upd_norm.ravel() > 1e-15)
+            new_dirs = updated / np.maximum(upd_norm, 1e-15)
+            dirs[valid] = new_dirs[valid]
+
+        return dirs
+
 class DuchonInterpolator(Interpolator):
     """
     A Duchon interpolator to fit and predict values based on input signed distance data.

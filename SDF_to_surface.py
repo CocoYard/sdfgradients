@@ -361,53 +361,45 @@ def yongs_algorithm( points, distances, gradients ):
     new_points = points - (distances[:, np.newaxis] * gradients)
     return new_points
 
-def estimate_gradients_interp_global(sdf_points, sdf_values, interpolator : Interpolator, visible_arcs, degenerate_arcs, colinear_neighbors=None):
-    '''
-    Estimate gradients by fitting a global Duchon interpolator to the signed distance data and evaluating its gradient.
+def _degen_grad_2d(sdf_value, angle):
+    """Outward unit gradient at a 2D sample sphere whose visible arc has
+    collapsed to angle θ. Mirrors the 3D logic
+    `gradient = (p - surface_pt) / s` (cpp/src/main_algorithm.cpp:254)."""
+    if sdf_value > 0:
+        return np.array([-np.cos(angle), -np.sin(angle)])
+    return np.array([np.cos(angle), np.sin(angle)])
 
-    Parameters:
-    -----------
-    sdf_points: (N, d) array of point coordinates
-        The input points in d-dimensional space.
-    sdf_values: (N,) array of signed distance values
-        The signed distance values for each point.
-    interpolator: Interpolator
-        A fitted Interpolator object that can predict values and gradients.
-    visible_arcs: a dictionary: point index -> list of visible arcs
-        A collection of visible arcs that can be used to clamp the gradients.
-    degenerate_arcs: a dictionary: point index -> list of degenerate arcs
-        A collection of degenerate arcs that can be used to clamp the gradients.
-    colinear_neighbors: a dictionary: point index -> list of colinear neighbors, optional
-        A collection of colinear neighbors that can be used for gradient estimation. Default is None.
-    Returns:
-    -----------
-    gradients: (N, d) array of estimated gradient vectors
-        The estimated gradient vectors at each input point.
-    '''
 
-    to_train_points = sdf_points.copy()
-    to_train_sdf = sdf_values.copy()
+def init_interpolator_with_degen_pts(sdf_points, sdf_values, interpolator: Interpolator, degenerate_arcs):
+    """
+    Refit the interpolator with the sample points augmented by the
+    degenerate-arc surface points (each contributing a sdf=0 constraint).
+    Mirrors the second fit inside cpp/src/main_algorithm.cpp::init_gradients_by_degenerate_pts.
+    """
+    pts_to_add = []
     for i, angle in degenerate_arcs.items():
-        # For points with degenerate arcs, set gradient directly toward the angle
-        grad = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
-        # Add a new point on the surface along this gradient direction
-        new_point = sdf_points[i] - sdf_values[i] * grad
-        to_train_points = np.vstack([to_train_points, new_point])
-        to_train_sdf = np.append(to_train_sdf, 0)  # The SDF value at the projected point should be 0
+        grad = _degen_grad_2d(sdf_values[i], angle)
+        pts_to_add.append(sdf_points[i] - sdf_values[i] * grad)
+
+    if pts_to_add:
+        to_train_points = np.vstack([sdf_points, np.array(pts_to_add)])
+        to_train_sdf = np.concatenate([sdf_values, np.zeros(len(pts_to_add))])
+    else:
+        to_train_points, to_train_sdf = sdf_points, sdf_values
+
     print(f"After adding points for degenerate arcs, total points: {len(to_train_points)}")
     interpolator.fit(to_train_points, to_train_sdf)
-    gradients = np.full(sdf_points.shape, np.nan)  # Initialize gradients with NaN
-    if colinear_neighbors is not None:
-        # Clamp the gradients ONLY in clamp_indices to the directions defined by their colinear neighbors.
-        # va.clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values, clamp_indices)
 
-        # Clamp the gradients to the directions defined by their colinear neighbors.
-        va.clamp_gradient_to_colinear_neighbors(gradients, colinear_neighbors, degenerate_arcs, sdf_points, sdf_values)
-    # TODO: Clamp gradients to visible arcs based on the lowest function value.
-    clamp_indices = va.clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values)
+
+def init_gradients_by_degen_pts(sdf_points, sdf_values, degenerate_arcs):
+    """
+    Initialize gradients to NaN, except for samples in `degenerate_arcs` whose
+    gradient is set directly to the outward direction implied by the degen
+    angle. Matches cpp/src/main_algorithm.cpp::init_gradients_by_degenerate_pts.
+    """
+    gradients = np.full(sdf_points.shape, np.nan)
     for i, angle in degenerate_arcs.items():
-        # For points with degenerate arcs, set gradient directly toward the angle
-        gradients[i] = np.array([-np.cos(angle), -np.sin(angle)]) if sdf_values[i] > 0 else np.array([np.cos(angle), np.sin(angle)])
+        gradients[i] = _degen_grad_2d(sdf_values[i], angle)
     return gradients
 
 def estimate_gradients_oracle( points, distances, vertices ):
@@ -1030,7 +1022,7 @@ def obj_to_points(V, E):
 def plot_correspondence(sdf_points, points_on_surface, plt, color='k'):
     for i in range(sdf_points.shape[0]):
         plt.plot([sdf_points[i, 0], points_on_surface[i, 0]], 
-                 [sdf_points[i, 1], points_on_surface[i, 1]], color+'--', linewidth=0.5)
+                 [sdf_points[i, 1], points_on_surface[i, 1]], color+'--', linewidth=0.2)
 
 def setup_gradient_click_inspector(fig, ax, sdf_points, sdf_values, gradients, neighbors=None, gradient_estimation=GradientEstimation.RANSAC):
     """
@@ -1785,7 +1777,8 @@ def test_find_neighbors(n, path_to_image='examples/horse.png'):
     colinear_neighbors = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-6)
 
     # Fit a interpolator (needed by find_neighbors to extract contours)
-    init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, colinear_neighbors)
+    init_interpolator_with_degen_pts(sdf_points, sdf_values, interpolator, degenerate_arcs)
+    init_gradients = init_gradients_by_degen_pts(sdf_points, sdf_values, degenerate_arcs)
     # init_gradients = estimate_gradients_basicInterp_opt(sdf_points, sdf_values, init_gradients, interpolator, 1,  visible_arcs, degenerate_arcs)
     proj_points = sdf_points - sdf_values[:, np.newaxis] * init_gradients
     to_fit_points = np.vstack([sdf_points, proj_points])
@@ -1981,17 +1974,19 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         colinear_neighbors = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-5)
         print(f"Number of colinear neighbors: {len(colinear_neighbors)}")
     if gradient_estimation == GradientEstimation.INTERP_GLOBAL_OPT:
-        init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, 
-                                                          colinear_neighbors if on_gradient_neighbors else None)
+        interpolator.fit(sdf_points, sdf_values)  # Fit initial interpolator to get gradients for all points (including those with degenerate arcs)
+        init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
+
+        init_interpolator_with_degen_pts(sdf_points, sdf_values, interpolator, degenerate_arcs)
+        init_gradients = init_gradients_by_degen_pts(sdf_points, sdf_values, degenerate_arcs)
         init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
         mask = rate_gradient_estimation(sdf_points, init_projections, sdf_values) == 0
         print(f"Initial projection error count: {np.sum(mask)} out of {len(sdf_points)}. percent correct: {np.mean(mask) * 100:.2f}%")
         # interpolator = CurlFree_Interpolator()
         # no intersection with other circles, so we should not trust the gradient
-        full_arc_mask = np.array([len(arcs) == 1 and arcs[0][1] - arcs[0][0] >= 2 * np.pi - 1e-8 for arcs in visible_arcs])
-        interpolator.fit(sdf_points, sdf_values, init_gradients, mask=~full_arc_mask&~np.isnan(init_gradients).any(axis=1))  # Only fit points that do not have full circular arcs (where gradient is unreliable)
+        # full_arc_mask = np.array([len(arcs) == 1 and arcs[0][1] - arcs[0][0] >= 2 * np.pi - 1e-8 for arcs in visible_arcs])
+        # interpolator.fit(sdf_points, sdf_values, init_gradients, mask=~full_arc_mask&~np.isnan(init_gradients).any(axis=1))  # Only fit points that do not have full circular arcs (where gradient is unreliable)
 
-        init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
 
         # gradients = opt.iterative_gradient_alignment(sdf_points, sdf_values, init_gradients, interpolator, visible_arcs, degenerate_arcs, num_iter=iters, gt=points)
         gradients, _ = opt.iterative_projection(sdf_points, sdf_values, init_gradients, interpolator=interpolator, 
@@ -2013,8 +2008,8 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             for k, v in colinear_neighbors.items():
                 neighbors[k] = v
         if gradient_estimation == GradientEstimation.CurlFree_OPT:
-            init_gradients = estimate_gradients_interp_global(sdf_points, sdf_values, interpolator, visible_arcs, degenerate_arcs, 
-                                                              colinear_neighbors if on_gradient_neighbors else None)
+            init_interpolator_with_degen_pts(sdf_points, sdf_values, interpolator, degenerate_arcs)
+            init_gradients = init_gradients_by_degen_pts(sdf_points, sdf_values, degenerate_arcs)
             init_projections = sdf_points - sdf_values[:, np.newaxis] * init_gradients
             interpolator = CurlFree_Interpolator()
             interpolator.fit(sdf_points, sdf_values, init_gradients, use_projection=True)
@@ -2039,7 +2034,8 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         elif gradient_estimation == GradientEstimation.ORACLE_CURLFREE:
             gradients = gradients_gt
             interpolator = CurlFree_Interpolator()
-            interpolator.fit(sdf_points, sdf_values, gradients, use_projection=True)  # Refit the interpolator with the original points and distances
+            # interpolator = DuchonInterpolator()
+            interpolator.fit(sdf_points, sdf_values, gradients, hermite_interp=True)  # Refit the interpolator with the original points and distances
     if clamp_gradients:
         va.clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values)
     if gradient_estimation != GradientEstimation.CurlFree_OPT and  gradient_estimation != GradientEstimation.INTERP_GLOBAL_OPT:
@@ -2078,18 +2074,12 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
     if not interpolator.trained:
         interpolator.fit(sdf_points, sdf_values, gradients_gt)
     grid_values = interpolator.predict(grid_points).reshape(resolution, resolution)
-    im = ax.imshow(grid_values.T, extent=(0, 1, 0, 1), origin='lower', cmap='viridis')
-    plt.colorbar(im, ax=ax, label='Interpolated SDF Values')
-    # ax.set_facecolor('#353F5B')
-    # draw the contours at multiple levels (no transpose for contour!)
-    contour_levels = np.linspace(-.5, .5, 21)
-    ax.contour(grid_x, grid_y, grid_values, levels=contour_levels, colors='yellow', linewidths=0.5, alpha=0.5)
     contour_segments_interpolation = marching_cubes_2D(grid_values.ravel())
     print_shape_distances('Interp', contour_segments_interpolation, points)
 
     # overlay the original shape
-    plt.scatter(sdf_points[:, 0], sdf_points[:, 1], c='r', s=3, label='Original Grid Points')
-    plt.scatter(good_points_on_surface[:, 0], good_points_on_surface[:, 1], c='yellow', s=10, label='Projected Surface Points', zorder=100)
+    plt.scatter(sdf_points[:, 0], sdf_points[:, 1], c='gray', s=1, label='Original Grid Points')
+    plt.scatter(good_points_on_surface[:, 0], good_points_on_surface[:, 1], c='#7DD3B5', s=4, edgecolors='#04714A', linewidths=0.3, label='Projected Surface Points', zorder=100)
     if on_gradient_neighbors:
         ids = set() # To plot the points in colinear_neighbors with different color, we need to collect their indices
         for k, v in colinear_neighbors.items():
@@ -2113,21 +2103,24 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             ax.annotate(f'{grad_errors[i]:.2f}', (sdf_points[i, 0], sdf_points[i, 1]),
                         fontsize=8, color=color, ha='center', va='bottom')
 
-    plt.plot(points[:, 0], points[:, 1], 'b-', linewidth=2, label='Original Shape')
+    plt.plot(points[:, 0], points[:, 1], color='#A0A0A0', linewidth=2, label='Original Shape')
     # for k, seg in enumerate(contour_segments):
     #     plt.plot(seg[:, 0], seg[:, 1], 'k', linewidth=2, label='MC Contour' if k == 0 else None)
     # plt.plot(poisson_contour[:, 0], poisson_contour[:, 1], 'm', linewidth=2, label='PSR Contour')
-    for k, seg in enumerate(contour_segments_interpolation):
-        plt.plot(seg[:, 0], seg[:, 1], 'y', linewidth=2, label='Interpolated Contour' if k == 0 else None)
+    # for k, seg in enumerate(contour_segments_interpolation):
+    #     plt.plot(seg[:, 0], seg[:, 1], color='#06A77D', linewidth=1.4, label='Interpolated Contour' if k == 0 else None)
 
     if see_arcs:
-        # visualize visible arcs just like in test_visible_neighbors
+        # Filled sample spheres at the bottom layer, no edge stroke.
+        # Soft pastel fills: peach for inside (sdf<0), light blue for outside.
         for i in range(len(visible_arcs)):
-            # draw arc as a circle for simplicity
             center = sdf_points[i]
             radius = np.abs(sdf_values[i])
-            color = '#FF6B9D' if sdf_values[i] < 0 else "#4ECDC5"
-            circle = plt.Circle(center, radius, color=color, fill=False, alpha=1, linewidth=.3)
+            color = '#F9E2D4' if sdf_values[i] < 0 else '#CDDDF0'
+            circle = plt.Circle(center, radius,
+                                facecolor=color,
+                                edgecolor='none',
+                                zorder=-10)
             ax.add_patch(circle)
     
     if gradient_estimation in [GradientEstimation.INTERP_GLOBAL_OPT]:
@@ -2139,20 +2132,23 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
         for poly in init_zero_contours:
             poly = np.asarray(poly)
             if len(poly) >= 2:
-                ax.plot(poly[:, 0], poly[:, 1], 'r--', linewidth=2, alpha=0.8)
+                ax.plot(poly[:, 0], poly[:, 1], 'r--', linewidth=1, alpha=0.8)
         # draw initial projections
-        plt.scatter(init_projections[:, 0], init_projections[:, 1], c='green', s=10, label='Initial Projections', alpha=1, zorder=99)
+        # plt.scatter(init_projections[:, 0], init_projections[:, 1], c='green', s=10, label='Initial Projections', alpha=1, zorder=99)
         good_init_projections = init_projections[mask]
-        plot_correspondence(good_sdf_points, good_init_projections, plt)
-
-    plot_correspondence(good_sdf_points, good_points_on_surface, plt)
+        # plot_correspondence(good_sdf_points, good_init_projections, plt)
+        
+    # plot_correspondence(good_sdf_points, good_points_on_surface, plt)
     # connect original points to projected points
     # if on_gradient_neighbors:
     #     plot_correspondence(sdf_points[ids], points_on_surface[ids], plt, color='w')
     ax.set_aspect('equal')
-    ax.set_xlim(-0.01, 1.01)
+    ax.set_xlim(0.2, 0.85)
     ax.set_ylim(-0.01, 1.01)
-    plt.title('Gradient Estimation and Surface Point Projection' + ' (' + str(n) + '^2 points ' + neighbor_estimation.value + ' + ' + gradient_estimation.value + ')')
+    ax.set_xticks([]); ax.set_yticks([])
+    for s in ax.spines.values():
+        s.set_visible(False)
+    # plt.title('Gradient Estimation and Surface Point Projection' + ' (' + str(n) + '^2 points ' + neighbor_estimation.value + ' + ' + gradient_estimation.value + ')')
     # plt.legend(loc='upper right')
     # Interactive click: show neighbors and weights
     if gradient_estimation in (GradientEstimation.RANSAC, GradientEstimation.IRLS):
@@ -2169,7 +2165,7 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
 
     grad_diff = gradients_diff_norm(gradients, gradients_gt)
     print(f"{gradient_estimation.value} n={n} Mean L2 norm of gradient difference from ground truth: {grad_diff:.4f}")
-    if True:
+    if False:
         Vr, Er = gpy.reach_for_the_arcs(sdf_points, sdf_values, fine_tune_iters=100, batch_size=1000)
         rfta_contours = obj_to_points(Vr, Er)  # list of contour arrays
         # Build NaN-separated array for plotting and distance computation
@@ -2188,12 +2184,156 @@ def test_gradient_estimation(n, neighbor_estimation: NeighborEstimation, gradien
             print_shape_distances('RFTA', rfta_contour, points)
         plt.show()
         return Haussdorff_distances(contour_segments, points), Haussdorff_distances(poisson_contour, points), Haussdorff_distances(contour_segments_interpolation, points), Haussdorff_distances(rfta_contour, points)
-    plt.show()
+    # PDF is already a vector format. Force TrueType font embedding so the
+    # output is editable / submission-safe for venues that reject Type 3.
+    import matplotlib
+    matplotlib.rcParams['pdf.fonttype'] = 42
+    matplotlib.rcParams['ps.fonttype']  = 42
+    import os
+    os.makedirs('out', exist_ok=True)
+    stage = 'shortArcs' if iters == 0 else f'iters{iters}'
+    fname = f'out/{stage}_n{n}.svg'
+    # fname = f'out/gt_n{n}.svg'
+    plt.savefig(fname, bbox_inches='tight', pad_inches=0)
+    plt.close()
+
     return
     data = dict(sdf_points=sdf_points, sdf_values=sdf_values, gradients=gradients,
                 interpolator=interpolator,
                 points=points)
     return Haussdorff_distances(contour_segments, points), Haussdorff_distances(poisson_contour, points), Haussdorff_distances(contour_segments_interpolation, points), None, data
+
+def test_plot(n, iters, clamp_gradients=False, see_arcs=True, cmd='gt',
+              path_to_image='examples/eiffel.png', resolution=500):
+    """
+    Clean paper-figure variant of `test_gradient_estimation`. Runs only the
+    INTERP_GLOBAL_OPT pipeline and produces a figure with three layers:
+      - pastel sample-sphere fills (if see_arcs)
+      - GT shape outline (gray)
+      - initial zero level set (red dashed)
+      - final interpolated contour (green)
+
+    Saves to out/{stage}_n{n}.svg where stage = 'shortArcs' if iters == 0
+    else f'iters{iters}'.
+    """
+    # ── Setup ────────────────────────────────────────────────────
+    points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image=path_to_image)
+    visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
+    degenerate_arcs = va.get_short_arcs(visible_arcs, tol=1e-8)
+
+    # Initial plain fit (used only to draw the "init" zero level set)
+    interpolator = PUInterpolator(kernel='thin_plate')
+    interpolator.fit(sdf_points, sdf_values)
+    init_zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
+
+    # ── Refine ───────────────────────────────────────────────────
+    init_interpolator_with_degen_pts(sdf_points, sdf_values, interpolator, degenerate_arcs)
+    init_gradients = init_gradients_by_degen_pts(sdf_points, sdf_values, degenerate_arcs)
+    gradients, _ = opt.iterative_projection(
+        sdf_points, sdf_values, init_gradients, interpolator=interpolator,
+        visible_arcs=visible_arcs, short_arc_idx=degenerate_arcs,
+        num_iter=iters, gt=points, clamp=clamp_gradients
+    )
+    if clamp_gradients:
+        va.clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values)
+
+    # Final contour
+    grid_x, grid_y = np.mgrid[0:1:resolution*1j, 0:1:resolution*1j]
+    grid_points = np.vstack([grid_x.ravel(), grid_y.ravel()]).T
+    grid_values = interpolator.predict(grid_points).reshape(resolution, resolution)
+    contour_segments = marching_cubes_2D(grid_values.ravel())
+
+    # Projected surface points (only those whose projection is correct)
+    points_on_surface = yongs_algorithm(sdf_points, sdf_values, gradients)
+    wrong_count = rate_gradient_estimation(sdf_points, points_on_surface, sdf_values, tol=1e-3)
+    proj_mask = (wrong_count <= 0) & (~np.isnan(gradients).any(axis=1))
+    good_points_on_surface = points_on_surface[proj_mask]
+
+    # ── Plot ─────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(8, 7))
+
+    # Pastel sample-sphere outlines (background). Strokes fade toward white as
+    # the sample center moves further from the surface (|sdf| larger), giving
+    # a soft halo around the shape outline.
+    if see_arcs:
+        from matplotlib.colors import to_rgba
+        distances = np.abs(np.asarray(sdf_values))
+        fade_scale = max(np.percentile(distances, 70) * 0.25, 1e-6)
+        alphas = np.minimum(np.exp(-distances / fade_scale) * 2, 1)
+        for i in range(len(visible_arcs)):
+            color = '#F9E2D4' if sdf_values[i] > 0 else '#CDDDF0'
+            ax.add_patch(plt.Circle(sdf_points[i], distances[i],
+                                    facecolor='none',
+                                    edgecolor=to_rgba(color, float(alphas[i])),
+                                    # edgecolor=to_rgba(color, 1),
+                                    zorder=-10))
+
+    # Original grid sample points (small gray dots)
+    # ax.scatter(sdf_points[:, 0], sdf_points[:, 1], c='gray', s=1, label='Original Grid Points')
+
+    # GT outline (gray, thin)
+    if cmd == 'gt':
+        ax.plot(points[:, 0], points[:, 1], color='#A0A0A0', linewidth=2, label='Original Shape')
+        fname = f'out/gt_n{n}.svg'
+    else:
+        # Initial zero level set (red dashed)
+        for poly in init_zero_contours:
+            poly = np.asarray(poly)
+            if len(poly) >= 2:
+                ax.plot(poly[:, 0], poly[:, 1], 'r--', linewidth=2, alpha=0.8)
+            fname = f'out/init_n{n}.svg'
+        if cmd != 'init':
+            # # Final interpolated contour (green)
+            for k, seg in enumerate(contour_segments):
+                ax.plot(seg[:, 0], seg[:, 1], color='#06A77D', linewidth=2,
+                        label='Interpolated Contour' if k == 0 else None)
+
+            # # Projected surface points (light green dots with darker edge)
+            ax.scatter(good_points_on_surface[:, 0], good_points_on_surface[:, 1],
+                    c='#7DD3B5', s=6, edgecolors='#04714A', linewidths=0.3,
+                    label='Projected Surface Points', zorder=100)
+            stage = 'shortArcs' if iters == 0 else f'iters{iters}_clamp' if clamp_gradients else f'iters{iters}'
+            fname = f'out/{stage}_n{n}.svg'
+
+    ax.set_aspect('equal')
+    ax.set_xlim(.2, .86)
+    ax.set_ylim(-0.01, 1.01)
+    ax.set_xticks([]); ax.set_yticks([])
+    for s in ax.spines.values():
+        s.set_visible(False)
+
+    # ── Save ─────────────────────────────────────────────────────
+    import matplotlib
+    matplotlib.rcParams['pdf.fonttype'] = 42
+    matplotlib.rcParams['ps.fonttype']  = 42
+    import os
+    os.makedirs('out', exist_ok=True)
+
+    
+    plt.savefig(fname, bbox_inches='tight', pad_inches=0)
+    plt.close()
+    print(f'saved {fname}')
+
+
+def plot_pure_sdf():
+    n = 30
+    points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image='examples/horse.png')
+    fig, ax = plt.subplots(figsize=(8, 7))
+    grid = sdf_values.reshape(n, n).T
+    vmax = np.max(np.abs(sdf_values))
+    im = ax.imshow(grid, origin='lower', extent=(0, 1, 0, 1),
+                   cmap='RdBu_r', vmin=-vmax, vmax=vmax, interpolation='nearest')
+    fig.colorbar(im, ax=ax, label='SDF')
+    levels = np.arange(-1, 1, 0.1)
+    # levels = levels[~np.isclose(levels, 0)]
+    # ax.contour(grid, levels=levels, extent=(0, 1, 0, 1), colors='y', linewidths=1)
+    # ax.plot(points[:, 0], points[:, 1], 'k-', linewidth=0.8, label='GT contour')
+    ax.set_aspect('equal')
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_title(f'SDF heatmap')
+    plt.show()
+
 
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
@@ -2206,10 +2346,16 @@ if __name__ == "__main__":
     #     print(f"{n} {mc:.4f} {psr:.4f} {intp:.4f}")
     # test_single_gradient(30)
     # test_subdividing(30)
-    n = 10
-    test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=0, see_arcs=True, clamp_gradients=False,
-                                        on_gradient_neighbors=False, resolution=400, path_to_image='examples/eiffel.png')
+    # plot_pure_sdf()
+    # test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=1, see_arcs=True, clamp_gradients=False,
+    #                                     on_gradient_neighbors=False, resolution=400, path_to_image='examples/eiffel.png')
+    test_plot(n=18, iters=12, clamp_gradients=True, cmd='')                       # 标准用法
+    # test_plot(n=30, iters=0)                                               # shortArcs 阶段（只看 init）
+    # test_plot(n=30, iters=10, see_arcs=False)                              # 不画 pastel 圆
+    # test_plot(n=30, iters=10, path_to_image='examples/horse.png')          # 换 mesh
+
     # test_interpolation_gradients(n, use_sample_gradient=False, precomputed=data)
     # test_interpolation_gradients(n, use_sample_gradient=False)
     # test_gradient_estimation(30, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=5000, see_arcs=False, clamp_gradients=False)
     # test_find_neighbors(30, path_to_image='examples/eiffel.png')
+    pass
