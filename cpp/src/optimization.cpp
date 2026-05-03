@@ -96,10 +96,13 @@ Eigen::MatrixXd iterative_projection_3d(
         }
         // Don't update gradients that would make visible projections invisible
         // Don't update degenerate-arc points
+        // On iter 0: skip points with no neighbor spheres (3D analogue of the
+        // 2D "visible arc covers full 2π" check at optimization.py:434-439).
         Eigen::VectorXi vis_next(N);
         for (int i = 0; i < N; i++) {
             bool skip = (vis_old(i) && !vis_new(i));
             if (options.degenerate_pts.count(i)) skip = true;
+            if (it == 0 && options.ngbrs_list[i].empty()) skip = true;
             if (skip) new_gradients.row(i) = gradients.row(i);
             vis_next(i) = skip ? vis_old(i) : vis_new(i);
         }
@@ -131,7 +134,7 @@ Eigen::MatrixXd iterative_projection_3d(
         // visibility gain < 1% of N. For points that are still invisible
         // and have a valid MES normal, override new_gradients with that
         // normal. vis_mask above is the union of old/new visibility.
-        if (options.use_MES != -1 && it > 0) {
+        if (options.use_MES != -1 && it > 5) {
             int vis_old_sum = vis_old.sum();
             double gain = (double)(visible_num - vis_old_sum) / N;
             double vis_per_sample_area =  visible_num / (std::cbrt(N) * std::cbrt(N));  // heuristic for point density in visible region
