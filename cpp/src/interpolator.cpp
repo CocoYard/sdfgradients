@@ -971,6 +971,38 @@ void Interpolator::extract_surface(
                       << sec_since(t_fix) << " s)\n";
     }
 
+    // ── Dummy-fill leakage check ─────────────────────────────────────
+    // A fine cell with a sign change produces mesh output. If any such cell
+    // has a corner that was never refined, dummy-fill values are leaking
+    // into the mesh.
+    if (verbose_) {
+        long long n_active_cells = 0, n_leaky_cells = 0;
+        for (int zi = 0; zi < nz - 1; zi++)
+        for (int yi = 0; yi < ny - 1; yi++)
+        for (int xi = 0; xi < nx - 1; xi++) {
+            double vmin =  std::numeric_limits<double>::infinity();
+            double vmax = -std::numeric_limits<double>::infinity();
+            bool any_dummy = false;
+            for (int dc = 0; dc < 8; dc++) {
+                int xi2 = xi + (dc & 1);
+                int yi2 = yi + ((dc >> 1) & 1);
+                int zi2 = zi + ((dc >> 2) & 1);
+                int fidx = fine_idx(xi2, yi2, zi2);
+                double v = S(fidx);
+                vmin = std::min(vmin, v);
+                vmax = std::max(vmax, v);
+                if (!need_refine[fidx]) any_dummy = true;
+            }
+            if ((vmin - iso) * (vmax - iso) <= 0.0) {
+                n_active_cells++;
+                if (any_dummy) n_leaky_cells++;
+            }
+        }
+        std::cout << "[extract_surface] dummy-fill leak check: "
+                  << n_leaky_cells << " / " << n_active_cells
+                  << " sign-change cells touch a non-refined vertex\n";
+    }
+
     // ── Surface extraction ───────────────────────────────────────────
     auto t_mc = clk::now();
     if (use_dual_contouring) {
