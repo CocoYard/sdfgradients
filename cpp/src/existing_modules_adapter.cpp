@@ -185,8 +185,16 @@ static inline double clampd(double x, double lo, double hi) {
     return x < lo ? lo : (x > hi ? hi : x);
 }
 static inline double fmod_pos(double x, double m) {
+    // Returns x mod m in [0, m). The naive `r + m` can round up to exactly m
+    // when |r| ≪ m (catastrophic absorption), violating the half-open
+    // contract — observed at sphere 41667 of mesh 49546 where a tangent hit
+    // came out as TWO_PI instead of 0, then angle_in_arc collapsed it to 0
+    // for the inside-test but boundaries kept TWO_PI raw, fabricating a full
+    // 2π fake arc piece and seeding cascading explosion.
     double r = std::fmod(x, m);
-    return r < 0 ? r + m : r;
+    if (r < 0) r += m;
+    if (r >= m) r = 0;
+    return r;
 }
 
 // ── Data structures ──────────────────────────────────────────────
