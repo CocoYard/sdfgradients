@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <thread>
 
 #ifdef USE_OPENMP
 #include <omp.h>
@@ -42,7 +43,7 @@
 #else
   static size_t mem_rss_bytes() { return 0; }
 #endif
-
+// #define CHECK_MEM
 #ifdef CHECK_MEM
 #  define MEM_MARK(tag) std::fprintf(stderr, "[RSS] %-28s %7.2f GB\n", tag, mem_rss_bytes()/1.0e9)
 #  define MEM_LOG(...) std::fprintf(stderr, __VA_ARGS__)
@@ -67,7 +68,43 @@ static constexpr double EPS    = 1e-14;
 static constexpr double EPS12  = 1e-12;
 static constexpr double EPS10  = 1e-10;
 
-// Limits controlled by FULL_COMPUTE_30CUBED in full_compute_switch.h.
+// ── Per-sphere algorithmic limits (controlled by FULL_COMPUTE_30CUBED) ──
+//
+// Production values (#else branch) sized so that all per-sphere scratch is
+// stack-allocated (~MB-scale per OpenMP worker) yet large enough to handle
+// real geometric configurations seen on natural meshes.
+//
+// FULL_COMPUTE_30CUBED bumps every limit ~50× for exact reproduction of
+// reference results on a 30³ stress grid; never use it in production — those
+// stack frames overflow on any decently parallel run.
+//
+//   MAX_CAPS        Max number of distinct half-space caps tracked per
+//                   sphere. Each neighbor potentially contributes one cap;
+//                   `nc` (the live count) is also the inner loop bound in
+//                   compute_one (`for i < scan_limit && nc < MAX_CAPS`).
+//                   Reaching this limit cuts neighbor scanning short.
+//
+//   MAX_ARCS        Two distinct uses, same value:
+//                   (a) Final per-sphere output budget — at most this many
+//                       boundary arcs are written to the output buffers
+//                       (`arc_cap[]/arc_s[]/arc_e[]`). When more survive,
+//                       they are partial-sorted by geometric length and the
+//                       top-K is kept.
+//                   (b) Per-cap intermediate budget enforced by `try_push`
+//                       inside the clipping loop. Without this cap, naive
+//                       pathological geometry can blow `new_arcs` to 100M+
+//                       entries (observed) and never return.
+//
+//   MAX_INTERVALS   Max number of disjoint angular intervals tracked while
+//                   computing a single new cap's exposed arcs against the
+//                   active-cap set (`compute_exposed_arcs_on_circle`). One
+//                   interval can split into two each time a new cap clips
+//                   it, so this also bounds the working set there.
+//
+//   MAX_DEGEN_PTS   Max number of degenerate "tangent" points emitted per
+//                   sphere (collapsed corners of the visible region). Comes
+//                   from two sources: containment caps (φ ≈ π) and the
+//                   post-pass `find_degen_pts` over surviving short arcs.
 #ifdef FULL_COMPUTE_30CUBED
 static constexpr int MAX_CAPS      = 30000;
 static constexpr int MAX_ARCS      = 60000;
@@ -76,7 +113,7 @@ static constexpr int MAX_DEGEN_PTS = 10000;
 #else
 static constexpr int MAX_CAPS      = 512;
 static constexpr int MAX_ARCS      = 2048;
-static constexpr int MAX_INTERVALS = 512;
+static constexpr int MAX_INTERVALS = 2048;
 static constexpr int MAX_DEGEN_PTS = 256;
 #endif
 
@@ -512,6 +549,16 @@ static void compute_one(
     all_arcs.reserve(16);
     new_arcs.reserve(16);
 
+    // Per-cap arc budget enforced while building new_arcs each outer iter.
+    // Without this, pathological geometry can blow up new_arcs to 100M+.
+    // Final output is still truncated by max_arcs at the end (top-K by length).
+    int new_arc_count[MAX_CAPS];
+    auto try_push = [&](int cap_idx, double t_s, double t_e) {
+        if (new_arc_count[cap_idx] >= MAX_ARCS) return;
+        new_arc_count[cap_idx]++;
+        new_arcs.push_back({cap_idx, t_s, t_e});
+    };
+
     *out_ncaps = 0;
     *out_narcs = 0;
     *out_npts = 0;
@@ -596,6 +643,8 @@ static void compute_one(
         //      so per-arc clipping is just angle comparisons, no trig.
         double _t_cl = prof ? now_sec() : 0.0;
         new_arcs.clear();
+        // Reset only the caps we have so far (memset O(nc), not O(MAX_CAPS)).
+        std::memset(new_arc_count, 0, sizeof(int) * (size_t)nc);
         const int stamp = i + 1;
         const Cap& cut = caps[new_idx];
         for (const auto& arc : all_arcs) {
@@ -621,7 +670,7 @@ static void compute_one(
             int nhits = host_nhits_buf[h];
             if (nhits == 0) {
                 // Whole host circle on one side; per-arc decision is uniform.
-                if (!host_circle_inside_cut[h]) new_arcs.push_back(arc);
+                if (!host_circle_inside_cut[h]) try_push(arc.cap_idx, arc.t_start, arc.t_end);
                 continue;
             }
 
@@ -640,7 +689,7 @@ static void compute_one(
                 double mt = fmod_pos(0.5 * (arc.t_start + arc.t_end), TWO_PI);
                 bool in_S1 = (mt >= h0 && mt <= h1);
                 bool inside_cut = (in_S1 == host_seg_h0h1_inside_cut[h]);
-                if (!inside_cut) new_arcs.push_back(arc);
+                if (!inside_cut) try_push(arc.cap_idx, arc.t_start, arc.t_end);
                 continue;
             }
 
@@ -665,7 +714,7 @@ static void compute_one(
                 double mt = fmod_pos(0.5 * (t_s + t_e), TWO_PI);
                 bool in_S1 = (mt >= h0 && mt <= h1);
                 bool inside_cut = (in_S1 == host_seg_h0h1_inside_cut[h]);
-                if (!inside_cut) new_arcs.push_back({arc.cap_idx, t_s, t_e});
+                if (!inside_cut) try_push(arc.cap_idx, t_s, t_e);
             }
         }
         if (prof) t_clip_acc += now_sec() - _t_cl;
@@ -678,7 +727,7 @@ static void compute_one(
                                                    active_caps, n_active,
                                                    ivs, tol);
         for (int a = 0; a < n_new; a++)
-            new_arcs.push_back({new_idx, ivs[a].start, ivs[a].end});
+            try_push(new_idx, ivs[a].start, ivs[a].end);
         if (prof) t_exposed_acc += now_sec() - _t_ex;
 
         all_arcs.swap(new_arcs);
@@ -713,32 +762,54 @@ static void compute_one(
         g_us_count.fetch_add((long long)(t_count_acc * 1e6), std::memory_order_relaxed);
     }
 
-    // Build output: compact caps into kept order.
-    int remap[MAX_CAPS];
-    int kept = 0;
-    for (int i = 0; i < nc; i++) {
-        if (arc_count[i] > 0) remap[i] = kept++;
-        else                  remap[i] = -1;
+    // Build output: when more arcs survived than max_arcs, keep the
+    // top-K by geometric length (radius × angular extent). nth_element is
+    // O(n) avg, much cheaper than full sort. Then recompute remap from the
+    // kept subset so caps that lost all their arcs to truncation get pruned.
+    const int total_in = (int)all_arcs.size();
+    const int keep = total_in < max_arcs ? total_in : max_arcs;
+
+    // Indices into all_arcs, partial-sorted to put the top-keep first.
+    static thread_local std::vector<std::pair<double,int>> ranked;
+    ranked.clear();
+    ranked.reserve((size_t)total_in);
+    for (int k = 0; k < total_in; k++) {
+        const auto& a = all_arcs[k];
+        ranked.emplace_back(caps[a.cap_idx].circle_radius * (a.t_end - a.t_start), k);
+    }
+    if (keep < total_in) {
+        std::nth_element(ranked.begin(), ranked.begin() + keep, ranked.end(),
+            [](const std::pair<double,int>& a, const std::pair<double,int>& b){
+                return a.first > b.first;
+            });
+        ranked.resize((size_t)keep);
     }
 
+    // Recompute arc_count from the kept subset, then build remap.
+    int arc_count2[MAX_CAPS] = {};
+    for (const auto& r : ranked) arc_count2[all_arcs[r.second].cap_idx]++;
+    int remap[MAX_CAPS];
+    int kept_caps = 0;
+    for (int i = 0; i < nc; i++) {
+        if (arc_count2[i] > 0) remap[i] = kept_caps++;
+        else                   remap[i] = -1;
+    }
     *out_nc = nc;
     if (out_caps)  std::memcpy(out_caps, caps, nc * sizeof(Cap));
     if (out_remap) std::memcpy(out_remap, remap, nc * sizeof(int));
 
     double total = 0;
-    int na = 0;
-    for (const auto &arc : all_arcs) {
-        if (na >= max_arcs) break;
+    for (int na = 0; na < keep; na++) {
+        const auto& arc = all_arcs[ranked[na].second];
         arc_cap[na] = remap[arc.cap_idx];
         arc_s[na]   = arc.t_start;
         arc_e[na]   = arc.t_end;
         // Total arc length = sum over arcs of (cap circle radius) × (angular extent).
         // degen_tol is a length in mesh units, not an angle.
-        total += caps[arc.cap_idx].circle_radius * (arc.t_end - arc.t_start);
-        na++;
+        total += ranked[na].first;
     }
-    *out_narcs = na;
-    *out_ncaps = kept;
+    *out_narcs = keep;
+    *out_ncaps = kept_caps;
     *out_total_arc = total;
 
     if (total < tol.degen_tol && nc > 0) {
@@ -825,6 +896,39 @@ void compute_exposed_batch(
     std::atomic<int> progress{0};
     size_t rss_before_loop = mem_rss_bytes();
 
+    // ---- Watchdog: per-thread "currently working on i" + start time. ----
+    int n_threads_max = 1;
+#ifdef USE_OPENMP
+    n_threads_max = omp_get_max_threads();
+#endif
+    std::vector<std::atomic<int>>    wd_cur_i(n_threads_max);
+    std::vector<std::atomic<int>>    wd_cur_nbr(n_threads_max);
+    std::vector<std::atomic<double>> wd_cur_t0(n_threads_max);
+    for (int t = 0; t < n_threads_max; t++) {
+        wd_cur_i[t].store(-1);
+        wd_cur_nbr[t].store(0);
+        wd_cur_t0[t].store(0.0);
+    }
+    std::atomic<bool> wd_stop{false};
+    std::thread wd([&]{
+        while (!wd_stop.load()) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (wd_stop.load()) break;
+            double now = now_sec();
+            for (int t = 0; t < n_threads_max; t++) {
+                int ci = wd_cur_i[t].load();
+                if (ci < 0) continue;
+                double dt = now - wd_cur_t0[t].load();
+                if (dt > 3.0) {
+                    std::fprintf(stderr,
+                        "[WATCHDOG] tid=%d stuck on i=%d n_nbrs=%d for %.1fs\n",
+                        t, ci, wd_cur_nbr[t].load(), dt);
+                    std::fflush(stderr);
+                }
+            }
+        }
+    });
+
     #pragma omp parallel for schedule(dynamic, 16)
     for (int i = 0; i < n; i++) {
         int n_nbrs = (int)nbrs[i].size();
@@ -864,15 +968,34 @@ void compute_exposed_batch(
 
         int ncaps, narcs, npts, n_pcaps;
         double total_arc;
-        double _t_co = prof ? now_sec() : 0.0;
+        // Watchdog: always time compute_one (cheap), warn loudly on slow spheres.
+        double _t_co = now_sec();
+#ifdef USE_OPENMP
+        int _wd_tid = omp_get_thread_num();
+#else
+        int _wd_tid = 0;
+#endif
+        wd_cur_nbr[_wd_tid].store(n_nbrs);
+        wd_cur_t0[_wd_tid].store(_t_co);
+        wd_cur_i[_wd_tid].store(i);
         compute_one(
             {centers[i*3], centers[i*3+1], centers[i*3+2]}, radii[i],
             oc_buf_v.data(), or_buf_v.data(), n_use, tol,
             &ncaps, &narcs, _ac, _as, _ae, MAX_ARCS,
             &total_arc, &npts, _dp,
             _caps, &n_pcaps, remap);
+        wd_cur_i[_wd_tid].store(-1);
+        double _dt_co = now_sec() - _t_co;
+        if (_dt_co > 0.5) {
+            std::fprintf(stderr,
+                "[SLOW SPHERE] i=%d n_nbrs=%d n_use=%d ncaps=%d narcs=%d npts=%d "
+                "dt=%.3fs r=%.6g c=(%.6g,%.6g,%.6g)\n",
+                i, n_nbrs, n_use, ncaps, narcs, npts, _dt_co, radii[i],
+                centers[i*3], centers[i*3+1], centers[i*3+2]);
+            std::fflush(stderr);
+        }
         if (prof) g_us_compute_one.fetch_add(
-            (long long)((now_sec() - _t_co) * 1e6),
+            (long long)(_dt_co * 1e6),
             std::memory_order_relaxed);
 
         out.n_arcs[i] = narcs;
@@ -947,6 +1070,8 @@ void compute_exposed_batch(
             dd_s, dd_s*inv, fd_s, fd_s*inv, (long long)fd_n);
     }
 
+    wd_stop.store(true);
+    if (wd.joinable()) wd.join();
     MEM_MARK("after parallel compute");
 
     // Tally locals capacity to see how much the intermediate copy costs.
