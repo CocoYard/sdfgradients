@@ -210,38 +210,30 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True):
     os.makedirs(out_dir, exist_ok=True)
     Vr, Fr = gpy.reach_for_the_arcs(points, distances, screening_weight=screening_weight, parallel=parallel)
     rfta = trimesh.Trimesh(vertices=Vr, faces=Fr)
-    # Filter spurious components using a 1-Lipschitz upper bound on |sdf|:
-    #   |sdf(sample)| <= |sdf(nearest_input)| + dist(sample, nearest_input)
-    # If the median upper bound on a component is large, it can't be near a true
-    # zero-crossing, so it's a PSR hallucination.
-    from scipy.spatial import cKDTree
-    score_thresh = 0.2
-    n_samples_per_comp = 300
-    tree = cKDTree(points)
-    abs_sdf = np.abs(distances)
+    # Keep only components whose mean coordinates are fully inside the input bbox and 
+    # percent of coordinates inside the input bbox is at least 50%, so PSR "bubble"
+    # artifacts that wrap outside the sample region get dropped.
+    bbox_min = points.min(axis=0)
+    bbox_max = points.max(axis=0)
     components = rfta.split(only_watertight=False)
-    kept, scores = [], []
-    for i, c in enumerate(components):
-        n = min(n_samples_per_comp, max(len(c.faces) * 3, 20))
-        samples, _ = trimesh.sample.sample_surface(c, n)
-        d, idx = tree.query(samples, k=1)
-        score = np.median(abs_sdf[idx] + d)
-        scores.append(score)
-        is_kept = score < score_thresh
-        if is_kept:
-            kept.append(c)
-        print(f"  comp[{i:3d}] faces={len(c.faces):6d}  score={score:.4f}  "
-              f"(median |sdf_nn|={np.median(abs_sdf[idx]):.4f}, median dist={np.median(d):.4f})  "
-              f"{'KEEP' if is_kept else 'drop'}")
+    kept = [c for c in components
+            if np.all(np.mean(c.vertices, axis=0) >= bbox_min)
+                and np.all(np.mean(c.vertices, axis=0) <= bbox_max) and np.mean(np.all((c.vertices >= bbox_min) & (c.vertices <= bbox_max), axis=1)) > 0.5]
     if not kept:
-        # Last resort: keep the component with the smallest score so we still
-        # write a non-empty .obj.
-        kept = [components[int(np.argmin(scores))]]
-        print(f"  (all dropped — fallback keep comp[{int(np.argmin(scores))}])")
+        # First retry with a padded bbox — components that just barely poke
+        # outside the sample region are usually still legitimate.
+        pad = 0.1 * (bbox_max - bbox_min)
+        pmin, pmax = bbox_min - pad, bbox_max + pad
+        kept = [c for c in components
+                if np.all(np.mean(c.vertices, axis=0) >= pmin)
+                    and np.all(np.mean(c.vertices, axis=0) <= pmax) and np.mean(np.all((c.vertices >= pmin) & (c.vertices <= pmax), axis=1)) > 0.5]
+    if not kept:
+        # Last resort: every component crosses even the padded bbox. Keep the
+        # largest so we still write a non-empty .obj.
+        kept = [max(components, key=lambda m: len(m.faces))]
     filtered = trimesh.util.concatenate(kept)
     filtered.export(f'{out_dir}/rfta_{grid_len}.obj')
-    print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept {len(kept)}/{len(components)} components, "
-          f"{len(filtered.faces)} faces out of {len(Fr)})")
+    print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept {len(kept)}/{len(components)} components, {len(filtered.faces)} faces out of {len(Fr)})")
 
 def test_mes(options, save_gtmesh=False, screening_weight=10):
     """
@@ -754,15 +746,12 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [6]:
-            options = Options(name='bunny', grid_len=length, max_iters=13, clamp=False, cpp_dc=True, verbose=True,
-                            export_short_arcs=False, export_projections=False, turn_off_short_arcs=True,
-                            use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', 
-                            overlap=0.2, reg=0, use_MES=True, post_processing=False, iter_gradient_finding='optimize')
-            options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
+        for length in [20]:
+            options = Options(name='37012', grid_len=length, max_iters=15)
+            # options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
             # # # plt = test_mesh(grid_len=20, path_to_obj='{data_dir}/holes.obj')
-            # plt = test_our_method(options, save_gtmesh=False)
-            test_rfta(options, screening_weight=10, parallel=False)
+            plt = test_our_method(options, save_gtmesh=False)
+            # test_rfta(options, screening_weight=10, parallel=False)
             # test_mes(options, save_gtmesh=False, screening_weight=10)
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
 

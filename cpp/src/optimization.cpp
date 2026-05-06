@@ -103,7 +103,16 @@ Eigen::MatrixXd iterative_projection_3d(
             bool skip = (vis_old(i) && !vis_new(i));
             if (options.degenerate_pts.count(i)) skip = true;
             if (it == 0 && options.ngbrs_list[i].empty()) skip = true;
-            if (skip) new_gradients.row(i) = gradients.row(i);
+            if (skip) {
+                new_gradients.row(i) = gradients.row(i);
+                // When the original gradient is NaN (init for points without
+                // a degenerate hit) and we just reverted new_gradients to it,
+                // we must also clear vis_new(i). Otherwise vis_mask sees this
+                // point as visible, fit() projects it via NaN gradient, and
+                // the resulting NaN coord poisons KDTree partition (collapses
+                // to 1 patch with radius 0, segfault next iter).
+                vis_new(i) = 0;
+            }
             vis_next(i) = skip ? vis_old(i) : vis_new(i);
         }
         vis_cached = vis_next;
