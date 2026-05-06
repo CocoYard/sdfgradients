@@ -518,6 +518,13 @@ static int find_degen_pts(const Cap caps[],
 // clip existing arcs, compute the new cap's own arcs, and prune caps whose
 // arcs have all been eaten. Avoids the old two-phase pattern of building a
 // full caps[] up-front and iterating again for arcs.
+// Per-sphere "max arcs per cap" histogram, one bin per integer in
+// [0, MAX_ARCS]. Reset at start of each compute_exposed_batch, dumped at end.
+// Off by default; build with `-DDEBUG_ARC_HIST` to back the arcs-per-cap
+// boxplot (plot_max_arcs_per_cap.py).
+#ifdef DEBUG_ARC_HIST
+static std::atomic<long long> g_per_sphere_max_arc_hist[MAX_ARCS + 1];
+#endif
 static void compute_one(
     Vec3 mc, double mr, const double *oc, const double *or_, int n_others,
     const Tolerances &tol,
@@ -802,6 +809,16 @@ static void compute_one(
         if (arc_count2[i] > 0) remap[i] = kept_caps++;
         else                   remap[i] = -1;
     }
+#ifdef DEBUG_ARC_HIST
+    // Tally this sphere's max-arcs-per-cap into the global histogram.
+    int max_apc = 0;
+    for (int i = 0; i < nc; i++) {
+        if (arc_count2[i] > max_apc) max_apc = arc_count2[i];
+    }
+    if (max_apc > MAX_ARCS) max_apc = MAX_ARCS;
+    g_per_sphere_max_arc_hist[max_apc].fetch_add(1, std::memory_order_relaxed);
+#endif
+
     *out_nc = nc;
     if (out_caps)  std::memcpy(out_caps, caps, nc * sizeof(Cap));
     if (out_remap) std::memcpy(out_remap, remap, nc * sizeof(int));
@@ -853,6 +870,9 @@ void compute_exposed_batch(
         g_us_dedup.store(0);
     }
     double t_loop_start = prof ? now_sec() : 0.0;
+#ifdef DEBUG_ARC_HIST
+    for (int b = 0; b <= MAX_ARCS; b++) g_per_sphere_max_arc_hist[b].store(0);
+#endif
 
     MEM_MARK("batch: enter");
     MEM_LOG("[RSS] batch n=%d\n", n);
@@ -1180,6 +1200,21 @@ void compute_exposed_batch(
     out.point_sphere_idx = std::move(fp_sphere);
 
     MEM_MARK("batch: exit");
+#ifdef DEBUG_ARC_HIST
+    {
+        // Per-sphere max-arcs-per-cap histogram dump (compact value:count).
+        long long total = 0;
+        for (int b = 0; b <= MAX_ARCS; b++) total += g_per_sphere_max_arc_hist[b].load();
+        std::fprintf(stderr,
+            "[MAX_ARC_PER_CAP_HIST] n=%d nonzero_spheres=%lld pairs(value:count):", n, total);
+        for (int b = 0; b <= MAX_ARCS; b++) {
+            long long c = g_per_sphere_max_arc_hist[b].load();
+            if (c > 0) std::fprintf(stderr, " %d:%lld", b, c);
+        }
+        std::fprintf(stderr, "\n");
+        std::fflush(stderr);
+    }
+#endif
 }
 
 }  // namespace sphere_exposed_core
