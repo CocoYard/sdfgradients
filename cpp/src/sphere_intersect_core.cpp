@@ -170,7 +170,7 @@ void find_intersections(const double* centers, const double* radii, int n,
 #ifdef FULL_COMPUTE_30CUBED
     constexpr int MAX_KEEP    = std::numeric_limits<int>::max();
 #else
-    constexpr int MAX_KEEP    = 2048;
+    constexpr int MAX_KEEP    = 1024;
 #endif
     constexpr int NEAREST     = 256;
     constexpr int TOP_LARGEST = 64;

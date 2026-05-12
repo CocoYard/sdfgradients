@@ -387,19 +387,45 @@ static int intersect_intervals(const Interval *a, int na,
                                double skip_tol, double merge_tol) {
     int cnt = 0;
     for (int i = 0; i < na; i++) {
+        // Dedup window: pushes from this iv[i] live in out[iv_start..cnt).
+        // With nb ≤ 2 this is at most 1 entry, so the inner scan is O(1).
+        const int iv_start = cnt;
         for (int j = 0; j < nb; j++) {
             double lo = std::max(a[i].start, b[j].start);
             double hi = std::min(a[i].end,   b[j].end);
-            if (hi - lo > -skip_tol && cnt < max_out) {
-                if (hi < lo) {
-                    double mid = (lo + hi) / 2.0;
-                    out[cnt++] = {mid - 1e-15, mid + 1e-15};
-                } else {
-                    out[cnt++] = {lo, hi};
+            if (!(hi - lo > -skip_tol) || cnt >= max_out) continue;
+
+            double new_lo, new_hi;
+            if (hi < lo) {
+                // Tolerance fudge: near-touching within skip_tol. Push a
+                // placeholder at the midpoint so subsequent steps don't
+                // forget the boundary.
+                double mid = (lo + hi) / 2.0;
+                new_lo = mid - 1e-15;
+                new_hi = mid + 1e-15;
+            } else {
+                new_lo = lo;
+                new_hi = hi;
+            }
+
+            // Per-iv dedup: if a previous push from this same iv[i] lands
+            // within skip_tol at the start, this is a wrap-seam duplicate
+            // (a degenerate iv point sitting on, or in the tiny gap between,
+            // the two con pieces would otherwise emit one fake + one legit
+            // — or two fakes — at the same location, doubling niv each
+            // step). Genuine wrap-span pushes (one near 2π, one near 0)
+            // sit ~π apart and survive this check.
+            bool dup = false;
+            for (int k = iv_start; k < cnt; k++) {
+                if (std::fabs(out[k].start - new_lo) < skip_tol) {
+                    dup = true;
+                    break;
                 }
             }
+            if (!dup) out[cnt++] = {new_lo, new_hi};
         }
     }
+
     std::sort(out, out + cnt, [](const Interval &a, const Interval &b) {
         return a.start < b.start;
     });
