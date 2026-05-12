@@ -2,6 +2,12 @@
 /// (sphere_intersect.cpp, sphere_exposed_pybind.cpp) so our pure C++ code
 /// can call them without pybind11.
 
+// Optional: emit one `[MAX_ARC_PER_CAP_HIST]` line per batch on stderr,
+// feeding plot_max_arcs_per_cap.py. Uncomment to enable when collecting
+// boxplot data; otherwise leave off (one atomic-fetch_add per sphere is
+// cheap, but the dump line itself is verbose).
+#define DEBUG_ARC_HIST 1
+
 #include "types.h"
 #include "full_compute_switch.h"
 #include <vector>
@@ -407,6 +413,14 @@ static int intersect_intervals(const Interval *a, int na,
     return m;
 }
 
+// Per-sphere "max arcs per cap" histogram, one bin per integer in
+// [0, MAX_ARCS]. Reset at start of each compute_exposed_batch, dumped at end.
+// Off by default; toggle the `#define DEBUG_ARC_HIST` at the top of this
+// file to back the arcs-per-cap boxplot (plot_max_arcs_per_cap.py).
+#ifdef DEBUG_ARC_HIST
+static std::atomic<long long> g_per_sphere_max_arc_hist[MAX_ARCS + 1];
+#endif
+
 static int compute_exposed_arcs_on_circle(int cap_idx, const Cap caps[],
                                           const int *active_caps, int n_active,
                                           Interval *result, const Tolerances &tol) {
@@ -518,13 +532,7 @@ static int find_degen_pts(const Cap caps[],
 // clip existing arcs, compute the new cap's own arcs, and prune caps whose
 // arcs have all been eaten. Avoids the old two-phase pattern of building a
 // full caps[] up-front and iterating again for arcs.
-// Per-sphere "max arcs per cap" histogram, one bin per integer in
-// [0, MAX_ARCS]. Reset at start of each compute_exposed_batch, dumped at end.
-// Off by default; build with `-DDEBUG_ARC_HIST` to back the arcs-per-cap
-// boxplot (plot_max_arcs_per_cap.py).
-#ifdef DEBUG_ARC_HIST
-static std::atomic<long long> g_per_sphere_max_arc_hist[MAX_ARCS + 1];
-#endif
+// (DEBUG_ARC_HIST atomic counters moved to before compute_exposed_arcs_on_circle.)
 static void compute_one(
     Vec3 mc, double mr, const double *oc, const double *or_, int n_others,
     const Tolerances &tol,
@@ -1204,9 +1212,18 @@ void compute_exposed_batch(
     {
         // Per-sphere max-arcs-per-cap histogram dump (compact value:count).
         long long total = 0;
-        for (int b = 0; b <= MAX_ARCS; b++) total += g_per_sphere_max_arc_hist[b].load();
+        long long over_cap = 0;   // # spheres with max arcs/cap > MAX_CAPS
+        int observed_max = 0;
+        for (int b = 0; b <= MAX_ARCS; b++) {
+            long long c = g_per_sphere_max_arc_hist[b].load();
+            total += c;
+            if (c > 0 && b > observed_max) observed_max = b;
+            if (b > MAX_CAPS) over_cap += c;
+        }
         std::fprintf(stderr,
-            "[MAX_ARC_PER_CAP_HIST] n=%d nonzero_spheres=%lld pairs(value:count):", n, total);
+            "[MAX_ARC_PER_CAP_HIST] n=%d MAX_CAPS=%d MAX_ARCS=%d "
+            "spheres=%lld observed_max=%d over_MAX_CAPS=%lld pairs(value:count):",
+            n, MAX_CAPS, MAX_ARCS, total, observed_max, over_cap);
         for (int b = 0; b <= MAX_ARCS; b++) {
             long long c = g_per_sphere_max_arc_hist[b].load();
             if (c > 0) std::fprintf(stderr, " %d:%lld", b, c);
