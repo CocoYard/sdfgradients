@@ -255,14 +255,14 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "./vendor/three.module.js"
+    "three": "./js/three.module.js"
   }
 }
 </script>
 <script type="module">
 import * as THREE from 'three';
-import { OBJLoader } from './vendor/OBJLoader.js';
-import { OrbitControls } from './vendor/OrbitControls.js';
+import { OBJLoader } from './js/OBJLoader.js';
+import { OrbitControls } from './js/OrbitControls.js';
 
 const DEFAULT_SAMPLES = [10,15,20,25,30,35,40,45,50,75,100];
 
@@ -347,19 +347,41 @@ function rowRanges(model, n) {
     fSpan: (fMax > -Infinity) ? fMax - fMin : 0,
   };
 }
+// Each algo first asks metrics.json's `_paths` map (written by build_metrics.py
+// from a filesystem scan, which picks the shortest-named candidate per
+// (model, algo, N) deterministically). If the manifest is missing the entry
+// — for instance the user dropped raw OBJs into out/<model>/ but didn't yet
+// re-run build_metrics.py — fall back to a small list of legacy / convention
+// names. New convention is preferred first in the fallback list (ours_<N>,
+// mc_<N>, mes_sw10_<N>, rfta_sw10_<N>); old convention covers prior dumps.
 const ALGOS = [
   { key: 'interpolation', label: 'interpolation (ours)',
-    path: (m,n) => [
-      `out/${m}/interpolant_${n}_15_shortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
-      `out/${m}/interpolant_${n}_15_noShortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
-      `out/${m}/interpolant_${n}_13_noShortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
-    ] },
-  { key: 'mes',           label: 'MES',
-    path: (m,n) => `out/${m}/mes_${n}.obj` },
-  { key: 'rfta',          label: 'RFTA',
-    path: (m,n) => `out/${m}/rfta_${n}.obj` },
-  { key: 'mc',            label: 'marching cubes',
-    path: (m,n) => `out/${m}/sample_points_${n}.obj` },
+    path: (m,n) => {
+      const p = METRICS?._paths?.[m]?.interpolation?.[String(n)]
+             ?? METRICS?._interp_paths?.[m]?.[String(n)];
+      return p ? [p] : [
+        `out/${m}/ours_${n}.obj`,
+        `out/${m}/interpolant_${n}_15_shortArcs_MES_nopost_dc_PU_reg0.obj`,
+        `out/${m}/interpolant_${n}_15_shortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
+        `out/${m}/interpolant_${n}_15_noShortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
+        `out/${m}/interpolant_${n}_13_noShortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
+      ];
+    } },
+  { key: 'mes', label: 'MES',
+    path: (m,n) => {
+      const p = METRICS?._paths?.[m]?.mes?.[String(n)];
+      return p ? [p] : [`out/${m}/mes_sw10_${n}.obj`, `out/${m}/mes_${n}.obj`];
+    } },
+  { key: 'rfta', label: 'RFTA',
+    path: (m,n) => {
+      const p = METRICS?._paths?.[m]?.rfta?.[String(n)];
+      return p ? [p] : [`out/${m}/rfta_sw10_${n}.obj`, `out/${m}/rfta_${n}.obj`];
+    } },
+  { key: 'mc', label: 'marching cubes',
+    path: (m,n) => {
+      const p = METRICS?._paths?.[m]?.mc?.[String(n)];
+      return p ? [p] : [`out/${m}/mc_${n}.obj`, `out/${m}/sample_points_${n}.obj`];
+    } },
 ];
 
 // Shared single WebGL renderer for all cells.
@@ -386,7 +408,7 @@ function loadObj(urls) {
   const key = list.join('|');
   if (objCache.has(key)) return objCache.get(key);
   const tryNext = (i) => {
-    if (i >= list.length) return Promise.reject(new Error('no candidate found'));
+    if (i >= list.length) return Promise.reject(new Error('construction failed because distances are all positive'));
     return new Promise((resolve, reject) => { loader.load(list[i], resolve, undefined, reject); })
       .catch(() => tryNext(i + 1));
   };
@@ -456,7 +478,11 @@ function makeCell(div, url) {
   }).catch(err => {
     const span = document.createElement('div');
     span.className = 'missing';
-    span.textContent = 'err: ' + (err && err.message ? err.message : String(err)).slice(0,80);
+    // 'construction failed because distances are all positive' is our sentinel for "no OBJ candidate exists" —
+    // show it bare; for any other failure (parse error, network, etc.) keep
+    // an 'err: ' prefix so it's clearly an exception rather than a label.
+    const msg = (err && err.message ? err.message : String(err)).slice(0,80);
+    span.textContent = msg === 'construction failed because distances are all positive' ? msg : ('err: ' + msg);
     span.title = (Array.isArray(url) ? url.join('\n') : url) + '\n' + (err && err.stack ? err.stack : '');
     div.appendChild(span);
     console.warn('failed', url, err);
