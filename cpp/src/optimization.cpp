@@ -102,7 +102,9 @@ Eigen::MatrixXd iterative_projection_3d(
         for (int i = 0; i < N; i++) {
             bool skip = (vis_old(i) && !vis_new(i));
             if (options.degenerate_pts.count(i)) skip = true;
-            if (it == 0 && options.ngbrs_list[i].empty()) skip = true;
+            if (!options.turn_off_short_arcs) {
+                if (it == 0 && options.ngbrs_list[i].empty()) skip = true;
+            }
             if (skip) {
                 new_gradients.row(i) = gradients.row(i);
                 // When the original gradient is NaN (init for points without
