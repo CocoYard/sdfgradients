@@ -48,7 +48,9 @@ auto ms_since = [](const clk::time_point& t) {
 static void export_short_arcs_ply(
     const Eigen::MatrixXd& sdf_points,
     const Options& options,
-    const std::string& out_dir = "out");
+    const std::string& out_dir = "out",
+    bool use_new = true
+);
 
 // ── filter_degenerate_pts ───────────────────────────────────────────
 
@@ -472,7 +474,7 @@ MainResult main_algorithm(
 
 // ── export_short_arcs_ply ────────────────────────────────────────────
 
-static void export_short_arcs_ply(
+static void export_short_arcs_ply_old(
     const Eigen::MatrixXd& sdf_points,
     const Options& options,
     const std::string& out_dir)
@@ -519,6 +521,86 @@ static void export_short_arcs_ply(
               << "  (" << M << " arcs from " << dpts.size() << " spheres)\n";
 }
 
+static void export_short_arcs_ply_new(
+    const Eigen::MatrixXd& sdf_points,
+    const Options& options,
+    const std::string& out_dir)
+{
+    const auto& dpts = options.degenerate_pts;
+    if (dpts.empty()) return;
+
+    std::system(("mkdir -p " + out_dir).c_str());
+
+    // Flatten: one entry per (sphere, degenerate_pt) pair, sorted by sphere index
+    struct Entry { int sphere_idx; Eigen::Vector3d surf_pt; };
+    std::vector<Entry> entries;
+    for (auto& [i, pts] : dpts)
+        for (auto& p : pts)
+            entries.push_back({i, p});
+    std::sort(entries.begin(), entries.end(), [](auto& a, auto& b){ return a.sphere_idx < b.sphere_idx; });
+
+    // Spatial dedup at export tol — different spheres' degenerate projections
+    // can land on the same arc/edge. KDTree once + earlier-kept-wins sweep.
+    constexpr double export_dedup_tol = 1e-6;
+    std::vector<int> kept;
+    kept.reserve(entries.size());
+    if (!entries.empty()) {
+        Eigen::MatrixXd P((int)entries.size(), 3);
+        for (int i = 0; i < (int)entries.size(); i++) P.row(i) = entries[i].surf_pt.transpose();
+        KDTree3D tree(P);
+        std::vector<char> alive(entries.size(), 1);
+        for (int i = 0; i < (int)entries.size(); i++) {
+            if (!alive[i]) continue;
+            kept.push_back(i);
+            for (int j : tree.query_ball_point(entries[i].surf_pt, export_dedup_tol)) {
+                if (j > i) alive[j] = 0;
+            }
+        }
+    }
+
+    const int M = static_cast<int>(kept.size());
+    std::string path = out_dir + "/shortArcs_"
+        + options.name + "_"
+        + std::to_string(options.grid_len) + "_"
+        + std::to_string(M) + "pts.ply";
+    std::ofstream f(path);
+    if (!f) { std::cerr << "[export_short_arcs_ply] cannot open " << path << "\n"; return; }
+
+    f << "ply\nformat ascii 1.0\n"
+      << "element vertex " << M << "\n"
+      << "property float x\nproperty float y\nproperty float z\n"
+      << "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+      << "end_header\n";
+
+    // // SDF sphere centers: gray (one per entry, may repeat for multi-point spheres)
+    // for (int k : kept)
+    //     f << sdf_points(entries[k].sphere_idx,0) << " "
+    //       << sdf_points(entries[k].sphere_idx,1) << " "
+    //       << sdf_points(entries[k].sphere_idx,2) << " 100 100 100\n";
+
+    // Degenerate surface points: green
+    for (int k : kept) {
+        const auto& e = entries[k];
+        f << e.surf_pt.x() << " " << e.surf_pt.y() << " " << e.surf_pt.z() << " 0 200 0\n";
+    }
+    // // Edges: sphere center k  <->  surface point M+k
+    // for (int k = 0; k < M; k++)
+    //     f << k << " " << (M + k) << "\n";
+
+    std::cout << "[export_short_arcs_ply] wrote " << path
+              << "  (" << M << " unique pts from " << entries.size()
+              << " arcs across " << dpts.size() << " spheres)\n";
+}
+
+static void export_short_arcs_ply(
+    const Eigen::MatrixXd& sdf_points,
+    const Options& options,
+    const std::string& out_dir,
+    bool use_new)
+{
+    if (use_new) export_short_arcs_ply_new(sdf_points, options, out_dir);
+    else         export_short_arcs_ply_old(sdf_points, options, out_dir);
+}
 // Helper: write one PLY file for a subset of points (selected by `mask`).
 // Vertices are laid out as: [sdf_pts for mask] then [proj_pts for mask].
 // Edges connect vertex i to vertex (count + i) for each selected index.
