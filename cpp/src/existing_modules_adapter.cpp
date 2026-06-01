@@ -161,11 +161,31 @@ static inline double now_sec() {
 
 // ── Tolerances ───────────────────────────────────────────────────
 struct Tolerances {
-    double tol;
+    // Angular slack used as skip_tol in intersect_intervals(). Radians.
+    // The other "small slack" thresholds that historically shared this
+    // field (cap dedup, parallel-cut early-out) live as file-scope
+    // constants below — they're tied to mesh / geometric units and
+    // shouldn't be slaved to an angular tolerance.
+    double interval_eps;
     double degen_tol;
     double merge_tol;
     double tangent_tol;
 };
+
+// Internal cap-dedup / degeneracy tolerances. Not exposed in the API
+// because their physical units differ from `Tolerances::interval_eps`
+// (radians) and from each other:
+//   DEDUP_COS  : dimensionless, threshold on 1 - cos(angle between cap
+//                normals). 1e-4 ≈ 0.81° — caps within this angle and
+//                offset are treated as the same cap.
+//   DEDUP_LEN  : length units (mesh), threshold on cap-plane offset
+//                differences AND on the parallel-cut early-out where a
+//                neighbor cap's plane is parallel to the host circle
+//                plane (then `c` is a signed distance from host circle
+//                center to the cap plane; `c > DEDUP_LEN` means the
+//                whole circle is on the covered side).
+static constexpr double DEDUP_COS = 1e-4;
+static constexpr double DEDUP_LEN = 1e-4;
 
 // ── Vec3 ─────────────────────────────────────────────────────────
 struct Vec3 {
@@ -469,7 +489,7 @@ static int compute_exposed_arcs_on_circle(int cap_idx, const Cap caps[],
 
         double A_line = std::sqrt(a*a + b*b);
         if (A_line < EPS) {
-            if (c > tol.tol) return 0;
+            if (c > DEDUP_LEN) return 0;
             continue;
         }
 
@@ -493,7 +513,7 @@ static int compute_exposed_arcs_on_circle(int cap_idx, const Cap caps[],
         }
 
         niv = intersect_intervals(iv, niv, con, ncn, tmp, MAX_INTERVALS,
-                                  tol.tol, tol.merge_tol);
+                                  tol.interval_eps, tol.merge_tol);
         if (niv == 0) return 0;
         std::memcpy(iv, tmp, niv * sizeof(Interval));
     }
@@ -644,9 +664,9 @@ static void compute_one(
         int replaced = -1;
         for (int e = nc - 1; e >= 0; e--) {
             double d = dot(cap.normal, caps[e].normal);
-            if (d > 1 - tol.tol) {
-                if (std::fabs(cap.d - caps[e].d) < tol.tol) { dup = true; break; }
-                else if (cap.d > caps[e].d)                 { dup = true; break; }
+            if (d > 1 - DEDUP_COS) {
+                if (std::fabs(cap.d - caps[e].d) < DEDUP_LEN) { dup = true; break; }
+                else if (cap.d > caps[e].d)                   { dup = true; break; }
                 else { replaced = e; break; }
             }
         }
@@ -889,10 +909,10 @@ static void compute_one(
 void compute_exposed_batch(
     const double* centers, const double* radii, int n,
     const std::vector<std::vector<int>>& nbrs,
-    double tol_v, double degen_tol, double merge_tol, double tangent_tol,
+    double interval_eps, double degen_tol, double merge_tol, double tangent_tol,
     sdf::Options::BatchData& out)
 {
-    Tolerances tol{tol_v, degen_tol, merge_tol, tangent_tol};
+    Tolerances tol{interval_eps, degen_tol, merge_tol, tangent_tol};
     const bool prof = sdf_batch_verbose();
     if (prof) {
         g_us_compute_one.store(0);

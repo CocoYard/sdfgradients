@@ -17,6 +17,15 @@
 
 #include "full_compute_switch.h"
 
+#ifdef HAVE_MES_CONTACT
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Regular_triangulation_vertex_base_3.h>
+#include <CGAL/Regular_triangulation_cell_base_3.h>
+#include <CGAL/Triangulation_vertex_base_with_info_3.h>
+#include <CGAL/Triangulation_data_structure_3.h>
+#include <CGAL/Regular_triangulation_3.h>
+#endif
+
 namespace sphere_intersect_core {
 
 struct BVHNode {
@@ -123,6 +132,83 @@ static void bvh_query(
             stack[sp++] = nd.right;
         }
     }
+}
+
+// Real-neighbor extraction via the regular (weighted Delaunay) triangulation.
+// The RT is the dual of the power diagram: two weighted points share a power-
+// cell face iff they are connected by a finite RT edge. So the RT's 1-skeleton
+// gives, per sphere, the subset of overlapping spheres that actually clip its
+// boundary on the union surface — heavily nested / dominated neighbors that
+// the naive BBox-overlap query returns are filtered out automatically.
+//
+// Spheres whose weighted point is "hidden" by the RT (fully dominated in the
+// power-cell sense) have no incident finite edges and end up with an empty
+// neighbor list — by construction their surface contributes nothing to the
+// union boundary, so no neighbor is needed to clip it.
+void find_intersections_by_power_diagram(const double* centers, const double* radii, int n,
+                        std::vector<std::vector<int>>& out_neighbors) {
+    out_neighbors.assign(n, {});
+    if (n == 0) return;
+
+#ifdef HAVE_MES_CONTACT
+    using K   = CGAL::Exact_predicates_inexact_constructions_kernel;
+    using Vbb = CGAL::Regular_triangulation_vertex_base_3<K>;
+    using Vb  = CGAL::Triangulation_vertex_base_with_info_3<int, K, Vbb>;
+    using Cb  = CGAL::Regular_triangulation_cell_base_3<K>;
+    using Tds = CGAL::Triangulation_data_structure_3<Vb, Cb>;
+    using Rt  = CGAL::Regular_triangulation_3<K, Tds>;
+    using WP  = Rt::Weighted_point;
+    using BP  = Rt::Bare_point;
+
+    std::vector<std::pair<WP, int>> wpts;
+    wpts.reserve(n);
+    for (int i = 0; i < n; i++) {
+        double x = centers[i*3], y = centers[i*3+1], z = centers[i*3+2];
+        double r = radii[i];
+        wpts.emplace_back(WP(BP(x, y, z), r * r), i);
+    }
+
+    // Range insert with infos benefits from CGAL's internal spatial sort.
+    Rt rt(wpts.begin(), wpts.end());
+
+    for (auto eit = rt.finite_edges_begin(); eit != rt.finite_edges_end(); ++eit) {
+        auto v1 = eit->first->vertex(eit->second);
+        auto v2 = eit->first->vertex(eit->third);
+        if (rt.is_infinite(v1) || rt.is_infinite(v2)) continue;
+        int i = v1->info();
+        int j = v2->info();
+        if (i < 0 || i >= n || j < 0 || j >= n || i == j) continue;
+
+        // RT edges only require power-cell adjacency, not ball-volume
+        // intersection. Keep only the RT edges where the two balls'
+        // volumes overlap (B_i ∩ B_j ≠ ∅, i.e., dist < r_i + r_j) —
+        // this is the legitimate neighbor relation the downstream
+        // exposed-region computation expects. Containment (one ball
+        // strictly inside the other) satisfies this and is kept; that's
+        // what triggers the phi=π fully-covered bail. Non-overlapping
+        // RT neighbors (a normal RT artefact for isolated spheres in
+        // sparse regions) are dropped so they don't show up as bogus
+        // "fully covered" downstream.
+        double dx = centers[i*3]   - centers[j*3];
+        double dy = centers[i*3+1] - centers[j*3+1];
+        double dz = centers[i*3+2] - centers[j*3+2];
+        double d2 = dx*dx + dy*dy + dz*dz;
+        double sum = radii[i] + radii[j];
+        if (d2 >= sum * sum) continue;             // non-overlapping → drop
+
+        out_neighbors[i].push_back(j);
+        out_neighbors[j].push_back(i);
+    }
+#else
+    (void)centers; (void)radii;
+    static bool warned = false;
+    if (!warned) {
+        std::cerr << "[sphere_intersect_core] HAVE_MES_CONTACT not defined; "
+                     "find_intersections_by_power_diagram returning empty neighbors. "
+                     "Rebuild with CGAL to enable.\n";
+        warned = true;
+    }
+#endif
 }
 
 void find_intersections(const double* centers, const double* radii, int n,

@@ -12,19 +12,11 @@
 #include <algorithm>
 #include <chrono>
 
-// ── Interface to existing C++ pybind modules ────────────────────────
-// These functions mirror the pybind11 wrappers in bench/sphere_intersect.cpp
-// and bench/sphere_exposed_pybind.cpp. To link, either:
-//   (a) refactor those files to separate core logic from pybind, or
-//   (b) compile them into this project with a thin adapter layer.
-//
-// For now, we declare the C++ core functions we need and provide
-// implementations that call into the existing code.
-
-// Forward declarations for existing C++ functions.
-// These must be provided at link time (see CMakeLists.txt).
 namespace sphere_intersect_core {
-    // Find all sphere-sphere intersections. Returns CSR (offsets, neighbors).
+    // Find all sphere-sphere intersections by power diagram. Fills per-sphere adjacency lists.
+    void find_intersections_by_power_diagram(const double* centers, const double* radii, int n,
+                            std::vector<std::vector<int>>& out_neighbors);
+    // Find all sphere-sphere intersections. Fills per-sphere adjacency lists.
     void find_intersections(const double* centers, const double* radii, int n,
                             std::vector<std::vector<int>>& out_neighbors);
 }
@@ -34,7 +26,7 @@ namespace sphere_exposed_core {
     void compute_exposed_batch(
         const double* centers, const double* radii, int n,
         const std::vector<std::vector<int>>& nbrs,
-        double tol, double degen_tol, double merge_tol, double tangent_tol,
+        double interval_eps, double degen_tol, double merge_tol, double tangent_tol,
         sdf::Options::BatchData& out);
 }
 
@@ -336,21 +328,32 @@ void get_visible_arcs(
         // Eigen default is column-major; C functions expect row-major (centers[i*3+k])
         Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor> pts_rm = sdf_points;
         auto t = clk::now();
-        sphere_intersect_core::find_intersections(
+        sphere_intersect_core::find_intersections_by_power_diagram(
             pts_rm.data(), radii.data(), N, options.ngbrs_list);
+        // sphere_intersect_core::find_intersections(
+        //     pts_rm.data(), radii.data(), N, options.ngbrs_list);
+        // print the distribution of neighbor counts
+        std::cout << "Neighbor count distribution (capped at 20):\n";
+        for (size_t i = 0; i < 20; i++) {
+            std::cout << "  " << i << ": " << options.ngbrs_list[i].size() << "\n";
+        }
         if (options.verbose)
             std::cout << "[get_visible_arcs] find_intersections: " << ms_since(t)/1000.0 << " s\n";
 
-        // tol args (in order): tol, degen_tol, merge_tol, tangent_tol.
-        //   tol         = 1e-4  : cap dedup + plane-side test (length / dimensionless)
-        //   degen_tol   = 1e-7  : collapse exposed region to a tangent point when
-        //                         total arc length < this. Length units (mesh).
-        //   merge_tol   = 1e-12 : merge near-touching intervals (radians)
-        //   tangent_tol = 1e-8  : containment-gap tolerance for emitting tangent pts
+        // tol args (in order): interval_eps, degen_tol, merge_tol, tangent_tol.
+        //   interval_eps = 1e-4  : skip_tol in intersect_intervals — angular
+        //                          slack on interval bounds (radians)
+        //   degen_tol    = 1e-7  : collapse exposed region to a tangent point
+        //                          when total arc length < this. Length (mesh).
+        //   merge_tol    = 1e-12 : merge near-touching intervals (radians)
+        //   tangent_tol  = 1e-8  : internal-containment surface-gap tolerance
+        //                          for emitting a tangent degen point (length)
+        // The cap-dedup / parallel-cut tolerances are file-scope constants in
+        // existing_modules_adapter.cpp (DEDUP_COS, DEDUP_LEN).
         sphere_exposed_core::compute_exposed_batch(
             pts_rm.data(), radii.data(), N,
             options.ngbrs_list,
-            1e-4, 1e-7, 1e-12, 1e-8,
+            1e-4, 1e-7, 1e-12, 1e-1,
             options.batch);
     }  // pts_rm freed here
 
