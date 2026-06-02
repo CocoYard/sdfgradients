@@ -788,12 +788,29 @@ static void compute_one(
         }
         if (prof) t_clip_acc += now_sec() - _t_cl;
 
-        // Compute the new cap's own exposed arcs against currently active caps.
-        // compute_exposed_arcs_on_circle skips new_idx internally if present.
+        // Compute the new cap's own exposed arcs against ALL caps seen so
+        // far (not just `active_caps`). The active-only optimization is
+        // unsafe: a cap A whose boundary arcs have all been clipped by
+        // others can still cover the interior of a region no other
+        // surviving cap reaches (e.g. A is a polar cap; B+D ate A's
+        // boundary at the equator but neither covers near the pole). A
+        // later cap C lying inside A's interior gets tested only against
+        // {B, D} and falsely retains exposed arcs. BVH masks this with
+        // redundancy; RT's minimal neighbor set has no spare cap to
+        // cover for an "inactive" A, so the bug shows as missing degen
+        // points exactly on geometrically meaningful arcs.
+        // compute_exposed_arcs_on_circle skips new_idx internally and
+        // skips small-radius (frozen) caps via the A_line < EPS branch.
+        int all_caps_buf[MAX_CAPS];
+        int n_all = 0;
+        for (int k = 0; k < nc; k++) {
+            if (caps[k].circle_radius >= EPS) all_caps_buf[n_all++] = k;
+        }
         double _t_ex = prof ? now_sec() : 0.0;
         Interval ivs[MAX_INTERVALS];
         int n_new = compute_exposed_arcs_on_circle(new_idx, caps,
-                                                   active_caps, n_active,
+                                                //    active_caps, n_active,
+                                                   all_caps_buf, n_all,
                                                    ivs, tol);
         for (int a = 0; a < n_new; a++)
             try_push(new_idx, ivs[a].start, ivs[a].end);
