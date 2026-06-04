@@ -5,6 +5,8 @@
 #include <numeric>
 #include <deque>
 #include <iostream>
+#include <fstream>
+#include <cstdlib>
 #include <chrono>
 #ifdef _OPENMP
 #include <omp.h>
@@ -436,6 +438,24 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
         double ps_mean = std::accumulate(patch_sizes.begin(), patch_sizes.end(), 0.0) / patch_sizes.size();
         std::cout << "  [PU fit] patch sizes: min=" << ps_min
                   << ", max=" << ps_max << ", mean=" << (int)ps_mean << "\n";
+    }
+
+    // Optional: dump per-fit stats as JSONL when PU_FIT_LOG is set.
+    // One line per fit() call: {"n_constraints":N,"n_patches":P,"patch_sizes":[...]}.
+    // Caller clears the file between runs and reads the last line for the
+    // last iteration's fit.
+    if (const char* log_path = std::getenv("PU_FIT_LOG")) {
+        std::ofstream f(log_path, std::ios::app);
+        if (f) {
+            f << "{\"n_constraints\":" << (int)pts.rows()
+              << ",\"n_patches\":" << (int)patch_sizes.size()
+              << ",\"patch_sizes\":[";
+            for (size_t i = 0; i < patch_sizes.size(); i++) {
+                if (i) f << ',';
+                f << patch_sizes[i];
+            }
+            f << "]}\n";
+        }
     }
 
     // Build patch center KDTree for fallback
