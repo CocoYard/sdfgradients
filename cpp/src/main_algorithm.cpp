@@ -53,7 +53,7 @@ static void filter_degenerate_pts(
     double dist_tol = 0.1,
     double spatial_dedup_tol = 1e-4)
 {
-    constexpr double dedup_tol = 1e-4;
+    constexpr double dedup_tol = 1e-8;
     std::vector<int> to_remove;
 
     // Step 1: per-sphere dedup. Collapse clusters within dedup_tol. For still-
@@ -229,8 +229,19 @@ Eigen::MatrixXd init_gradients_by_degenerate_pts(
     if (options.verbose)
         std::cout << "======== first fit done with input " << N << " points\n";
 
-    // Filter degenerate points
-    filter_degenerate_pts(degenerate_pts, interpolator, options.verbose);
+    // Filter degenerate points. spatial_dedup_tol=0 disables Step 4
+    // cross-sphere KD-tree dedup so the logged count reflects "spheres with
+    // vanishing exposed region" before any spatial collapsing.
+    filter_degenerate_pts(degenerate_pts, interpolator, options.verbose,
+                          /*dist_tol=*/0.1, /*spatial_dedup_tol=*/0.0);
+
+    // Append one row per run: "<grid_len> <remaining_degen> <fully_covered>".
+    if (false) {
+        std::ofstream f("degen_stats.txt", std::ios::app);
+        f << options.grid_len << " " << degenerate_pts.size()
+          << " " << options.fully_covered << "\n";
+    }
+    
 
     if (options.export_short_arcs)
         export_short_arcs_ply(sdf_points, options, "out/" + options.name);
@@ -328,10 +339,10 @@ void get_visible_arcs(
         // Eigen default is column-major; C functions expect row-major (centers[i*3+k])
         Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor> pts_rm = sdf_points;
         auto t = clk::now();
-        sphere_intersect_core::find_intersections_by_power_diagram(
-            pts_rm.data(), radii.data(), N, options.ngbrs_list);
-        // sphere_intersect_core::find_intersections(
+        // sphere_intersect_core::find_intersections_by_power_diagram(
         //     pts_rm.data(), radii.data(), N, options.ngbrs_list);
+        sphere_intersect_core::find_intersections(
+            pts_rm.data(), radii.data(), N, options.ngbrs_list);
         // print the distribution of neighbor counts
         std::cout << "Neighbor count distribution (capped at 20):\n";
         for (size_t i = 0; i < 20; i++) {
@@ -365,6 +376,7 @@ void get_visible_arcs(
         bool has_ngbrs = !options.ngbrs_list[i].empty();
         if (no_arcs && no_pts && has_ngbrs) fully_covered++;
     }
+    options.fully_covered = fully_covered;
     if (options.verbose)
         std::cout << fully_covered << " fully covered spheres\n";
 
@@ -544,7 +556,7 @@ static void export_short_arcs_ply_new(
 
     // Spatial dedup at export tol — different spheres' degenerate projections
     // can land on the same arc/edge. KDTree once + earlier-kept-wins sweep.
-    constexpr double export_dedup_tol = 1e-6;
+    constexpr double export_dedup_tol = 0;
     std::vector<int> kept;
     kept.reserve(entries.size());
     if (!entries.empty()) {

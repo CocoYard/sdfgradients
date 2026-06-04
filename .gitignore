@@ -22,3 +22,5 @@ normalized_examples
 gallery/out/*
 !gallery/out/metrics.json
 !gallery/out/build_metrics.py
+/logs
+/debug

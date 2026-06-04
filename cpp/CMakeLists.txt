@@ -181,11 +181,13 @@ if(NOT GMP_LIBRARY OR NOT MPFR_LIBRARY OR NOT GMPXX_LIBRARY)
     set(LOCAL_DEPS_PREFIX "${CMAKE_BINARY_DIR}/local-deps")
     file(MAKE_DIRECTORY "${LOCAL_DEPS_PREFIX}/include")
 
+    # GCC 15 defaults to C23; GMP 6.3.0 / MPFR 4.2.1 configure tests rely on
+    # pre-ANSI function declarations. Force -std=gnu17 so configure passes.
     ExternalProject_Add(gmp_build
         URL      https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
         URL_HASH SHA256=a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
         PREFIX   ${CMAKE_BINARY_DIR}/gmp
-        CONFIGURE_COMMAND <SOURCE_DIR>/configure
+        CONFIGURE_COMMAND env "CFLAGS=-O2 -std=gnu17 -fPIC" "CXXFLAGS=-O2 -std=gnu++17 -fPIC" <SOURCE_DIR>/configure
             --prefix=${LOCAL_DEPS_PREFIX}
             --enable-cxx --with-pic
             --disable-shared --enable-static
@@ -201,7 +203,7 @@ if(NOT GMP_LIBRARY OR NOT MPFR_LIBRARY OR NOT GMPXX_LIBRARY)
         URL_HASH SHA256=277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2
         PREFIX   ${CMAKE_BINARY_DIR}/mpfr
         DEPENDS  gmp_build
-        CONFIGURE_COMMAND <SOURCE_DIR>/configure
+        CONFIGURE_COMMAND env "CFLAGS=-O2 -std=gnu17 -fPIC" "CXXFLAGS=-O2 -std=gnu++17 -fPIC" <SOURCE_DIR>/configure
             --prefix=${LOCAL_DEPS_PREFIX}
             --with-gmp=${LOCAL_DEPS_PREFIX}
             --with-pic

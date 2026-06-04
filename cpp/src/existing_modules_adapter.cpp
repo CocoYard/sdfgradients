@@ -21,6 +21,7 @@
 #include <chrono>
 #include <climits>
 #include <thread>
+#include "always_assert.h"
 
 #ifdef USE_OPENMP
 #include <omp.h>
@@ -175,17 +176,22 @@ struct Tolerances {
 // Internal cap-dedup / degeneracy tolerances. Not exposed in the API
 // because their physical units differ from `Tolerances::interval_eps`
 // (radians) and from each other:
-//   DEDUP_COS  : dimensionless, threshold on 1 - cos(angle between cap
-//                normals). 1e-4 ≈ 0.81° — caps within this angle and
-//                offset are treated as the same cap.
-//   DEDUP_LEN  : length units (mesh), threshold on cap-plane offset
-//                differences AND on the parallel-cut early-out where a
-//                neighbor cap's plane is parallel to the host circle
-//                plane (then `c` is a signed distance from host circle
-//                center to the cap plane; `c > DEDUP_LEN` means the
-//                whole circle is on the covered side).
-static constexpr double DEDUP_COS = 1e-4;
-static constexpr double DEDUP_LEN = 1e-4;
+//   DEDUP_COS      : dimensionless, threshold on 1 - cos(angle between
+//                    cap normals). 1e-4 ≈ 0.81° — caps within this
+//                    angle and offset are treated as the same cap.
+//   DEDUP_LEN_FRAC : DIMENSIONLESS — fraction of the main sphere's
+//                    radius (mr). Every use is `DEDUP_LEN_FRAC * mr`,
+//                    so the effective length threshold scales with
+//                    sphere size and stays scale-invariant.
+//                    Applies to:
+//                      - cap-plane offset dedup (cap.d - caps[e].d)
+//                      - parallel-cut early-out where `c` is the
+//                        signed distance from host circle center to
+//                        the cutter plane; `c > DEDUP_LEN_FRAC * mr`
+//                        means the whole host circle is on the
+//                        covered side.
+static constexpr double DEDUP_COS      = 1e-4;
+static constexpr double DEDUP_LEN_FRAC = 1e-4;
 
 // ── Vec3 ─────────────────────────────────────────────────────────
 struct Vec3 {
@@ -467,14 +473,24 @@ static int intersect_intervals(const Interval *a, int na,
 static std::atomic<long long> g_per_sphere_max_arc_hist[MAX_ARCS + 1];
 #endif
 
+// mr: main sphere radius — used to scale DEDUP_LEN_FRAC into a length
+// threshold for the parallel-cut early-out (see DEDUP_LEN_FRAC comment).
 static int compute_exposed_arcs_on_circle(int cap_idx, const Cap caps[],
                                           const int *active_caps, int n_active,
-                                          Interval *result, const Tolerances &tol) {
+                                          Interval *result, const Tolerances &tol,
+                                          double mr) {
     const Cap &host = caps[cap_idx];
     double R = host.circle_radius;
     if (R < EPS) return 0;
 
-    Interval iv[MAX_INTERVALS], tmp[MAX_INTERVALS];
+    // Heap-backed per-thread scratch — MAX_INTERVALS=30000 under
+    // FULL_COMPUTE_30CUBED would put ~960 KB on the stack otherwise,
+    // overflowing OpenMP worker stacks. iv[0] is set before any other entry
+    // is read, so no cross-call zeroing is needed.
+    thread_local std::vector<Interval> iv_buf(MAX_INTERVALS);
+    thread_local std::vector<Interval> tmp_buf(MAX_INTERVALS);
+    Interval* iv  = iv_buf.data();
+    Interval* tmp = tmp_buf.data();
     int niv = 1;
     iv[0] = {0.0, TWO_PI};
 
@@ -489,7 +505,26 @@ static int compute_exposed_arcs_on_circle(int cap_idx, const Cap caps[],
 
         double A_line = std::sqrt(a*a + b*b);
         if (A_line < EPS) {
-            if (c > DEDUP_LEN) return 0;
+            // Other cap's plane is parallel to host's circle plane (their
+            // normals are (anti)parallel). Same-direction parallels would
+            // have been collapsed at compute_one's dedup, so in practice
+            // this branch fires for anti-parallel cutters: two opposing
+            // neighbors covering main sphere from opposite sides.
+            //
+            // `c` is the signed distance from host's circle center to
+            // other's cutting plane, measured along other.normal. Since
+            // the planes are parallel, every point on host's circle has
+            // the same `c`, so the entire circle is uniformly on one side.
+            //
+            //   c > 0 → host circle lies on other's covered side → other
+            //           swallows host's whole circle → host contributes
+            //           no exposed arcs → return 0.
+            //   c ≤ 0 → host circle on other's uncovered side → other
+            //           does not clip host at all → continue.
+            //
+            // Multiply by mr so the threshold scales with main sphere
+            // size (DEDUP_LEN_FRAC is a fraction, see top-of-file note).
+            if (c > DEDUP_LEN_FRAC * mr) return 0; // should not happen in strict SDF
             continue;
         }
 
@@ -579,6 +614,19 @@ static int find_degen_pts(const Cap caps[],
 // arcs have all been eaten. Avoids the old two-phase pattern of building a
 // full caps[] up-front and iterating again for arcs.
 // (DEBUG_ARC_HIST atomic counters moved to before compute_exposed_arcs_on_circle.)
+//
+// Parameter glossary (used throughout this function and its helpers):
+//   mc       : main sphere center (the sphere whose exposed region we compute)
+//   mr       : main sphere radius — also the length scale for tolerances
+//              (DEDUP_LEN_FRAC, tangent_tol, etc.) so they stay scale-invariant
+//   oc       : neighbor (other) sphere centers, packed [x,y,z, x,y,z, ...]
+//   or_      : neighbor sphere radii
+//   n_others : number of neighbors
+//   cap      : a half-space cut produced by one neighbor sphere intersecting
+//              the main sphere — represented by a unit normal and offset d
+//              (point inside cap iff normal·x > d); see struct Cap above
+//   host     : the cap whose own boundary circle we are clipping
+//   other    : another cap being used as a cutter against host's circle
 static void compute_one(
     Vec3 mc, double mr, const double *oc, const double *or_, int n_others,
     const Tolerances &tol,
@@ -589,12 +637,37 @@ static void compute_one(
     Cap *out_caps, int *out_nc,
     int *out_remap)
 {
-    Cap  caps[MAX_CAPS];
-    int  nc = 0;
-    int  arc_count[MAX_CAPS] = {};
-    int  active_caps[MAX_CAPS];
-    int  n_active = 0;
-    bool in_active[MAX_CAPS] = {};
+    // Per-thread scratch buffers, heap-backed via thread_local std::vector.
+    // FULL_COMPUTE_30CUBED bumps MAX_CAPS to 30000 — the original stack-
+    // resident C arrays added up to ~5 MB per frame and blew through OpenMP
+    // worker stacks (default 4 MB). Storing them as thread_local vectors keeps
+    // them off the stack while reusing the allocation across calls.
+    //
+    // The buffers tagged "ZEROED" below need to read as 0 on entry to each
+    // call (matches the `= {}` zero-init of the original arrays). The
+    // ScratchReset guard restores the invariant by clearing [0, nc) on every
+    // return path — cheaper than zeroing the full MAX_CAPS range each call.
+    thread_local std::vector<Cap>            caps_buf(MAX_CAPS);
+    thread_local std::vector<int>            arc_count_buf(MAX_CAPS, 0);     // ZEROED
+    thread_local std::vector<int>            active_caps_buf(MAX_CAPS);
+    thread_local std::vector<unsigned char>  in_active_buf(MAX_CAPS, 0);     // ZEROED
+    thread_local std::vector<double>         host_hits_buf_v(MAX_CAPS * 2);
+    thread_local std::vector<int>            host_nhits_buf_v(MAX_CAPS);
+    thread_local std::vector<unsigned char>  host_circle_inside_cut_buf(MAX_CAPS);
+    thread_local std::vector<unsigned char>  host_seg_h0h1_inside_cut_buf(MAX_CAPS);
+    thread_local std::vector<int>            host_stamp_buf(MAX_CAPS, 0);    // ZEROED
+    thread_local std::vector<int>            new_arc_count_buf(MAX_CAPS);
+    thread_local std::vector<int>            all_caps_buf_v(MAX_CAPS);
+    thread_local std::vector<int>            arc_count2_buf(MAX_CAPS, 0);    // ZEROED
+    thread_local std::vector<int>            remap_buf(MAX_CAPS);
+    thread_local std::vector<Interval>       ivs_buf(MAX_INTERVALS);
+
+    Cap*    caps                       = caps_buf.data();
+    int     nc                         = 0; // number of caps currently in the caps[] list; grows up to nc = n_others
+    int*    arc_count                  = arc_count_buf.data();
+    int*    active_caps                = active_caps_buf.data();
+    bool*   in_active                  = reinterpret_cast<bool*>(in_active_buf.data());
+    int     n_active                   = 0;
 
     // Per-host caches for clip_arc_by_cap (stamped invalidation).
     //   host_hits_buf[h]    : intersect_circle_with_plane output for host h
@@ -607,11 +680,31 @@ static void compute_one(
     // which segment of the host circle is "inside cut", any arc/piece's
     // segment can be determined by an angle comparison rather than another
     // is_inside_cap(point_on_circle(...)) call.
-    double host_hits_buf[MAX_CAPS][2];
-    int    host_nhits_buf[MAX_CAPS];
-    bool   host_circle_inside_cut[MAX_CAPS];
-    bool   host_seg_h0h1_inside_cut[MAX_CAPS];
-    int    host_stamp[MAX_CAPS] = {};
+    double  (*host_hits_buf)[2]        = reinterpret_cast<double(*)[2]>(host_hits_buf_v.data());
+    int*    host_nhits_buf             = host_nhits_buf_v.data();
+    bool*   host_circle_inside_cut     = reinterpret_cast<bool*>(host_circle_inside_cut_buf.data());
+    bool*   host_seg_h0h1_inside_cut   = reinterpret_cast<bool*>(host_seg_h0h1_inside_cut_buf.data());
+    int*    host_stamp                 = host_stamp_buf.data();
+
+    int*      all_caps_buf = all_caps_buf_v.data();
+    int*      arc_count2   = arc_count2_buf.data();
+    int*      remap        = remap_buf.data();
+    Interval* ivs          = ivs_buf.data();
+
+    struct ScratchReset {
+        int* arc_count; int* host_stamp;
+        unsigned char* in_active; int* arc_count2;
+        const int* nc_ptr;
+        ~ScratchReset() {
+            int n = *nc_ptr;
+            std::fill_n(arc_count,  n, 0);
+            std::fill_n(host_stamp, n, 0);
+            std::fill_n(in_active,  n, (unsigned char)0);
+            std::fill_n(arc_count2, n, 0);
+        }
+    } _scratch_reset{arc_count, host_stamp,
+                     in_active_buf.data(), arc_count2,
+                     &nc};
 
     std::vector<BoundaryArc> all_arcs;
     std::vector<BoundaryArc> new_arcs;
@@ -621,8 +714,10 @@ static void compute_one(
     // Per-cap arc budget enforced while building new_arcs each outer iter.
     // Without this, pathological geometry can blow up new_arcs to 100M+.
     // Final output is still truncated by max_arcs at the end (top-K by length).
-    int new_arc_count[MAX_CAPS];
+    int* new_arc_count = new_arc_count_buf.data();
     auto try_push = [&](int cap_idx, double t_s, double t_e) {
+        ALWAYS_ASSERT(new_arc_count[cap_idx] < MAX_ARCS,
+                      "per-cap arc budget exceeded in one outer iter");
         if (new_arc_count[cap_idx] >= MAX_ARCS) return;
         new_arc_count[cap_idx]++;
         new_arcs.push_back({cap_idx, t_s, t_e});
@@ -656,8 +751,8 @@ static void compute_one(
             return;
         }
 
-        // Dedup against existing caps (live and frozen small-radius ones),
-        // matching the original compute_all_caps logic. Dominating new replaces
+        // Dedup against existing caps,
+        // Dominating new replaces
         // the old in-place; duplicates are skipped.
         double _t_dd = prof ? now_sec() : 0.0;
         bool dup = false;
@@ -665,7 +760,7 @@ static void compute_one(
         for (int e = nc - 1; e >= 0; e--) {
             double d = dot(cap.normal, caps[e].normal);
             if (d > 1 - DEDUP_COS) {
-                if (std::fabs(cap.d - caps[e].d) < DEDUP_LEN) { dup = true; break; }
+                if (std::fabs(cap.d - caps[e].d) < DEDUP_LEN_FRAC * mr) { dup = true; break; }
                 else if (cap.d > caps[e].d)                   { dup = true; break; }
                 else { replaced = e; break; }
             }
@@ -690,22 +785,6 @@ static void compute_one(
             caps[new_idx] = cap;
         }
 
-        // Frozen small-radius caps: kept in caps[] so find_degen_pts can see
-        // them, but never participate in arc clipping.
-        if (cap.circle_radius < EPS) {
-            if (replaced >= 0 && in_active[new_idx]) {
-                // The replaced slot was active; remove it.
-                for (int k = 0; k < n_active; k++) {
-                    if (active_caps[k] == new_idx) {
-                        active_caps[k] = active_caps[--n_active];
-                        break;
-                    }
-                }
-                in_active[new_idx] = false;
-            }
-            continue;
-        }
-
         // Clip all existing arcs by the new cap. Two-level caching:
         //   1. Per host, cache the circle/plane intersection (expensive trig).
         //   2. Per host, cache "which segment of host circle is inside cutting"
@@ -718,6 +797,9 @@ static void compute_one(
         const Cap& cut = caps[new_idx];
         for (const auto& arc : all_arcs) {
             int h = arc.cap_idx;
+            // stamp is used for circle/plane intersection caching. Multiple arcs can share 
+            // the same host cap, so we compute the intersection once per host per new cap, 
+            // then cache it via host_stamp.
             if (host_stamp[h] != stamp) {
                 int nhits = intersect_circle_with_plane(caps[h], cut, host_hits_buf[h]);
                 host_nhits_buf[h] = nhits;
@@ -801,17 +883,15 @@ static void compute_one(
         // points exactly on geometrically meaningful arcs.
         // compute_exposed_arcs_on_circle skips new_idx internally and
         // skips small-radius (frozen) caps via the A_line < EPS branch.
-        int all_caps_buf[MAX_CAPS];
         int n_all = 0;
         for (int k = 0; k < nc; k++) {
             if (caps[k].circle_radius >= EPS) all_caps_buf[n_all++] = k;
         }
         double _t_ex = prof ? now_sec() : 0.0;
-        Interval ivs[MAX_INTERVALS];
         int n_new = compute_exposed_arcs_on_circle(new_idx, caps,
                                                 //    active_caps, n_active,
                                                    all_caps_buf, n_all,
-                                                   ivs, tol);
+                                                   ivs, tol, mr);
         for (int a = 0; a < n_new; a++)
             try_push(new_idx, ivs[a].start, ivs[a].end);
         if (prof) t_exposed_acc += now_sec() - _t_ex;
@@ -872,9 +952,9 @@ static void compute_one(
     }
 
     // Recompute arc_count from the kept subset, then build remap.
-    int arc_count2[MAX_CAPS] = {};
+    // arc_count2 / remap are thread_local at function top (arc_count2 enters
+    // zero, restored by ScratchReset on exit).
     for (const auto& r : ranked) arc_count2[all_arcs[r.second].cap_idx]++;
-    int remap[MAX_CAPS];
     int kept_caps = 0;
     for (int i = 0; i < nc; i++) {
         if (arc_count2[i] > 0) remap[i] = kept_caps++;

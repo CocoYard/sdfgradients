@@ -48,6 +48,9 @@ struct Options {
     // Degenerate points: sphere index -> list of surface points
     std::unordered_map<int, std::vector<Eigen::Vector3d>> degenerate_pts;
 
+    // Per-run stats stashed by get_visible_arcs for later logging.
+    int fully_covered = 0;
+
     // Batch result from compute_exposed_batch (opaque, passed through)
     // Arc data in CSR-like format, mirroring the Python batch dict
     struct BatchData {
