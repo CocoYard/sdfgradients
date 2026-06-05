@@ -1,3 +1,4 @@
+import trimesh, os
 import gpytoolbox as gpy
 import igl
 import numpy as np
@@ -190,7 +191,7 @@ def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_gtmesh=True)
     mesh_distances(recon, mesh, verbose=True)
     return plt
 
-def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True):
+def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, force_cpu=False):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -208,7 +209,7 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True):
     import trimesh, os
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
     os.makedirs(out_dir, exist_ok=True)
-    Vr, Fr = gpy.reach_for_the_arcs(points, distances, screening_weight=screening_weight, parallel=parallel)
+    Vr, Fr = gpy.reach_for_the_arcs(points, distances, screening_weight=screening_weight, parallel=parallel, force_cpu=force_cpu)
     rfta = trimesh.Trimesh(vertices=Vr, faces=Fr)
     # Keep only components whose mean coordinates are fully inside the input bbox and 
     # percent of coordinates inside the input bbox is at least 50%, so PSR "bubble"
@@ -552,6 +553,8 @@ def test_our_method(options : Options, save_gtmesh=False):
     hint_spacing = extent / max(options.grid_len - 1, 1)
     target_cells_per_hint = 4
     resolution = int(np.clip(np.ceil(extent / (hint_spacing / target_cells_per_hint)), 64, 512))
+    # resolution = 128
+    print(f"Grid resolution for surface extraction: {resolution}")
 
     if use_cpp:
         result.interpolator.verbose = options.verbose
@@ -569,7 +572,6 @@ def test_our_method(options : Options, save_gtmesh=False):
     print(f"  ⏱  {'Grid evaluation':<30} {time.perf_counter() - timer:>7.2f} s")
     # Extract isosurface at value 0 using marching cubes
     # Export meshes to out/
-    import trimesh, os
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
     os.makedirs(out_dir, exist_ok=True)
     recon = trimesh.Trimesh(vertices=verts, faces=faces)
@@ -589,6 +591,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     # if options.use_gt_gradients:
     #     fname = f'interpolant_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
+    print(f"Exported: {out_dir}/{fname}")
     '''
     # """ ========================= output post+mc ========================= """
     # use_cpp = True
@@ -672,33 +675,33 @@ def test_our_method(options : Options, save_gtmesh=False):
     '''
 
     # Export projection visualization GLB
-    if not use_cpp and options.export_projections:
-        out_path = f'out/projections_{options.name}_{options.grid_len}_{options.max_iters}.glb'
-        if options.use_gt_gradients:
-            out_path = f'out/projections_{options.name}_{options.grid_len}_gtmesh.glb'
-            export_projection_visualization(points, projections, mask, mesh, output_path=out_path)
-            out_path = f'out/projections_{options.name}_{options.grid_len}_gt.glb'
-        export_projection_visualization(points, projections, mask, recon, output_path=out_path)
+    # if not use_cpp and options.export_projections:
+    #     out_path = f'out/projections_{options.name}_{options.grid_len}_{options.max_iters}.glb'
+    #     if options.use_gt_gradients:
+    #         out_path = f'out/projections_{options.name}_{options.grid_len}_gtmesh.glb'
+    #         export_projection_visualization(points, projections, mask, mesh, output_path=out_path)
+    #         out_path = f'out/projections_{options.name}_{options.grid_len}_gt.glb'
+    #     export_projection_visualization(points, projections, mask, recon, output_path=out_path)
     
-    # --- Second window: marching cubes directly on sample points (原始网格点) ---
-    # 从点坐标反推网格结构，无需插值
-    xs = np.unique(np.round(points[:, 0], 8))
-    ys = np.unique(np.round(points[:, 1], 8))
-    zs = np.unique(np.round(points[:, 2], 8))
-    nx, ny, nz = len(xs), len(ys), len(zs)
-    ix = np.searchsorted(xs, np.round(points[:, 0], 8))
-    iy = np.searchsorted(ys, np.round(points[:, 1], 8))
-    iz = np.searchsorted(zs, np.round(points[:, 2], 8))
-    grid_values_direct = np.ones((nx, ny, nz))  # 缺失点默认为外部(+1)
-    grid_values_direct[ix, iy, iz] = distances
-    sp = ((xs[-1]-xs[0])/(nx-1), (ys[-1]-ys[0])/(ny-1), (zs[-1]-zs[0])/(nz-1))
-    from skimage.measure import marching_cubes
-    verts2, faces2, _, _ = marching_cubes(grid_values_direct, level=0.0, spacing=sp)
-    verts2 += np.array([xs[0], ys[0], zs[0]])
-    trimesh.Trimesh(vertices=verts2, faces=faces2).export(f'{out_dir}/sample_points_{grid_len}.obj')    
-    print(f"Exported: {out_dir}/{fname}, {out_dir}/sample_points_{grid_len}.obj")
+    # # --- Second window: marching cubes directly on sample points (原始网格点) ---
+    # # 从点坐标反推网格结构，无需插值
+    # xs = np.unique(np.round(points[:, 0], 8))
+    # ys = np.unique(np.round(points[:, 1], 8))
+    # zs = np.unique(np.round(points[:, 2], 8))
+    # nx, ny, nz = len(xs), len(ys), len(zs)
+    # ix = np.searchsorted(xs, np.round(points[:, 0], 8))
+    # iy = np.searchsorted(ys, np.round(points[:, 1], 8))
+    # iz = np.searchsorted(zs, np.round(points[:, 2], 8))
+    # grid_values_direct = np.ones((nx, ny, nz))  # 缺失点默认为外部(+1)
+    # grid_values_direct[ix, iy, iz] = distances
+    # sp = ((xs[-1]-xs[0])/(nx-1), (ys[-1]-ys[0])/(ny-1), (zs[-1]-zs[0])/(nz-1))
+    # from skimage.measure import marching_cubes
+    # verts2, faces2, _, _ = marching_cubes(grid_values_direct, level=0.0, spacing=sp)
+    # verts2 += np.array([xs[0], ys[0], zs[0]])
+    # trimesh.Trimesh(vertices=verts2, faces=faces2).export(f'{out_dir}/sample_points_{grid_len}.obj')    
+    print(f"Exported: {out_dir}/{fname}")
     mesh_distances(recon, mesh, verbose=True)
-    return plt
+    # return plt
 
 def check_mesh_error(dir_to_meshes, path_to_gt):
     """ Compute the mesh distance (Hausdorff and Chamfer) between meshes in dir_to_meshes and the ground truth mesh at path_to_gt. """
@@ -719,6 +722,48 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
             haus, chamfer, f1 = mesh_distances(mesh, gt_mesh)
             print(f"{mesh_file:<50} against ground truth...", end='')
             print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}  F1: {f1:.4f}")
+
+def test_mc(options : Options, save_gtmesh=False):
+    """
+    Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
+    e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
+    """
+    grid_len = options.grid_len
+    path_to_obj = options.path_to_obj
+    path_to_sdf = options.path_to_sdf
+    iters = options.max_iters
+    options.print()
+    if path_to_sdf is not None:
+        # read sdf data from file
+        data = np.load(path_to_sdf)
+        points = data['points']
+        distances = data['sdf_values']
+    else:
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
+        options.gt_gradients = gt_gradients
+        options.gt_mesh = mesh
+    # --- Second window: marching cubes directly on sample points (原始网格点) ---
+    # 从点坐标反推网格结构，无需插值
+    xs = np.unique(np.round(points[:, 0], 8))
+    ys = np.unique(np.round(points[:, 1], 8))
+    zs = np.unique(np.round(points[:, 2], 8))
+    nx, ny, nz = len(xs), len(ys), len(zs)
+    ix = np.searchsorted(xs, np.round(points[:, 0], 8))
+    iy = np.searchsorted(ys, np.round(points[:, 1], 8))
+    iz = np.searchsorted(zs, np.round(points[:, 2], 8))
+    grid_values_direct = np.ones((nx, ny, nz))  # 缺失点默认为外部(+1)
+    grid_values_direct[ix, iy, iz] = distances
+    sp = ((xs[-1]-xs[0])/(nx-1), (ys[-1]-ys[0])/(ny-1), (zs[-1]-zs[0])/(nz-1))
+    from skimage.measure import marching_cubes
+    verts2, faces2, _, _ = marching_cubes(grid_values_direct, level=0.0, spacing=sp)
+    verts2 += np.array([xs[0], ys[0], zs[0]])
+    out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
+    os.makedirs(out_dir, exist_ok=True)
+    trimesh.Trimesh(vertices=verts2, faces=faces2).export(f'{out_dir}/sample_points_{grid_len}.obj')    
+    # print(f"Exported: {out_dir}/{fname}, {out_dir}/sample_points_{grid_len}.obj")
+    # mesh_distances(recon, mesh, verbose=True)
+    return plt
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
