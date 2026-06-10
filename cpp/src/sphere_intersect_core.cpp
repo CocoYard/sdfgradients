@@ -146,8 +146,11 @@ static void bvh_query(
 // neighbor list — by construction their surface contributes nothing to the
 // union boundary, so no neighbor is needed to clip it.
 void find_intersections_by_power_diagram(const double* centers, const double* radii, int n,
-                        std::vector<std::vector<int>>& out_neighbors) {
+                        std::vector<std::vector<int>>& out_neighbors,
+                        int* out_hidden = nullptr) {
+    
     out_neighbors.assign(n, {});
+    if (out_hidden) *out_hidden = 0;
     if (n == 0) return;
 
 #ifdef HAVE_MES_CONTACT
@@ -164,7 +167,10 @@ void find_intersections_by_power_diagram(const double* centers, const double* ra
     wpts.reserve(n);
     for (int i = 0; i < n; i++) {
         double x = centers[i*3], y = centers[i*3+1], z = centers[i*3+2];
-        double r = radii[i];
+        double r = fmax(0, radii[i] - 1e-7) /* shrink by a tiny epsilon to 
+        avoid CGAL's weird "hidden point" edge cases where a point is just 
+        barely on the boundary of being hidden. This can cause it to lose 
+        its info() and break our neighbor extraction. */;
         wpts.emplace_back(WP(BP(x, y, z), r * r), i);
     }
 
@@ -183,12 +189,9 @@ void find_intersections_by_power_diagram(const double* centers, const double* ra
         // intersection. Keep only the RT edges where the two balls'
         // volumes overlap (B_i ∩ B_j ≠ ∅, i.e., dist < r_i + r_j) —
         // this is the legitimate neighbor relation the downstream
-        // exposed-region computation expects. Containment (one ball
-        // strictly inside the other) satisfies this and is kept; that's
-        // what triggers the phi=π fully-covered bail. Non-overlapping
+        // exposed-region computation expects. Non-overlapping
         // RT neighbors (a normal RT artefact for isolated spheres in
-        // sparse regions) are dropped so they don't show up as bogus
-        // "fully covered" downstream.
+        // sparse regions) are dropped.
         double dx = centers[i*3]   - centers[j*3];
         double dy = centers[i*3+1] - centers[j*3+1];
         double dz = centers[i*3+2] - centers[j*3+2];
@@ -199,6 +202,45 @@ void find_intersections_by_power_diagram(const double* centers, const double* ra
         out_neighbors[i].push_back(j);
         out_neighbors[j].push_back(i);
     }
+    int empty_count = 0;
+    int fully_covered_count = 0;
+    for (int i = 0; i < n; i++) {
+        if (out_neighbors[i].empty()) {
+            empty_count++;
+        }
+    }
+    std::cout << "[find_intersections_by_power_diagram] " << empty_count
+              << " spheres have no neighbors (fully dominated in power diagram sense)\n";
+
+    // A weighted point is "hidden" (redundant) when its power cell is empty,
+    // so it never becomes a vertex of the RT. CGAL keeps such points inside
+    // the cells, but they LOSE their info() (the sphere index lives on the
+    // vertex base, and hidden points are not vertices). Two ways to read them:
+
+    // (1) WHICH spheres are hidden — complement of the vertex-info set.
+    //     This is the way to recover sphere indices.
+    std::vector<char> is_vertex(n, 0);
+    for (auto vit = rt.finite_vertices_begin(); vit != rt.finite_vertices_end(); ++vit) {
+        int idx = vit->info();
+        if (idx >= 0 && idx < n) is_vertex[idx] = 1;
+    }
+    int hidden_count = 0;
+    for (int i = 0; i < n; i++) if (!is_vertex[i]) hidden_count++;
+    if (out_hidden) *out_hidden = hidden_count;
+
+    // (2) The actual hidden weighted points held by CGAL (coords/weight only,
+    //     NO sphere index). Requires the Regular_triangulation_cell_base_3
+    //     cell base, which we use. Uncomment to inspect:
+    // for (auto cit = rt.all_cells_begin(); cit != rt.all_cells_end(); ++cit) {
+    //     for (auto hit = cit->hidden_points_begin();
+    //               hit != cit->hidden_points_end(); ++hit) {
+    //         const WP& wp = *hit;            // wp.point() = center, wp.weight() = r^2
+    //         (void)wp;
+    //     }
+    // }
+
+    std::cout << "hidden points: " << hidden_count
+              << " (n - num_vertices = " << (n - (int)rt.number_of_vertices()) << ")\n";
 #else
     (void)centers; (void)radii;
     static bool warned = false;

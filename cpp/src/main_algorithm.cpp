@@ -15,7 +15,8 @@
 namespace sphere_intersect_core {
     // Find all sphere-sphere intersections by power diagram. Fills per-sphere adjacency lists.
     void find_intersections_by_power_diagram(const double* centers, const double* radii, int n,
-                            std::vector<std::vector<int>>& out_neighbors);
+                            std::vector<std::vector<int>>& out_neighbors,
+                            int* out_hidden = nullptr);
     // Find all sphere-sphere intersections. Fills per-sphere adjacency lists.
     void find_intersections(const double* centers, const double* radii, int n,
                             std::vector<std::vector<int>>& out_neighbors);
@@ -237,7 +238,7 @@ Eigen::MatrixXd init_gradients_by_degenerate_pts(
 
     // Append one row per run: "<grid_len> <remaining_degen> <fully_covered>".
     if (false) {
-        std::ofstream f("degen_stats.txt", std::ios::app);
+        std::ofstream f("logs/degen_stats.txt", std::ios::app);
         f << options.grid_len << " " << degenerate_pts.size()
           << " " << options.fully_covered << "\n";
     }
@@ -339,10 +340,15 @@ void get_visible_arcs(
         // Eigen default is column-major; C functions expect row-major (centers[i*3+k])
         Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor> pts_rm = sdf_points;
         auto t = clk::now();
-        // sphere_intersect_core::find_intersections_by_power_diagram(
+        sphere_intersect_core::find_intersections_by_power_diagram(
+            pts_rm.data(), radii.data(), N, options.ngbrs_list,
+            &options.hidden_points);
+        if (false) {
+            std::ofstream hf("logs/degen_stats.txt", std::ios::app);
+            hf << options.grid_len << " " << options.hidden_points << "\n";
+        }
+        // sphere_intersect_core::find_intersections(
         //     pts_rm.data(), radii.data(), N, options.ngbrs_list);
-        sphere_intersect_core::find_intersections(
-            pts_rm.data(), radii.data(), N, options.ngbrs_list);
         // print the distribution of neighbor counts
         std::cout << "Neighbor count distribution (capped at 20):\n";
         for (size_t i = 0; i < 20; i++) {

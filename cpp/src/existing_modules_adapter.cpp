@@ -6,7 +6,7 @@
 // feeding plot_max_arcs_per_cap.py. Uncomment to enable when collecting
 // boxplot data; otherwise leave off (one atomic-fetch_add per sphere is
 // cheap, but the dump line itself is verbose).
-#define DEBUG_ARC_HIST 1
+// #define DEBUG_ARC_HIST 1
 
 #include "types.h"
 #include "full_compute_switch.h"

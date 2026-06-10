@@ -50,6 +50,7 @@ struct Options {
 
     // Per-run stats stashed by get_visible_arcs for later logging.
     int fully_covered = 0;
+    int hidden_points = 0;   // RT weighted points with empty power cell
 
     // Batch result from compute_exposed_batch (opaque, passed through)
     // Arc data in CSR-like format, mirroring the Python batch dict
