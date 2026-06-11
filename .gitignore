@@ -24,3 +24,4 @@ gallery/out/*
 !gallery/out/build_metrics.py
 /logs
 # /debug
+.claude
