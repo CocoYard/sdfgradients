@@ -22,7 +22,8 @@ public:
                    int max_points = 200,
                    double reg=1e-5,
                    const std::string& partition = "box",
-                   bool verbose = true);
+                   bool verbose = true,
+                   bool pair_local = true);
 
     void fit(const Eigen::MatrixXd& points,
              const Eigen::VectorXd& values,
@@ -48,7 +49,12 @@ private:
                              const Eigen::Vector3d& center,
                              const Eigen::Vector3d& half_ext);
 
-    void deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values, double tol = 1e-8) const;
+    // If `partner` is non-null it is treated as a per-point index array
+    // (partner[i] = row index of i's paired point, or -1) and remapped in
+    // lockstep with the surviving points; pairs whose partner is dropped
+    // become -1.
+    void deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values,
+                     double tol = 1e-8, std::vector<int>* partner = nullptr) const;
 
     struct PatchInfo {
         Eigen::Vector3d center;
@@ -68,6 +74,7 @@ private:
     std::vector<Patch> patches_;
     bool trained_ = false;
     bool use_box_ = false;
+    bool pair_local_ = true;   // augment each local solve with missing input/projection partners
     double dist_threshold_ = 0.2;
 
     // For fallback nearest-patch lookup (tree cached after fit(), reused every predict())

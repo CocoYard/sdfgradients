@@ -432,7 +432,7 @@ MainResult main_algorithm(
         interpolator = std::make_shared<PUInterpolator>(
             "cubic", options.interp_overlap,
             10, 200, options.reg, options.interp_partition,
-            options.verbose);
+            options.verbose, options.pair_local);
     }
     if (options.verbose)
         std::cout << "[main_algorithm] interpolator ctor: " << ms_since(t2)/1000.0 << " s\n";

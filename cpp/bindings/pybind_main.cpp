@@ -36,6 +36,7 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def_readwrite("interpolator_type", &sdf::Options::interpolator_type)
         .def_readwrite("interp_partition", &sdf::Options::interp_partition)
         .def_readwrite("interp_overlap", &sdf::Options::interp_overlap)
+        .def_readwrite("pair_local", &sdf::Options::pair_local)
         .def_readwrite("tolerance", &sdf::Options::tolerance)
         .def_readwrite("gt_gradients", &sdf::Options::gt_gradients)
         .def_readwrite("iter_gradient_finding", &sdf::Options::iter_gradient_finding)
@@ -111,11 +112,13 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def("is_trained", &sdf::DuchonInterpolator::is_trained);
 
     py::class_<sdf::PUInterpolator, sdf::Interpolator, std::shared_ptr<sdf::PUInterpolator>>(m, "PUInterpolator")
-           .def(py::init<const std::string&, double, int, int, double, const std::string&>(),
+           .def(py::init<const std::string&, double, int, int, double, const std::string&, bool, bool>(),
              py::arg("kernel") = "cubic", py::arg("overlap") = 0.25,
              py::arg("min_points") = 10, py::arg("max_points") = 200,
                py::arg("reg") = 1e-5,
-             py::arg("partition") = "box")
+             py::arg("partition") = "box",
+             py::arg("verbose") = true,
+             py::arg("pair_local") = true)
         .def("fit", [&fit_wrapper](sdf::PUInterpolator& self,
                                     const Eigen::MatrixXd& points,
                                     const Eigen::VectorXd& values,

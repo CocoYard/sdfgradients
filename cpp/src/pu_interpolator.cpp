@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <numeric>
 #include <deque>
+#include <unordered_set>
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
@@ -17,12 +18,13 @@ namespace sdf {
 PUInterpolator::PUInterpolator(const std::string& kernel, double overlap,
                                  int min_points, int max_points,
                                  double reg, const std::string& partition,
-                                 bool verbose)
+                                 bool verbose, bool pair_local)
     : kernel_(kernel), partition_type_(partition), overlap_(overlap),
       min_points_(min_points), max_points_(max_points), reg_(reg)
 {
     verbose_ = verbose;
     use_box_ = (partition == "box");
+    pair_local_ = pair_local;
 }
 
 // ── Wendland C2 weight ──────────────────────────────────────────────
@@ -47,7 +49,8 @@ double PUInterpolator::box_weight(const Eigen::Vector3d& pt,
 
 // ── Deduplication ───────────────────────────────────────────────────
 
-void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values, double tol) const {
+void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values,
+                                  double tol, std::vector<int>* partner) const {
     int n = (int)points.rows();
     if (n == 0) return;
 
@@ -84,6 +87,19 @@ void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& value
         new_pts.row(i) = points.row(kept[i]);
         new_vals(i) = values(kept[i]);
     }
+
+    // Remap partner indices onto the surviving rows.
+    if (partner) {
+        std::vector<int> old_to_new(n, -1);
+        for (int i = 0; i < (int)kept.size(); i++) old_to_new[kept[i]] = i;
+        std::vector<int> new_partner(kept.size());
+        for (int i = 0; i < (int)kept.size(); i++) {
+            int p = (*partner)[kept[i]];
+            new_partner[i] = (p >= 0) ? old_to_new[p] : -1;
+        }
+        *partner = std::move(new_partner);
+    }
+
     if (verbose_)
         std::cout << "  [PU fit] deduplication removed: " << (n - kept.size()) << " points\n";
     points = new_pts;
@@ -314,29 +330,55 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     Eigen::MatrixXd pts;
     Eigen::VectorXd vals;
 
+    // partner[i] = row index (into pts/vals) of point i's paired point, or -1.
+    // An input point and its surface projection form a pair: together they
+    // encode the gradient (direction + signed distance) at that location.
+    // We track pairing through filtering/dedup so each local RBF solve can be
+    // augmented with any missing partner — see the patch loop below.
+    std::vector<int> partner;
+
     // Add projection points if gradients given
     if (gradients) {
+        int N = (int)points.rows();
+        // proj_src[k] = input row index that produced projection k.
+        std::vector<int> proj_src;
         Eigen::MatrixXd projections;
         if (mask) {
             int count = mask->sum();
             projections.resize(count, points.cols());
+            proj_src.reserve(count);
             int k = 0;
-            for (int i = 0; i < (int)points.rows(); i++) {
-                if ((*mask)(i))
+            for (int i = 0; i < N; i++) {
+                if ((*mask)(i)) {
                     projections.row(k++) = points.row(i) - values(i) * gradients->row(i);
+                    proj_src.push_back(i);
+                }
             }
         } else {
-            projections.resize(points.rows(), points.cols());
-            for (int i = 0; i < (int)points.rows(); i++)
+            projections.resize(N, points.cols());
+            proj_src.reserve(N);
+            for (int i = 0; i < N; i++) {
                 projections.row(i) = points.row(i) - values(i) * gradients->row(i);
+                proj_src.push_back(i);
+            }
         }
-        pts.resize(points.rows() + projections.rows(), points.cols());
+        int M = (int)projections.rows();
+        pts.resize(N + M, points.cols());
         pts << points, projections;
-        vals.resize(values.size() + projections.rows());
-        vals << values, Eigen::VectorXd::Zero(projections.rows());
+        vals.resize(N + M);
+        vals << values, Eigen::VectorXd::Zero(M);
+
+        // Link each input to its projection and vice versa. Inputs without a
+        // projection (mask == 0) stay unpaired (-1).
+        partner.assign(N + M, -1);
+        for (int k = 0; k < M; k++) {
+            partner[proj_src[k]] = N + k;   // input -> its projection
+            partner[N + k] = proj_src[k];   // projection -> its input
+        }
     } else {
         pts = points;
         vals = values;
+        partner.assign((int)points.rows(), -1);
     }
 
     // Filter by distance if too many
@@ -346,16 +388,22 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
             if (std::abs(vals(i)) < dist_threshold_) keep.push_back(i);
         Eigen::MatrixXd pf(keep.size(), pts.cols());
         Eigen::VectorXd vf(keep.size());
+        std::vector<int> old_to_new(vals.size(), -1);
+        for (int i = 0; i < (int)keep.size(); i++) old_to_new[keep[i]] = i;
+        std::vector<int> pf_partner(keep.size());
         for (int i = 0; i < (int)keep.size(); i++) {
             pf.row(i) = pts.row(keep[i]);
             vf(i) = vals(keep[i]);
+            int p = partner[keep[i]];
+            pf_partner[i] = (p >= 0) ? old_to_new[p] : -1;
         }
         pts = pf;
         vals = vf;
+        partner = std::move(pf_partner);
     }
 
     // Deduplicate
-    deduplicate(pts, vals, 5e-4);
+    deduplicate(pts, vals, 5e-4, &partner);
     if (vals.size() > 5000 && verbose_) {
         std::cout << "  [PU fit] Warning: too many points, only keeping " << pts.rows()
                   << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";
@@ -401,13 +449,28 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
         auto& pi = patches_info[p];
         if ((int)pi.ext_idx.size() < min_pts) continue;
 
-        Eigen::MatrixXd local_pts(pi.ext_idx.size(), dim);
-        Eigen::VectorXd local_vals(pi.ext_idx.size());
-        for (int i = 0; i < (int)pi.ext_idx.size(); i++) {
-            local_pts.row(i) = pts.row(pi.ext_idx[i]);
-            local_vals(i) = vals(pi.ext_idx[i]);
+        // Pair the local solve: the patch shape (ext_idx, center, half_ext)
+        // is left untouched, but for every point in the patch whose partner
+        // (input <-> projection) is absent, we add that partner as an extra
+        // RBF constraint so each point's gradient information appears as a
+        // complete pair. This only affects the local solve, not the blend.
+        std::vector<int> local_idx = pi.ext_idx;
+        if (pair_local_) {
+            std::unordered_set<int> present(pi.ext_idx.begin(), pi.ext_idx.end());
+            for (int gi : pi.ext_idx) {
+                int q = partner[gi];
+                if (q >= 0 && present.insert(q).second)
+                    local_idx.push_back(q);
+            }
         }
-        tmp_sizes[p] = (int)pi.ext_idx.size();
+
+        Eigen::MatrixXd local_pts(local_idx.size(), dim);
+        Eigen::VectorXd local_vals(local_idx.size());
+        for (int i = 0; i < (int)local_idx.size(); i++) {
+            local_pts.row(i) = pts.row(local_idx[i]);
+            local_vals(i) = vals(local_idx[i]);
+        }
+        tmp_sizes[p] = (int)local_idx.size();
 
         auto tf0 = clock::now();
         auto interp = std::make_unique<DuchonInterpolator>(kernel_, reg_);
