@@ -2,6 +2,9 @@
 #include <cmath>
 #include <chrono>
 #include <iostream>
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
 
 namespace sdf {
 
@@ -135,20 +138,61 @@ void DuchonInterpolator::compute_coefficients(const Eigen::MatrixXd& pts,
     q_ = coeffs(n + d);
 }
 
+// ── chunking helper ─────────────────────────────────────────────────
+//
+// Pick a per-block row count that (a) never exceeds `chunk_size` — which caps
+// the peak M×N scratch matrix — and (b) is small enough to hand every OpenMP
+// worker several blocks for load balancing. Without (b), a query set only
+// slightly larger than chunk_size would split into 1-2 blocks and leave most
+// cores idle.
+//
+// When already inside a parallel region (e.g. PUInterpolator calls this from a
+// parallel-for over patches), we do NOT subdivide and the caller runs the
+// blocks serially — the outer loop already saturates the cores, and splitting
+// here would only add overhead (or, with OMP_NESTED on, oversubscribe).
+static inline int duchon_block_rows(int M, int chunk_size) {
+    int block = std::max(chunk_size, 1);
+#ifdef USE_OPENMP
+    if (!omp_in_parallel()) {
+        int nthreads = omp_get_max_threads();
+        if (nthreads > 1) {
+            int target_blocks = nthreads * 4;
+            int even = (M + target_blocks - 1) / target_blocks;
+            block = std::min(block, std::max(even, 1));
+        }
+    }
+#endif
+    return block;
+}
+
 // ── predict ─────────────────────────────────────────────────────────
+//
+// The heavy per-block work — the elementwise kernel transform (pow/log) and
+// the K·alpha matrix-vector product — is not parallelized by Eigen, so we
+// parallelize across blocks here. Eigen's own GEMM threading would nest inside
+// this loop, but OpenMP nested parallelism is off by default, so each block's
+// GEMM runs single-threaded; that is exactly what we want (no oversubscription).
 
 Eigen::VectorXd DuchonInterpolator::predict(const Eigen::MatrixXd& x_new,
                                              int chunk_size) const {
-    int M = (int)x_new.rows();
-    if (M > chunk_size) {
-        Eigen::VectorXd result(M);
-        for (int s = 0; s < M; s += chunk_size) {
-            int len = std::min(chunk_size, M - s);
-            result.segment(s, len) = predict(x_new.middleRows(s, len), chunk_size);
-        }
-        return result;
-    }
+    const int M = (int)x_new.rows();
+    if (M == 0) return Eigen::VectorXd(0);
 
+    const int block = duchon_block_rows(M, chunk_size);
+    const int nblocks = (M + block - 1) / block;
+
+    Eigen::VectorXd result(M);
+    #pragma omp parallel for schedule(dynamic, 1) if(!omp_in_parallel())
+    for (int b = 0; b < nblocks; b++) {
+        const int s = b * block;
+        const int len = std::min(block, M - s);
+        result.segment(s, len) = predict_block(x_new.middleRows(s, len));
+    }
+    return result;
+}
+
+Eigen::VectorXd DuchonInterpolator::predict_block(const Eigen::MatrixXd& x_new) const {
+    int M = (int)x_new.rows();
     int N = (int)points_.rows();
 
     // Compute pairwise squared-distance matrix (M×N), then convert in-place to
@@ -178,16 +222,24 @@ Eigen::VectorXd DuchonInterpolator::predict(const Eigen::MatrixXd& x_new,
 
 Eigen::MatrixXd DuchonInterpolator::predict_gradients(const Eigen::MatrixXd& x_new,
                                                        int chunk_size) const {
-    int M = (int)x_new.rows();
-    if (M > chunk_size) {
-        Eigen::MatrixXd result(M, 3);
-        for (int s = 0; s < M; s += chunk_size) {
-            int len = std::min(chunk_size, M - s);
-            result.middleRows(s, len) = predict_gradients(x_new.middleRows(s, len), chunk_size);
-        }
-        return result;
-    }
+    const int M = (int)x_new.rows();
+    if (M == 0) return Eigen::MatrixXd(0, 3);
 
+    const int block = duchon_block_rows(M, chunk_size);
+    const int nblocks = (M + block - 1) / block;
+
+    Eigen::MatrixXd result(M, 3);
+    #pragma omp parallel for schedule(dynamic, 1) if(!omp_in_parallel())
+    for (int b = 0; b < nblocks; b++) {
+        const int s = b * block;
+        const int len = std::min(block, M - s);
+        result.middleRows(s, len) = predict_gradients_block(x_new.middleRows(s, len));
+    }
+    return result;
+}
+
+Eigen::MatrixXd DuchonInterpolator::predict_gradients_block(const Eigen::MatrixXd& x_new) const {
+    int M = (int)x_new.rows();
     int N = (int)points_.rows();
     int dim = (int)points_.cols();
 

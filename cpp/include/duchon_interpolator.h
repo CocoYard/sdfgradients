@@ -30,6 +30,11 @@ public:
 private:
     double kernel_eval(double r) const;
 
+    // Single-block (no chunking) kernels. The public predict/predict_gradients
+    // split the query set into blocks and run these in parallel across blocks.
+    Eigen::VectorXd predict_block(const Eigen::MatrixXd& x_new) const;
+    Eigen::MatrixXd predict_gradients_block(const Eigen::MatrixXd& x_new) const;
+
     void compute_coefficients(const Eigen::MatrixXd& pts,
                               const Eigen::VectorXd& vals);
 
