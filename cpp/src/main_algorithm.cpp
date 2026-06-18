@@ -425,7 +425,7 @@ MainResult main_algorithm(
 
     std::shared_ptr<Interpolator> interpolator;
     if (options.interpolator_type == "Duchon") {
-        interpolator = std::make_shared<DuchonInterpolator>("cubic");
+        interpolator = std::make_shared<DuchonInterpolator>("cubic", options.reg);
     } else {
         if (options.verbose)
             std::cout << "Using regularization " << options.reg << " for PUInterpolator\n";

@@ -1,5 +1,6 @@
 #include "pu_interpolator.h"
 #include "kdtree.h"
+#include "dedup.h"
 #include <cmath>
 #include <algorithm>
 #include <numeric>
@@ -47,6 +48,57 @@ double PUInterpolator::box_weight(const Eigen::Vector3d& pt,
     return w;
 }
 
+// ── Weight value + spatial gradient ─────────────────────────────────
+// The PU field is f = Σ w_p f_p / Σ w_p, whose gradient
+//   ∇f = (Σ w_p ∇f_p + Σ ∇w_p f_p − f Σ ∇w_p) / W
+// needs ∇w_p, the spatial derivative of each partition weight. These
+// helpers return the same w as wendland_weight()/box_weight() and also
+// fill `grad` with ∇w.
+namespace {
+
+// Wendland C2 profile g(s) = (1-s)^4 (4s+1) on s∈[0,1], and g'(s) = -20 s (1-s)^3.
+inline double wprofile(double s)      { double t = 1.0 - s; return t*t*t*t*(4.0*s + 1.0); }
+inline double wprofile_grad(double s) { double t = 1.0 - s; return -20.0 * s * t*t*t; }
+
+inline double wendland_weight_grad(const Eigen::Vector3d& pt,
+                                    const Eigen::Vector3d& center,
+                                    double R, Eigen::Vector3d& grad) {
+    Eigen::Vector3d d = pt - center;
+    double r = d.norm();
+    double s = std::clamp(r / R, 0.0, 1.0);
+    double w = wprofile(s);
+    // dw/dr = g'(s)/R, ∇r = d/r. Zero at r≈0 (g'(0)=0) and for s≥1 (outside support).
+    if (r > 1e-12 && s < 1.0)
+        grad = (wprofile_grad(s) / (R * r)) * d;
+    else
+        grad.setZero();
+    return w;
+}
+
+inline double box_weight_grad(const Eigen::Vector3d& pt,
+                              const Eigen::Vector3d& center,
+                              const Eigen::Vector3d& half_ext,
+                              Eigen::Vector3d& grad) {
+    double g[3], gp[3];
+    double w = 1.0;
+    for (int k = 0; k < 3; k++) {
+        double diff = pt(k) - center(k);
+        double s = std::clamp(std::abs(diff) / half_ext(k), 0.0, 1.0);
+        g[k]  = wprofile(s);
+        // ∂s/∂x_k = sign(diff)/h_k for s∈(0,1), else 0.
+        gp[k] = (s < 1.0) ? wprofile_grad(s) * ((diff >= 0) ? 1.0 : -1.0) / half_ext(k)
+                          : 0.0;
+        w *= g[k];
+    }
+    // ∂w/∂x_k = (Π_{j≠k} g_j) · ∂g_k/∂x_k
+    grad(0) = g[1] * g[2] * gp[0];
+    grad(1) = g[0] * g[2] * gp[1];
+    grad(2) = g[0] * g[1] * gp[2];
+    return w;
+}
+
+}  // namespace
+
 // ── Deduplication ───────────────────────────────────────────────────
 
 void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values,
@@ -54,32 +106,9 @@ void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& value
     int n = (int)points.rows();
     if (n == 0) return;
 
-    KDTree3D tree(points);
-    std::vector<bool> keep(n, true);
-
-    // Process non-zero-valued points first so they survive over zero-valued
-    // duplicates (zero values come from projection and are less trustworthy).
-    std::vector<int> order(n);
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](int a, int b) {
-        bool za = values(a) == 0.0;
-        bool zb = values(b) == 0.0;
-        if (za != zb) return !za;
-        return a < b;
-    });
-
-    for (int i : order) {
-        if (!keep[i]) continue;
-        Eigen::Vector3d pt = points.row(i);
-        auto neighbors = tree.query_ball_point(pt, tol);
-        for (int j : neighbors) {
-            if (j != i && keep[j]) keep[j] = false;
-        }
-    }
-
-    std::vector<int> kept;
-    for (int i = 0; i < n; i++)
-        if (keep[i]) kept.push_back(i);
+    // Shared greedy spatial dedup (non-zero values survive over zero-valued
+    // projection duplicates). PU additionally remaps `partner` below.
+    std::vector<int> kept = dedup_keep_indices(points, values, tol);
 
     Eigen::MatrixXd new_pts(kept.size(), points.cols());
     Eigen::VectorXd new_vals(kept.size());
@@ -474,6 +503,7 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
 
         auto tf0 = clock::now();
         auto interp = std::make_unique<DuchonInterpolator>(kernel_, reg_);
+        interp->set_dedup(false);   // PU already deduped globally; avoid redundant per-patch dedup
         interp->fit(local_pts, local_vals);
         t_local_fit += std::chrono::duration<double>(clock::now() - tf0).count();
 
@@ -771,8 +801,21 @@ Eigen::VectorXd PUInterpolator::predict(const Eigen::MatrixXd& x_new, int /*chun
 Eigen::MatrixXd PUInterpolator::predict_gradients(const Eigen::MatrixXd& x_new, int /*chunk_size*/) const {
     int M = (int)x_new.rows();
     Eigen::MatrixXd result = Eigen::MatrixXd::Zero(M, 3);
-    Eigen::VectorXd weight_sum = Eigen::VectorXd::Zero(M);
     if (M == 0) return result;
+
+    // Partition-of-unity gradient needs the weight-derivative term, so we
+    // accumulate five quantities per query point and combine at the end:
+    //   W   = Σ w_p              (scalar)
+    //   Vw  = Σ w_p f_p          (scalar, = W·f)
+    //   G   = Σ w_p ∇f_p         (vec3)
+    //   A   = Σ ∇w_p f_p         (vec3)
+    //   B   = Σ ∇w_p             (vec3)
+    //   ∇f = (G + A − f·B) / W,  f = Vw / W
+    Eigen::VectorXd W  = Eigen::VectorXd::Zero(M);
+    Eigen::VectorXd Vw = Eigen::VectorXd::Zero(M);
+    Eigen::MatrixXd G  = Eigen::MatrixXd::Zero(M, 3);
+    Eigen::MatrixXd A  = Eigen::MatrixXd::Zero(M, 3);
+    Eigen::MatrixXd B  = Eigen::MatrixXd::Zero(M, 3);
 
     int np = (int)patches_.size();
     std::vector<std::vector<int>> per_patch_idx(np);
@@ -807,48 +850,56 @@ Eigen::MatrixXd PUInterpolator::predict_gradients(const Eigen::MatrixXd& x_new, 
         for (int i = 0; i < (int)idx.size(); i++)
             pts.row(i) = x_new.row(idx[i]);
 
+        // Both the local value f_p and gradient ∇f_p are needed.
         Eigen::MatrixXd g = patch.interp->predict_gradients(pts);
-        if (use_box_) {
-            for (int i = 0; i < (int)idx.size(); i++) {
-                double w = box_weight(x_new.row(idx[i]).transpose(),
-                                      patch.center, patch.half_ext);
-                double gx = w * g(i, 0), gy = w * g(i, 1), gz = w * g(i, 2);
-                #pragma omp atomic
-                result(idx[i], 0) += gx;
-                #pragma omp atomic
-                result(idx[i], 1) += gy;
-                #pragma omp atomic
-                result(idx[i], 2) += gz;
-                #pragma omp atomic
-                weight_sum(idx[i]) += w;
-            }
-        } else {
-            double R = patch.half_ext(0);
-            for (int i = 0; i < (int)idx.size(); i++) {
-                double dist = (x_new.row(idx[i]).transpose() - patch.center).norm();
-                double w = wendland_weight(dist, R);
-                double gx = w * g(i, 0), gy = w * g(i, 1), gz = w * g(i, 2);
-                #pragma omp atomic
-                result(idx[i], 0) += gx;
-                #pragma omp atomic
-                result(idx[i], 1) += gy;
-                #pragma omp atomic
-                result(idx[i], 2) += gz;
-                #pragma omp atomic
-                weight_sum(idx[i]) += w;
-            }
+        Eigen::VectorXd fp = patch.interp->predict(pts);
+        double R = patch.half_ext(0);
+
+        for (int i = 0; i < (int)idx.size(); i++) {
+            Eigen::Vector3d pt = x_new.row(idx[i]).transpose();
+            Eigen::Vector3d dw;
+            double w = use_box_ ? box_weight_grad(pt, patch.center, patch.half_ext, dw)
+                                : wendland_weight_grad(pt, patch.center, R, dw);
+            double f = fp(i);
+            int r = idx[i];
+            #pragma omp atomic
+            W(r)  += w;
+            #pragma omp atomic
+            Vw(r) += w * f;
+            #pragma omp atomic
+            G(r, 0) += w * g(i, 0);
+            #pragma omp atomic
+            G(r, 1) += w * g(i, 1);
+            #pragma omp atomic
+            G(r, 2) += w * g(i, 2);
+            #pragma omp atomic
+            A(r, 0) += dw(0) * f;
+            #pragma omp atomic
+            A(r, 1) += dw(1) * f;
+            #pragma omp atomic
+            A(r, 2) += dw(2) * f;
+            #pragma omp atomic
+            B(r, 0) += dw(0);
+            #pragma omp atomic
+            B(r, 1) += dw(1);
+            #pragma omp atomic
+            B(r, 2) += dw(2);
         }
     }
 
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < M; i++) {
-        if (weight_sum(i) > 0)
-            result.row(i) /= weight_sum(i);
+        if (W(i) > 0) {
+            double f = Vw(i) / W(i);
+            result.row(i) = (G.row(i) + A.row(i) - f * B.row(i)) / W(i);
+        }
     }
 
+    // Fallback: uncovered points sit outside every patch support, where ∇w_p=0
+    // for all patches, so the nearest patch's raw gradient is already correct.
     #pragma omp parallel for schedule(dynamic, 256)
     for (int i = 0; i < M; i++) {
-        if (weight_sum(i) <= 0) {
+        if (W(i) <= 0) {
             Eigen::Vector3d pt = x_new.row(i);
             auto [dist_sq, nearest] = patch_tree_->query_nearest(pt);
             Eigen::MatrixXd qpt = x_new.middleRows(i, 1);

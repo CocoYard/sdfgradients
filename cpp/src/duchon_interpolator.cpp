@@ -1,4 +1,5 @@
 #include "duchon_interpolator.h"
+#include "dedup.h"
 #include <cmath>
 #include <chrono>
 #include <iostream>
@@ -56,6 +57,27 @@ void DuchonInterpolator::fit(const Eigen::MatrixXd& points,
     } else {
         pts = points;
         vals = values;
+    }
+
+    // Deduplicate near-coincident training points (e.g. short-arc degenerate
+    // projections that collapse onto the same point). With reg=0 duplicate rows
+    // make the RBF kernel matrix singular and the solve unstable, poisoning the
+    // field. PU dedups globally before building patches, so it disables this.
+    if (dedup_) {
+        std::vector<int> kept = dedup_keep_indices(pts, vals, 5e-4);
+        if ((int)kept.size() < (int)pts.rows()) {
+            if (verbose_)
+                std::cout << "[Duchon] dedup removed " << (pts.rows() - (int)kept.size())
+                          << " points\n";
+            Eigen::MatrixXd dp((int)kept.size(), pts.cols());
+            Eigen::VectorXd dv((int)kept.size());
+            for (int i = 0; i < (int)kept.size(); i++) {
+                dp.row(i) = pts.row(kept[i]);
+                dv(i)     = vals(kept[i]);
+            }
+            pts = std::move(dp);
+            vals = std::move(dv);
+        }
     }
 
     // If too many points, keep only those with small |value|

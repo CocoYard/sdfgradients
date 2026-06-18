@@ -27,6 +27,11 @@ public:
 
     bool is_trained() const override { return trained_; }
 
+    /// Toggle input deduplication in fit(). Default on. PUInterpolator dedups
+    /// globally before building patches, so it disables this on its per-patch
+    /// Duchon instances to avoid redundant work.
+    void set_dedup(bool enabled) { dedup_ = enabled; }
+
 private:
     double kernel_eval(double r) const;
 
@@ -44,6 +49,7 @@ private:
     Eigen::VectorXd p_;         // (3,)
     double q_ = 0.0;
     bool trained_ = false;
+    bool dedup_ = true;             // deduplicate fit() inputs (see set_dedup)
     double dist_threshold_ = 0.2;
     double reg_ = 1e-5; // regularization
 };
