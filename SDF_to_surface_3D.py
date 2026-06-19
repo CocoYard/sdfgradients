@@ -12,7 +12,7 @@ class Options:
                  turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
                 use_MES=0, post_processing=False, iter_gradient_finding='optimize', verbose=True,
-                pair_local=True):
+                pair_local=False):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -557,7 +557,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     hint_spacing = extent / max(options.grid_len - 1, 1)
     target_cells_per_hint = 4
     resolution = int(np.clip(np.ceil(extent / (hint_spacing / target_cells_per_hint)), 64, 512))
-    resolution = 128
+    # resolution = 128
     print(f"Grid resolution for surface extraction: {resolution}")
 
     if use_cpp:
