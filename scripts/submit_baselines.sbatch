@@ -15,17 +15,23 @@
 #SBATCH --job-name=sdf-baseline
 #SBATCH --partition=normal
 #SBATCH --account=ygingold
-#SBATCH --array=0-499%200
+#SBATCH --array=0-299
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=96G
-#SBATCH --time=10:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
+#SBATCH --time=24:00:00
 #SBATCH --output=/scratch/ycheng27/sdfgradients/baselines/logs/slurm_%A_%a.out
 #SBATCH --error=/scratch/ycheng27/sdfgradients/baselines/logs/slurm_%A_%a.err
 #SBATCH --requeue
-#SBATCH --signal=B:TERM@180
 
 set -uo pipefail
+
+# Match the interactive environment (sbatch does NOT source ~/.bashrc).
+# Without these, the batch task gets gnu9 libgomp/libstdc++ instead of gnu12,
+# which on at least one mesh (49546 gl=40) causes a 10-100x memory blowup
+# (cgroup OOM at 64-256 GB while login-node baseline is 8 GB).
+module purge 2>/dev/null || true
+module load hosts/hopper gnu12 python/3.12.1-33 2>/dev/null || true
 
 # gpytoolbox's RFTA uses pthreads (std::thread::hardware_concurrency), but
 # scipy-openblas uses OMP_NUM_THREADS. Cap both to what SLURM allocated
@@ -39,45 +45,6 @@ PYTHON=/home/ycheng27/envs/sdf/bin/python
 
 # Ensure log dir exists (SLURM won't create it)
 mkdir -p /scratch/ycheng27/sdfgradients/baselines/logs
-
-# ── Auto-retry logic ─────────────────────────────────────────────────
-# On timeout, SLURM sends SIGTERM to this bash script 180 s before the
-# hard kill (configured via #SBATCH --signal=B:TERM@180). We catch the
-# signal, resubmit just this task_id with ~2x time budget, and exit
-# cleanly. RETRY_COUNT caps the depth so a truly stuck task can't spin
-# forever — bail after 2 retries.
-RETRY_COUNT=${RETRY_COUNT:-0}
-MAX_RETRIES=2
-echo "RetryCount  : ${RETRY_COUNT} / ${MAX_RETRIES}"
-
-on_term() {
-    echo "[sbatch] SIGTERM caught at $(date -Iseconds) — resubmitting task ${SLURM_ARRAY_TASK_ID}"
-    # Kill the python worker so it releases files before the new task
-    # starts on (potentially) another node.
-    if [[ -n "${PY_PID:-}" ]]; then
-        kill -TERM "${PY_PID}" 2>/dev/null || true
-        wait "${PY_PID}" 2>/dev/null || true
-    fi
-    if (( RETRY_COUNT < MAX_RETRIES )); then
-        NEXT=$((RETRY_COUNT + 1))
-        # Double the time budget each retry, cap at 24 h
-        NEW_HOURS=$(( (${SLURM_TIME_LIMIT_MIN:-360} * 2) / 60 ))
-        (( NEW_HOURS > 24 )) && NEW_HOURS=24
-        NEW_TIME=$(printf "%02d:00:00" "${NEW_HOURS}")
-        echo "[sbatch] submitting retry #${NEXT} with --time=${NEW_TIME}"
-        sbatch \
-            --array="${SLURM_ARRAY_TASK_ID}" \
-            --time="${NEW_TIME}" \
-            --mem="${SLURM_MEM_PER_NODE:-96000}M" \
-            --export=ALL,RETRY_COUNT="${NEXT}" \
-            "${REPO}/scripts/submit_baselines.sbatch" \
-            || echo "[sbatch] retry submit failed!"
-    else
-        echo "[sbatch] hit MAX_RETRIES=${MAX_RETRIES}, giving up on task ${SLURM_ARRAY_TASK_ID}"
-    fi
-    exit 0
-}
-trap on_term TERM
 
 echo "=== SLURM ==="
 echo "JobID       : ${SLURM_JOB_ID}"
@@ -101,12 +68,45 @@ if [[ -n "${RUN_ALGOS:-}" ]]; then
     RUN_ALGOS_ARG=(--algos "${RUN_ALGOS}")
     echo "RunAlgos    : ${RUN_ALGOS}"
 fi
+GRID_LENS_ARG=()
+if [[ -n "${GRID_LENS:-}" ]]; then
+    GRID_LENS_ARG=(--grid-lens "${GRID_LENS}")
+    echo "GridLens    : ${GRID_LENS}"
+fi
+INDEX_ARG=()
+if [[ -n "${INDEX:-}" ]]; then
+    INDEX_ARG=(--index "${INDEX}")
+    echo "Index       : ${INDEX}"
+fi
+OUT_ROOT_ARG=()
+if [[ -n "${OUT_ROOT:-}" ]]; then
+    OUT_ROOT_ARG=(--out-root "${OUT_ROOT}")
+    echo "OutRoot     : ${OUT_ROOT}"
+fi
+SCREENING_ARG=()
+if [[ -n "${SCREENING_WEIGHT:-}" ]]; then
+    SCREENING_ARG=(--screening-weight "${SCREENING_WEIGHT}")
+    echo "ScreenWt    : ${SCREENING_WEIGHT}"
+fi
+RFTA_CPU_ARG=()
+if [[ -n "${RFTA_FORCE_CPU:-}" ]]; then
+    RFTA_CPU_ARG=(--rfta-force-cpu)
+    echo "RftaForceCPU: yes"
+fi
+OURS_USE_MES_ARG=()
+if [[ -n "${OURS_USE_MES:-}" ]]; then
+    OURS_USE_MES_ARG=(--ours-use-mes "${OURS_USE_MES}")
+    echo "OursUseMES  : ${OURS_USE_MES}"
+fi
 
-# Run python as a background child so bash keeps a live signal handler.
-# 'wait' is interruptible; on SIGTERM the trap fires and does the resubmit.
-"${PYTHON}" scripts/run_baseline.py --task-id "${SLURM_ARRAY_TASK_ID}" \
-    "${RUN_ALGOS_ARG[@]}" &
-PY_PID=$!
-wait "${PY_PID}"
-RC=$?
-exit ${RC}
+# Hard time limit: SLURM kills cleanly when time is up (no trap, no retry,
+# no resubmit). If a task didn't finish, just resubmit that array index
+# manually after the run.
+exec "${PYTHON}" scripts/run_baseline.py --task-id "${SLURM_ARRAY_TASK_ID}" \
+    "${INDEX_ARG[@]}" \
+    "${OUT_ROOT_ARG[@]}" \
+    "${RUN_ALGOS_ARG[@]}" \
+    "${GRID_LENS_ARG[@]}" \
+    "${SCREENING_ARG[@]}" \
+    "${RFTA_CPU_ARG[@]}" \
+    "${OURS_USE_MES_ARG[@]}"

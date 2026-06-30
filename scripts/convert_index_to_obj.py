@@ -18,8 +18,8 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument('--index', default='/scratch/ycheng27/sdfgradients/thingi10k/index.csv')
-    p.add_argument('--out-dir', default='/scratch/ycheng27/sdfgradients/thingi10k/preview_obj')
+    p.add_argument('--index', default='/scratch/ycheng27/thingi10k/index.csv')
+    p.add_argument('--out-dir', default='/scratch/ycheng27/thingi10k/preview_obj')
     p.add_argument('--force', action='store_true',
                    help='re-convert even if the .obj already exists')
     return p.parse_args()

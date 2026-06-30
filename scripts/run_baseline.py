@@ -26,10 +26,44 @@ import traceback
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_INDEX = '/scratch/ycheng27/sdfgradients/thingi10k/index.csv'
+DEFAULT_INDEX = '/scratch/ycheng27/thingi10k/index.csv'
 DEFAULT_OUT = '/scratch/ycheng27/sdfgradients/baselines'
 DEFAULT_GRIDS = [6, 10, 20, 30, 40, 50, 60, 80, 100]
 DEFAULT_ALGOS = ['rfta', 'mes', 'ours']
+
+
+def _compute_mc_only(sdf_cache_path: 'Path', out_path: 'Path') -> None:
+    """Run only the MC-on-samples baseline from a cached SDF .npz.
+
+    Mirrors the marching-cubes block of test_our_method (lines 670-685
+    of SDF_to_surface_3D.py). Used as a fast path when ours_<gl>.obj is
+    already present but mc_<gl>.obj is missing — saves us re-running the
+    full ours pipeline (interpolator fit + surface extract) just to
+    rebuild the cheap MC baseline. Raises on degenerate SDFs (e.g.
+    ``ValueError: Surface level must be within volume data range``).
+    """
+    import numpy as np
+    import trimesh
+    from skimage.measure import marching_cubes
+
+    data = np.load(str(sdf_cache_path))
+    points = data['points']
+    distances = data['sdf_values']
+    xs = np.unique(np.round(points[:, 0], 8))
+    ys = np.unique(np.round(points[:, 1], 8))
+    zs = np.unique(np.round(points[:, 2], 8))
+    nx, ny, nz = len(xs), len(ys), len(zs)
+    ix = np.searchsorted(xs, np.round(points[:, 0], 8))
+    iy = np.searchsorted(ys, np.round(points[:, 1], 8))
+    iz = np.searchsorted(zs, np.round(points[:, 2], 8))
+    grid_values = np.ones((nx, ny, nz))
+    grid_values[ix, iy, iz] = distances
+    sp = ((xs[-1] - xs[0]) / max(nx - 1, 1),
+          (ys[-1] - ys[0]) / max(ny - 1, 1),
+          (zs[-1] - zs[0]) / max(nz - 1, 1))
+    verts, faces, _, _ = marching_cubes(grid_values, level=0.0, spacing=sp)
+    verts += np.array([xs[0], ys[0], zs[0]])
+    trimesh.Trimesh(vertices=verts, faces=faces).export(str(out_path))
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,7 +83,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--algos', default=','.join(DEFAULT_ALGOS),
                    help='comma-separated subset of rfta,mes')
     p.add_argument('--rfta-parallel', choices=['on', 'off'], default='on')
+    p.add_argument('--rfta-force-cpu', action='store_true',
+                   help='disable RFTA GPU path (for CPU-only timing benchmarks)')
     p.add_argument('--screening-weight', type=float, default=10.0)
+    p.add_argument('--ours-use-mes', type=int, default=0,
+                   choices=[-1, 0, 1],
+                   help='use_MES setting for ours: -1=noMES, 0=default MES, '
+                        '1=MESforce (paper timing variants)')
     return p.parse_args()
 
 
@@ -103,13 +143,17 @@ def main() -> int:
     canonical_out.mkdir(parents=True, exist_ok=True)
     (task_dir / 'out').mkdir(exist_ok=True)
     link = task_dir / 'out' / mesh_basename
-    if link.is_symlink() or link.exists():
-        if link.is_symlink():
-            link.unlink()
-        # else leave alone: a directory here was created by a prior run and
-        # has the same semantics as the symlink destination would.
+    if link.is_symlink():
+        link.unlink()
+    # Race-tolerant symlink creation: when two concurrent batches process
+    # the same task_id (sharing this task_dir), both can race here. Treat
+    # FileExistsError as a benign no-op since whatever the other process
+    # created is also a symlink to the same canonical path.
     if not link.exists():
-        link.symlink_to(canonical_out, target_is_directory=True)
+        try:
+            link.symlink_to(canonical_out, target_is_directory=True)
+        except FileExistsError:
+            pass
     out_dir = canonical_out  # use the canonical path for existence checks
     sdf_cache_dir = task_dir / 'sdf_cache'
     sdf_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -158,9 +202,78 @@ def main() -> int:
 
         for algo in algos:
             out_file = expected[algo]
-            if out_file.exists() and out_file.stat().st_size > 0:
+
+            # 'ours' produces ours_<gl>.obj AND mc_<gl>.obj as a pair (mc
+            # is a marching-cubes baseline written near the end of
+            # test_our_method). Only treat the work as done if BOTH files
+            # exist; otherwise re-run test_our_method to backfill the
+            # missing one. Note: simply checking ours alone misses the
+            # case where a previous run was killed mid-way between the
+            # interpolant export (line 578) and the sample_points export
+            # (line 685).
+            if algo == 'ours':
+                mc_path = out_dir / f'mc_{gl}.obj'
+                ours_present = (out_file.exists()
+                                and out_file.stat().st_size > 0)
+                mc_present = (mc_path.exists()
+                              and mc_path.stat().st_size > 0)
+                if ours_present and mc_present:
+                    rows.append(('ours', gl, 'skipped', 0.0,
+                                 out_file.stat().st_size, ''))
+                    rows.append(('mc',   gl, 'skipped', 0.0,
+                                 mc_path.stat().st_size, ''))
+                    continue
+                if ours_present and not mc_present:
+                    # Fast path: only mc is missing. Don't redo the
+                    # expensive test_our_method (interpolator fit + surface
+                    # extract); just rebuild the marching-cubes baseline
+                    # from the cached SDF samples directly.
+                    t_mc = time.perf_counter()
+                    mc_err = ''
+                    try:
+                        _compute_mc_only(sdf_cache, mc_path)
+                    except Exception:
+                        mc_err = traceback.format_exc().strip().splitlines()[-1]
+                    dt_mc = time.perf_counter() - t_mc
+                    mc_size = (mc_path.stat().st_size
+                               if mc_path.exists() else 0)
+                    mc_status = 'ok' if mc_size > 0 else 'fail'
+                    print(f'[{file_id}]   mc gl={gl:<3} '
+                          f'(only) {mc_status:>4} {dt_mc:>6.2f}s '
+                          f'{mc_size:>10}B {mc_err}', flush=True)
+                    rows.append(('ours', gl, 'skipped', 0.0,
+                                 out_file.stat().st_size, ''))
+                    rows.append(('mc', gl, mc_status, dt_mc, mc_size,
+                                 mc_err if mc_status == 'fail'
+                                 else ''))
+                    continue
+                # else: ours is missing — fall through and run the full
+                # test_our_method (which writes both ours and mc).
+            elif out_file.exists() and out_file.stat().st_size > 0:
                 rows.append((algo, gl, 'skipped', 0.0,
                              out_file.stat().st_size, ''))
+                continue
+
+            if algo == 'mc':
+                # Standalone marching-cubes timing: run _compute_mc_only on the
+                # cached SDF and record real wall-time. Used for paper timing
+                # benchmarks — the "free" mc-from-ours side-product reports
+                # wall=0 which is correct for "ours total cost" but misleading
+                # if the reader wants to know how expensive marching cubes
+                # alone is.
+                t0 = time.perf_counter()
+                mc_err: str | None = None
+                try:
+                    _compute_mc_only(sdf_cache, out_file)
+                except Exception:
+                    mc_err = traceback.format_exc().strip().splitlines()[-1]
+                dt = time.perf_counter() - t0
+                size = out_file.stat().st_size if out_file.exists() else 0
+                status = 'ok' if size > 0 and mc_err is None else 'fail'
+                print(f'[{file_id}]   mc gl={gl:<3} '
+                      f'{status:>7} {dt:>7.2f}s {size:>10}B {mc_err or ""}',
+                      flush=True)
+                rows.append(('mc', gl, status, dt, size, mc_err or ''))
                 continue
 
             if algo == 'ours':
@@ -176,8 +289,9 @@ def main() -> int:
                                use_gt_gradients=False,
                                interpolator_type='PU',
                                interp_partition='sphere',
-                               overlap=0.2, reg=0,
-                               use_MES=0, post_processing=False,
+                               overlap=0.2, reg=0, lr=0.2,
+                               use_MES=args.ours_use_mes,
+                               post_processing=False,
                                iter_gradient_finding='optimize',
                                verbose=True)
             else:
@@ -194,7 +308,8 @@ def main() -> int:
                 if algo == 'rfta':
                     test_rfta(opts, save_gtmesh=False,
                               screening_weight=args.screening_weight,
-                              parallel=(args.rfta_parallel == 'on'))
+                              parallel=(args.rfta_parallel == 'on'),
+                              force_cpu=args.rfta_force_cpu)
                 elif algo == 'mes':
                     test_mes(opts, save_gtmesh=False,
                              screening_weight=args.screening_weight)
@@ -206,14 +321,18 @@ def main() -> int:
                 err = traceback.format_exc().strip().splitlines()[-1]
 
             # 'ours' produces two outputs we care about, and may raise
-            # *after* both are exported (a downstream block in
-            # test_our_method only works when path_to_sdf is None and hits
-            # an UnboundLocalError on 'mesh' otherwise). Look for both
-            # files independently of the traceback.
+            # *after* either is exported. Report status independently:
+            # ours = ok if interpolant_*.obj got renamed (test_our_method
+            # got past line 578), mc = ok if sample_points_<gl>.obj got
+            # renamed (test_our_method got past line 685). Common failure
+            # mode: skimage.marching_cubes throws "Surface level must be
+            # within volume data range" on degenerate SDFs at small grids
+            # — that aborts mc but ours has already been written.
             #   interpolant_<gl>_*.obj  -> ours_<gl>.obj   (our method)
             #   sample_points_<gl>.obj  -> mc_<gl>.obj     (MC-on-samples baseline)
             mc_size = 0
             mc_status = ''
+            mc_err_msg = ''
             if algo == 'ours':
                 interp = sorted(out_dir.glob(f'interpolant_{gl}_*.obj'),
                                 key=lambda p: p.stat().st_mtime, reverse=True)
@@ -221,13 +340,42 @@ def main() -> int:
                     interp[0].rename(out_file)
                 sp = out_dir / f'sample_points_{gl}.obj'
                 mc_dst = out_dir / f'mc_{gl}.obj'
+                # If 'mc' is a standalone algo in this run, mc_<gl>.obj was
+                # already written with proper timing — don't overwrite it
+                # with the side-product copy (which has wall=0 by definition).
+                mc_standalone = 'mc' in algos
                 if sp.exists():
-                    sp.rename(mc_dst)
-                # If both expected outputs landed, the post-export crash is benign.
-                if out_file.exists() and mc_dst.exists():
+                    if mc_standalone and mc_dst.exists() and mc_dst.stat().st_size > 0:
+                        sp.unlink()
+                    else:
+                        sp.rename(mc_dst)
+                elif not (mc_standalone and mc_dst.exists()
+                          and mc_dst.stat().st_size > 0):
+                    # test_our_method no longer exports sample_points_<gl>.obj —
+                    # regenerate mc from the cached SDF (same path used when
+                    # ours_<gl>.obj already exists but mc_<gl>.obj is missing).
+                    try:
+                        _compute_mc_only(sdf_cache, mc_dst)
+                    except Exception:
+                        pass  # falls through to mc_present=False below
+
+                ours_present = (out_file.exists()
+                                and out_file.stat().st_size > 0)
+                mc_present = (mc_dst.exists()
+                              and mc_dst.stat().st_size > 0)
+
+                # If ours export succeeded, any captured exception was
+                # raised AFTER ours landed — it is mc's problem, not ours'.
+                # Move the err to mc and clear it for the ours row.
+                if ours_present:
+                    if not mc_present and err:
+                        mc_err_msg = err
                     err = None
-                mc_size = mc_dst.stat().st_size if mc_dst.exists() else 0
-                mc_status = 'ok' if mc_size > 0 else 'fail'
+
+                mc_size = mc_dst.stat().st_size if mc_present else 0
+                mc_status = 'ok' if mc_present else 'fail'
+                if mc_status == 'fail' and not mc_err_msg:
+                    mc_err_msg = 'mc not produced'
 
             dt = time.perf_counter() - t0
             size = out_file.stat().st_size if out_file.exists() else 0
@@ -239,12 +387,12 @@ def main() -> int:
 
             # 'mc' is a side-product of running 'ours': log a separate
             # row with wall=0 (we paid the cost under 'ours' already).
-            if algo == 'ours':
-                rows.append(('mc', gl, mc_status, 0.0, mc_size,
-                             '' if mc_status == 'ok' else 'mc not produced'))
+            # Skip if 'mc' was a standalone algo this run — its real timing
+            # row is already in the CSV.
+            if algo == 'ours' and 'mc' not in algos:
+                rows.append(('mc', gl, mc_status, 0.0, mc_size, mc_err_msg))
                 print(f'[{file_id}]   mc gl={gl:<3} '
-                      f'{mc_status:>7}    0.00s {mc_size:>10}B '
-                      f'{"" if mc_status == "ok" else "mc not produced"}',
+                      f'{mc_status:>7}    0.00s {mc_size:>10}B {mc_err_msg}',
                       flush=True)
 
     # Per-task timing CSV. SLURM concurrency is fine since each task writes

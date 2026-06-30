@@ -91,7 +91,12 @@ def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=F
     from mesh vertices (not samples) so it is deterministic — for triangulated
     surfaces in generic position the argmax lies on a vertex of one mesh.
     Chamfer is the L1 symmetric mean of the two directional means.
-    F1 uses threshold `f1_tau` on the unit-normalised scale.
+
+    F1 threshold ``f1_tau`` is interpreted as a fraction of the GT mesh's
+    bounding-box diagonal (Occupancy Networks / DeepSDF convention). With
+    f1_tau=0.01 a point counts as a "hit" if it lies within 1% of the GT
+    diagonal of the other surface. This keeps the threshold geometrically
+    meaningful across meshes of different aspect ratios (thin slabs vs cubes).
     """
     import igl
     recon_pts, _ = trimesh.sample.sample_surface(recon, n_samples)
@@ -114,13 +119,19 @@ def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=F
     hausdorff = float(np.sqrt(max(sqrD_rV2g.max(), sqrD_gV2r.max())))
     chamfer = (d_r2g.mean() + d_g2r.mean()) / 2
 
-    precision = float((d_r2g < f1_tau).mean())
-    recall    = float((d_g2r < f1_tau).mean())
+    # Scale f1_tau by GT bbox diagonal so the threshold is geometrically
+    # consistent across mesh aspect ratios. f1_tau=0.01 → 1% of GT diagonal.
+    gt_extents = gt_V.max(axis=0) - gt_V.min(axis=0)
+    gt_diag = float(np.linalg.norm(gt_extents))
+    tau_abs = f1_tau * gt_diag
+    precision = float((d_r2g < tau_abs).mean())
+    recall    = float((d_g2r < tau_abs).mean())
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
 
     if verbose:
         print(f"  Hausdorff: {hausdorff:.6f}  Chamfer: {chamfer:.6f}  "
-              f"F1@{f1_tau}: {f1:.4f} (P={precision:.4f} R={recall:.4f})")
+              f"F1@{f1_tau}*diag={tau_abs:.4f}: {f1:.4f} "
+              f"(P={precision:.4f} R={recall:.4f})")
     return hausdorff, chamfer, f1
 
 def _point_to_polylines_min_dist(points, polylines):

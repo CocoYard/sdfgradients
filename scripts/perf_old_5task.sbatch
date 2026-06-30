@@ -1,0 +1,30 @@
+#!/bin/bash
+#SBATCH --job-name=perf-old-5
+#SBATCH --partition=bigmem
+#SBATCH --account=ygingold
+#SBATCH --array=1-5
+#SBATCH --nodelist=amd084
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=96G
+#SBATCH --time=0:30:00
+#SBATCH --output=/scratch/ycheng27/sdfgradients/baselines_perf_test/old_%A_%a.out
+#SBATCH --error=/scratch/ycheng27/sdfgradients/baselines_perf_test/old_%A_%a.err
+
+set -uo pipefail
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+
+OUT_ROOT=/scratch/ycheng27/sdfgradients/baselines_perf_test/old/${SLURM_ARRAY_TASK_ID}
+mkdir -p "${OUT_ROOT}"
+
+echo "=== array=${SLURM_ARRAY_TASK_ID} on ${SLURM_JOB_NODELIST} cpus=${SLURM_CPUS_PER_TASK} ==="
+date -Iseconds
+
+cd /home/ycheng27/code/sdfgradients
+/home/ycheng27/envs/sdf/bin/python scripts/run_baseline.py \
+    --task-id 428 \
+    --algos ours \
+    --grid-lens 20 \
+    --out-root "${OUT_ROOT}"

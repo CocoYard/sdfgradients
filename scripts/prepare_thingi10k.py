@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 
-DEFAULT_CACHE_DIR = '/scratch/ycheng27/sdfgradients/thingi10k'
+DEFAULT_CACHE_DIR = '/scratch/ycheng27/thingi10k'
 
 
 def parse_args() -> argparse.Namespace:
