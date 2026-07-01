@@ -737,49 +737,70 @@ Eigen::VectorXd PUInterpolator::predict(const Eigen::MatrixXd& x_new, int /*chun
         }
     }
 
-    // Pass 2 (parallel over patches): call patch.interp->predict on its batch,
-    // then accumulate into result/weight_sum. Different patches may touch the
-    // same query index, so accumulation needs atomics.
+    // Pass 2 (parallel over patches): call patch.interp->predict on its batch
+    // and write each (point,patch) contribution into a flat, disjoint slot
+    // range owned by the patch — no atomics (see predict_gradients for the same
+    // scheme). Each slot stores the weight w and weighted value w·v(i).
+    std::vector<long long> off(np + 1, 0);
+    for (int p = 0; p < np; p++)
+        off[p + 1] = off[p] + (long long)per_patch_idx[p].size();
+    const long long T = off[np];
+
+    Eigen::VectorXd sW(T), sWv(T);
+
     #pragma omp parallel for schedule(dynamic, 1)
     for (int p = 0; p < np; p++) {
         const auto& idx = per_patch_idx[p];
         if (idx.empty()) continue;
         const auto& patch = patches_[p];
+        const int m = (int)idx.size();
 
-        Eigen::MatrixXd pts((int)idx.size(), 3);
-        for (int i = 0; i < (int)idx.size(); i++)
+        Eigen::MatrixXd pts(m, 3);
+        for (int i = 0; i < m; i++)
             pts.row(i) = x_new.row(idx[i]);
 
         Eigen::VectorXd v = patch.interp->predict(pts);
-        if (use_box_) {
-            for (int i = 0; i < (int)idx.size(); i++) {
-                double w = box_weight(x_new.row(idx[i]).transpose(),
-                                      patch.center, patch.half_ext);
-                double add_r = w * v(i);
-                #pragma omp atomic
-                result(idx[i]) += add_r;
-                #pragma omp atomic
-                weight_sum(idx[i]) += w;
-            }
-        } else {
-            double R = patch.half_ext(0);
-            for (int i = 0; i < (int)idx.size(); i++) {
-                double dist = (x_new.row(idx[i]).transpose() - patch.center).norm();
-                double w = wendland_weight(dist, R);
-                double add_r = w * v(i);
-                #pragma omp atomic
-                result(idx[i]) += add_r;
-                #pragma omp atomic
-                weight_sum(idx[i]) += w;
-            }
+        const long long base = off[p];
+        const double R = patch.half_ext(0);
+        for (int i = 0; i < m; i++) {
+            double w = use_box_
+                ? box_weight(x_new.row(idx[i]).transpose(), patch.center, patch.half_ext)
+                : wendland_weight((x_new.row(idx[i]).transpose() - patch.center).norm(), R);
+            const long long s = base + i;
+            sW(s)  = w;
+            sWv(s) = w * v(i);
         }
     }
 
-    // Normalize by weight sum
+    // Invert per_patch_idx into a per-query-point CSR of slot indices.
+    std::vector<long long> rowptr(M + 1, 0);
+    for (int p = 0; p < np; p++)
+        for (int q : per_patch_idx[p]) rowptr[q + 1]++;
+    for (int i = 0; i < M; i++) rowptr[i + 1] += rowptr[i];
+
+    std::vector<long long> slot(T);
+    {
+        std::vector<long long> cursor(rowptr.begin(), rowptr.end() - 1);
+        for (int p = 0; p < np; p++) {
+            const long long base = off[p];
+            const auto& idx = per_patch_idx[p];
+            for (int j = 0; j < (int)idx.size(); j++)
+                slot[cursor[idx[j]]++] = base + j;
+        }
+    }
+
+    // Accumulate and normalize — each query point owns its output, no atomics.
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < M; i++) {
-        if (weight_sum(i) > 0)
-            result(i) /= weight_sum(i);
+        double num = 0.0, den = 0.0;
+        for (long long k = rowptr[i]; k < rowptr[i + 1]; k++) {
+            const long long s = slot[k];
+            num += sWv(s);
+            den += sW(s);
+        }
+        weight_sum(i) = den;  // retained for the fallback pass below
+        if (den > 0.0)
+            result(i) = num / den;
     }
 
     // Fallback: uncovered points use nearest patch.
@@ -803,19 +824,17 @@ Eigen::MatrixXd PUInterpolator::predict_gradients(const Eigen::MatrixXd& x_new, 
     Eigen::MatrixXd result = Eigen::MatrixXd::Zero(M, 3);
     if (M == 0) return result;
 
-    // Partition-of-unity gradient needs the weight-derivative term, so we
-    // accumulate five quantities per query point and combine at the end:
+    // Partition-of-unity gradient needs the weight-derivative term. Per query
+    // point we combine five accumulated quantities at the end:
     //   W   = Σ w_p              (scalar)
     //   Vw  = Σ w_p f_p          (scalar, = W·f)
     //   G   = Σ w_p ∇f_p         (vec3)
     //   A   = Σ ∇w_p f_p         (vec3)
     //   B   = Σ ∇w_p             (vec3)
     //   ∇f = (G + A − f·B) / W,  f = Vw / W
-    Eigen::VectorXd W  = Eigen::VectorXd::Zero(M);
-    Eigen::VectorXd Vw = Eigen::VectorXd::Zero(M);
-    Eigen::MatrixXd G  = Eigen::MatrixXd::Zero(M, 3);
-    Eigen::MatrixXd A  = Eigen::MatrixXd::Zero(M, 3);
-    Eigen::MatrixXd B  = Eigen::MatrixXd::Zero(M, 3);
+    // These sums are formed lock-free in phase 2 below (each query point owns
+    // its row), so only W is materialised here — it is reused by the fallback.
+    Eigen::VectorXd W = Eigen::VectorXd::Zero(M);
 
     int np = (int)patches_.size();
     std::vector<std::vector<int>> per_patch_idx(np);
@@ -840,58 +859,93 @@ Eigen::MatrixXd PUInterpolator::predict_gradients(const Eigen::MatrixXd& x_new, 
         }
     }
 
+    // ── Phase 1: batched per-patch evaluation into flat, disjoint slots ──
+    // Patch p owns the contiguous range [off[p], off[p+1]) of the flat slot
+    // arrays, so different patches (hence threads) never write the same slot —
+    // no atomics. Each slot stores the raw per-(point,patch) contributions:
+    // weight w, local value f, local gradient g, and weight gradient dw. They
+    // are combined per query point in phase 2.
+    std::vector<long long> off(np + 1, 0);
+    for (int p = 0; p < np; p++)
+        off[p + 1] = off[p] + (long long)per_patch_idx[p].size();
+    const long long T = off[np];
+
+    Eigen::VectorXd sW(T), sf(T);
+    Eigen::MatrixXd sg(T, 3), sdw(T, 3);
+
     #pragma omp parallel for schedule(dynamic, 1)
     for (int p = 0; p < np; p++) {
         const auto& idx = per_patch_idx[p];
         if (idx.empty()) continue;
         const auto& patch = patches_[p];
+        const int m = (int)idx.size();
 
-        Eigen::MatrixXd pts((int)idx.size(), 3);
-        for (int i = 0; i < (int)idx.size(); i++)
+        Eigen::MatrixXd pts(m, 3);
+        for (int i = 0; i < m; i++)
             pts.row(i) = x_new.row(idx[i]);
 
-        // Both the local value f_p and gradient ∇f_p are needed.
-        Eigen::MatrixXd g = patch.interp->predict_gradients(pts);
-        Eigen::VectorXd fp = patch.interp->predict(pts);
+        // Both the local value f_p and gradient ∇f_p are needed — the fused
+        // call shares one squared-distance matrix instead of building it twice.
+        Eigen::VectorXd fp;
+        Eigen::MatrixXd g;
+        patch.interp->predict_with_gradients(pts, fp, g);
         double R = patch.half_ext(0);
 
-        for (int i = 0; i < (int)idx.size(); i++) {
+        const long long base = off[p];
+        for (int i = 0; i < m; i++) {
             Eigen::Vector3d pt = x_new.row(idx[i]).transpose();
             Eigen::Vector3d dw;
             double w = use_box_ ? box_weight_grad(pt, patch.center, patch.half_ext, dw)
                                 : wendland_weight_grad(pt, patch.center, R, dw);
-            double f = fp(i);
-            int r = idx[i];
-            #pragma omp atomic
-            W(r)  += w;
-            #pragma omp atomic
-            Vw(r) += w * f;
-            #pragma omp atomic
-            G(r, 0) += w * g(i, 0);
-            #pragma omp atomic
-            G(r, 1) += w * g(i, 1);
-            #pragma omp atomic
-            G(r, 2) += w * g(i, 2);
-            #pragma omp atomic
-            A(r, 0) += dw(0) * f;
-            #pragma omp atomic
-            A(r, 1) += dw(1) * f;
-            #pragma omp atomic
-            A(r, 2) += dw(2) * f;
-            #pragma omp atomic
-            B(r, 0) += dw(0);
-            #pragma omp atomic
-            B(r, 1) += dw(1);
-            #pragma omp atomic
-            B(r, 2) += dw(2);
+            const long long s = base + i;
+            sW(s)      = w;
+            sf(s)      = fp(i);
+            sg.row(s)  = g.row(i);
+            sdw.row(s) = dw.transpose();
         }
     }
 
+    // ── Invert per_patch_idx into a per-query-point CSR of slot indices ──
+    // rowptr[i]..rowptr[i+1] lists the flat slots contributing to query i, so
+    // phase 2 can gather each point's contributions without touching others'.
+    std::vector<long long> rowptr(M + 1, 0);
+    for (int p = 0; p < np; p++)
+        for (int q : per_patch_idx[p]) rowptr[q + 1]++;
+    for (int i = 0; i < M; i++) rowptr[i + 1] += rowptr[i];
+
+    std::vector<long long> slot(T);
+    {
+        std::vector<long long> cursor(rowptr.begin(), rowptr.end() - 1);
+        for (int p = 0; p < np; p++) {
+            const long long base = off[p];
+            const auto& idx = per_patch_idx[p];
+            for (int j = 0; j < (int)idx.size(); j++)
+                slot[cursor[idx[j]]++] = base + j;
+        }
+    }
+
+    // ── Phase 2: each query point owns its output row — no atomics ──
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < M; i++) {
-        if (W(i) > 0) {
-            double f = Vw(i) / W(i);
-            result.row(i) = (G.row(i) + A.row(i) - f * B.row(i)) / W(i);
+        double Wi = 0.0, Vwi = 0.0;
+        Eigen::Vector3d Gi = Eigen::Vector3d::Zero();
+        Eigen::Vector3d Ai = Eigen::Vector3d::Zero();
+        Eigen::Vector3d Bi = Eigen::Vector3d::Zero();
+        for (long long k = rowptr[i]; k < rowptr[i + 1]; k++) {
+            const long long s = slot[k];
+            const double w = sW(s), f = sf(s);
+            const Eigen::Vector3d gs  = sg.row(s).transpose();
+            const Eigen::Vector3d dws = sdw.row(s).transpose();
+            Wi  += w;
+            Vwi += w * f;
+            Gi  += w * gs;
+            Ai  += f * dws;
+            Bi  += dws;
+        }
+        W(i) = Wi;  // retained for the fallback pass below
+        if (Wi > 0.0) {
+            double f = Vwi / Wi;
+            result.row(i) = ((Gi + Ai - f * Bi) / Wi).transpose();
         }
     }
 

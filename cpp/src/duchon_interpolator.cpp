@@ -300,4 +300,71 @@ Eigen::MatrixXd DuchonInterpolator::predict_gradients_block(const Eigen::MatrixX
     return grads;
 }
 
+// ── predict_with_gradients (fused) ──────────────────────────────────
+
+void DuchonInterpolator::predict_with_gradients(const Eigen::MatrixXd& x_new,
+                                                 Eigen::VectorXd& values,
+                                                 Eigen::MatrixXd& grads,
+                                                 int chunk_size) const {
+    const int M = (int)x_new.rows();
+    values.resize(M);
+    grads.resize(M, 3);
+    if (M == 0) return;
+
+    const int block = duchon_block_rows(M, chunk_size);
+    const int nblocks = (M + block - 1) / block;
+
+    #pragma omp parallel for schedule(dynamic, 1) if(!omp_in_parallel())
+    for (int b = 0; b < nblocks; b++) {
+        const int s = b * block;
+        const int len = std::min(block, M - s);
+        Eigen::VectorXd v;
+        Eigen::MatrixXd g;
+        predict_with_gradients_block(x_new.middleRows(s, len), v, g);
+        values.segment(s, len) = v;
+        grads.middleRows(s, len) = g;
+    }
+}
+
+void DuchonInterpolator::predict_with_gradients_block(const Eigen::MatrixXd& x_new,
+                                                      Eigen::VectorXd& value_out,
+                                                      Eigen::MatrixXd& grad_out) const {
+    const int M = (int)x_new.rows();
+    const int N = (int)points_.rows();
+
+    // Shared squared-distance matrix — the dominant M×N GEMM, built once here
+    // instead of once per predict()/predict_gradients() call. Peak M×N
+    // allocation is 2 (dist2 + r); dist2 is recycled to hold the value kernel
+    // and then the gradient weight.
+    Eigen::VectorXd x_sq = x_new.rowwise().squaredNorm();
+    Eigen::VectorXd p_sq = points_.rowwise().squaredNorm();
+    Eigen::MatrixXd dist2 = x_sq.replicate(1, N) + p_sq.transpose().replicate(M, 1)
+                            - 2.0 * x_new * points_.transpose();
+    dist2 = dist2.cwiseMax(0.0);
+
+    // r holds sqrt(dist2) (clamped), then log(r) for thin_plate. Shared between
+    // the value kernel and the gradient weight so the sqrt/log runs once.
+    Eigen::MatrixXd r = dist2.array().sqrt().cwiseMax(1e-10).matrix();
+    if (kernel_type_ == "thin_plate")
+        r = r.array().log().matrix();
+
+    // Value: dist2 becomes the kernel K (r³ for cubic, dist2·log r for
+    // thin_plate), then value_out = K·alpha + x·p + q.
+    dist2.array() *= r.array();
+    value_out = dist2 * alpha_ + x_new * p_ + Eigen::VectorXd::Constant(M, q_);
+
+    // Gradient: recycle dist2 as the weight W (d kernel/dr, as stored in
+    // predict_gradients_block), then apply the same rowsum trick.
+    if (kernel_type_ == "thin_plate")
+        dist2 = (2.0 * r.array() + 1.0).matrix();
+    else
+        dist2 = (3.0 * r.array()).matrix();
+    dist2 = dist2 * alpha_.asDiagonal();
+
+    Eigen::VectorXd W_rowsum = dist2.rowwise().sum();
+    Eigen::MatrixXd scaled_x = (x_new.array().colwise() * W_rowsum.array()).matrix();
+    grad_out = scaled_x - dist2 * points_;
+    grad_out.rowwise() += p_.transpose();
+}
+
 }  // namespace sdf

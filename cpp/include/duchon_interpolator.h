@@ -25,6 +25,15 @@ public:
 
     Eigen::MatrixXd predict_gradients(const Eigen::MatrixXd& x_new, int chunk_size = 500) const override;
 
+    /// Fused evaluation: value and gradient at the same query points, sharing a
+    /// single squared-distance matrix (and its sqrt/log transform) instead of
+    /// rebuilding it in predict() and predict_gradients() separately. Roughly
+    /// halves the per-call kernel cost; used by PUInterpolator's gradient path.
+    void predict_with_gradients(const Eigen::MatrixXd& x_new,
+                                Eigen::VectorXd& values,
+                                Eigen::MatrixXd& grads,
+                                int chunk_size = 500) const;
+
     bool is_trained() const override { return trained_; }
 
     /// Toggle input deduplication in fit(). Default on. PUInterpolator dedups
@@ -39,6 +48,9 @@ private:
     // split the query set into blocks and run these in parallel across blocks.
     Eigen::VectorXd predict_block(const Eigen::MatrixXd& x_new) const;
     Eigen::MatrixXd predict_gradients_block(const Eigen::MatrixXd& x_new) const;
+    void predict_with_gradients_block(const Eigen::MatrixXd& x_new,
+                                      Eigen::VectorXd& value_out,
+                                      Eigen::MatrixXd& grad_out) const;
 
     void compute_coefficients(const Eigen::MatrixXd& pts,
                               const Eigen::VectorXd& vals);
