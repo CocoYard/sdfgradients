@@ -478,6 +478,48 @@ def export_projection_visualization(sdf_points, projections, mask, recon_mesh, o
     scene.export(output_path)
     print(f"Exported to {output_path}")
 
+def _build_cpp_options(options : Options):
+    """ Translate a Python Options into a C++ sdf_cpp.Options. Mirrors the block in
+        test_our_method so the C++ pipeline (main_algorithm / interpolator) can be driven
+        from anywhere. Returns the populated sdf_cpp.Options. """
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
+    import sdf_cpp
+    cpp_opts = sdf_cpp.Options()
+    cpp_opts.grid_len = options.grid_len
+    cpp_opts.max_iters = options.max_iters
+    cpp_opts.clamp = options.clamp
+    cpp_opts.reg = options.reg
+    cpp_opts.use_MES = options.use_MES
+    cpp_opts.turn_off_short_arcs = options.turn_off_short_arcs
+    cpp_opts.interpolator_type = options.interpolator_type
+    cpp_opts.interp_partition = options.interp_partition
+    cpp_opts.interp_overlap = options.interp_overlap
+    cpp_opts.pair_local = options.pair_local
+    cpp_opts.name = options.name
+    cpp_opts.export_projections = options.export_projections
+    cpp_opts.export_short_arcs  = options.export_short_arcs
+    cpp_opts.iter_gradient_finding = options.iter_gradient_finding
+    cpp_opts.lr = options.lr
+    cpp_opts.verbose = options.verbose
+    if options.use_gt_gradients:
+        cpp_opts.gt_gradients = options.gt_gradients
+    if options.tolerance is not None:
+        cpp_opts.tolerance.clamp_radius_ratio = options.tolerance.clamp_radius_ratio
+        cpp_opts.tolerance.clamp_sdf_tol = options.tolerance.clamp_sdf_tol
+        cpp_opts.tolerance.angle_tol = options.tolerance.angle_tol
+    return cpp_opts
+
+def _adaptive_resolution(points, grid_len):
+    """ Dual-contouring grid resolution: ~target_cells_per_hint cells between adjacent SDF
+        samples, clamped to [64, 512]. Shared by test_our_method and construct_mesh so the
+        decoupled RBF reconstruction extracts at exactly the same resolution as the full
+        pipeline. (The bbox extent cancels out, so this reduces to ~4*(grid_len-1).) """
+    extent = (points.max(axis=0) - points.min(axis=0)).max()
+    hint_spacing = extent / max(grid_len - 1, 1)
+    target_cells_per_hint = 4
+    return int(np.clip(np.ceil(extent / (hint_spacing / target_cells_per_hint)), 64, 512))
+
 def test_our_method(options : Options, save_gtmesh=False):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
@@ -506,29 +548,7 @@ def test_our_method(options : Options, save_gtmesh=False):
         import sys, os
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
         import sdf_cpp
-        cpp_opts = sdf_cpp.Options()
-        cpp_opts.grid_len = options.grid_len
-        cpp_opts.max_iters = options.max_iters
-        cpp_opts.clamp = options.clamp
-        cpp_opts.reg = options.reg
-        cpp_opts.use_MES = options.use_MES
-        cpp_opts.turn_off_short_arcs = options.turn_off_short_arcs
-        cpp_opts.interpolator_type = options.interpolator_type
-        cpp_opts.interp_partition = options.interp_partition
-        cpp_opts.interp_overlap = options.interp_overlap
-        cpp_opts.pair_local = options.pair_local
-        cpp_opts.name = options.name
-        cpp_opts.export_projections = options.export_projections
-        cpp_opts.export_short_arcs  = options.export_short_arcs
-        cpp_opts.iter_gradient_finding = options.iter_gradient_finding
-        cpp_opts.lr = options.lr
-        cpp_opts.verbose = options.verbose
-        if options.use_gt_gradients:
-            cpp_opts.gt_gradients = options.gt_gradients
-        if options.tolerance is not None:
-            cpp_opts.tolerance.clamp_radius_ratio = options.tolerance.clamp_radius_ratio
-            cpp_opts.tolerance.clamp_sdf_tol = options.tolerance.clamp_sdf_tol
-            cpp_opts.tolerance.angle_tol = options.tolerance.angle_tol
+        cpp_opts = _build_cpp_options(options)
         result = sdf_cpp.main_algorithm(points, distances, cpp_opts)
         # Wrap C++ interpolator so it has extract_zero_level_set
         class _CppInterpolatorWrapper(Interpolator):
@@ -553,11 +573,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     use_cpp = True
     bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
     bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
-    extent = (bbox_max - bbox_min).max()
-    hint_spacing = extent / max(options.grid_len - 1, 1)
-    target_cells_per_hint = 4
-    resolution = int(np.clip(np.ceil(extent / (hint_spacing / target_cells_per_hint)), 64, 512))
-    # resolution = 128
+    resolution = _adaptive_resolution(points, options.grid_len)
     print(f"Grid resolution for surface extraction: {resolution}")
 
     if use_cpp:
@@ -661,6 +677,161 @@ def test_mc(options : Options, save_gtmesh=False):
     # mesh_distances(recon, mesh, verbose=True)
     return plt
 
+from enum import Enum
+class TangentPoints(Enum):
+    GT = 'gt'
+    OURS = 'ours'
+    RFTA = 'rfta'
+    MES = 'mes'
+
+def get_tangent_points(options : Options, method, save_gtmesh=False, screening_weight=10):
+    """ Get the tangent points (surface contact points) for the given options and method.
+
+        Returns
+        -------
+        tangent_pts: (M, 3) array of points lying on the reconstructed surface.
+            For OURS the tangent points are the SDF-sample projections and are 1:1 with
+            ``points``; for RFTA/MES they are the method's reconstructed point cloud and
+            need not be 1:1 with the input samples.
+        points:    (N, 3) input SDF sample coordinates.
+        distances: (N,)   signed distances at ``points``.
+    """
+    grid_len = options.grid_len
+    path_to_obj = options.path_to_obj
+    path_to_sdf = options.path_to_sdf
+    options.print()
+    if path_to_sdf is not None:
+        # read sdf data from file
+        data = np.load(path_to_sdf)
+        points = data['points']
+        distances = data['sdf_values']
+    else:
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
+        options.gt_gradients = gt_gradients
+        options.gt_mesh = mesh
+    if method == TangentPoints.OURS:
+        # Iterative projection (C++ pipeline, same as test_our_method): tangent points are
+        # the SDF-sample projections onto the surface (points - distance * gradient). The
+        # optimization's gradients exist only to produce these projections; some come out
+        # non-visible / unreliable and the optimization excludes them via a mask when
+        # fitting. We mirror that by marking the invalid projections NaN so the
+        # reconstruction drops them. The valid tangent points stay index-aligned with
+        # points/distances (1:1).
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
+        import sdf_cpp
+        result = sdf_cpp.main_algorithm(points, distances, _build_cpp_options(options))
+        tangent_pts = np.array(result.projections, dtype=np.float64)  # copy: pybind view is read-only
+        vis = np.asarray(result.visibility_mask).reshape(-1).astype(bool)
+        tangent_pts[~vis] = np.nan
+    elif method == TangentPoints.RFTA:
+        # Reach for the Arcs: use the reconstructed point cloud as tangent points.
+        # NOTE: this point cloud is NOT 1:1 with the input samples (one sphere can
+        # contribute several or zero points), so only the useRBF=True reconstruction
+        # path (zero-level constraints) is valid for it.
+        _, _, P, _ = gpy.reach_for_the_arcs(
+            points, distances, return_point_cloud=True,
+            screening_weight=screening_weight, parallel=True, force_cpu=False)
+        tangent_pts = np.asarray(P, dtype=np.float64)
+    elif method == TangentPoints.MES:
+        # Maximal Empty Spheres: use the reconstructed oriented point cloud as tangent points.
+        # MES does NOT emit one contact point per input sample (fully-covered / interior
+        # samples produce none), so the count differs from len(points) and there is no 1:1
+        # correspondence -- again only the useRBF=True path is valid for it.
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build', '_deps', 'mes_fork-src'))
+        from cgal.EmptySpheresReconstruction import MESReconstruction
+        *_, P, _N = MESReconstruction(points, distances, screening_weight=screening_weight, return_oriented_points=True)
+        tangent_pts = np.asarray(P, dtype=np.float64)
+        if tangent_pts.size == 0:
+            raise RuntimeError("MES returned no contact points; cannot build a tangent-point set.")
+    elif method == TangentPoints.GT:
+        # Ground truth: the tangent point of each SDF sample is its closest point on the GT
+        # mesh (the exact projection onto the true surface), 1:1 with points -- valid for
+        # both reconstruction paths.
+        gt = options.gt_mesh
+        if gt is None:
+            raise ValueError("GT tangent points require options.gt_mesh (set by generate_test_mesh_data).")
+        V = np.asarray(gt.vertices, dtype=np.float64)
+        F = np.asarray(gt.faces, dtype=np.int32)
+        _, _, closest = igl.point_mesh_squared_distance(points, V, F)
+        tangent_pts = np.asarray(closest, dtype=np.float64)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+    n_valid = int(np.isfinite(tangent_pts).all(axis=1).sum())
+    print(f"  [{method.value}] tangent points: {n_valid} valid / {len(tangent_pts)} total  (from {len(points)} SDF samples)")
+    return tangent_pts, points, distances
+
+def construct_mesh(tangent_pts, points, distances, useRBF : bool, options : Options, screening_weight=10):
+    """
+        If useRBF is True, construct mesh using RBF interpolation, otherwise use sPSR on the input points.
+        tangent_pts: (N, 3) array of tangent points corresponding to the input points. These
+            can be used to compute normals for the sPSR method, or treated as 0 value constraints for RBF interpolation.
+        points: (N, 3) array of point coordinates.
+        distances: (N,) array of signed distance values corresponding to the input points.
+        options: the RBF hyperparameters (reg, interp_overlap, interp_partition, pair_local)
+            and grid_len (for the adaptive extraction resolution) are read from here so B2
+            mirrors test_our_method's proposed RBF -- in particular reg must be passed through
+            (the C++ ctor defaults to reg=1e-5, but Options.reg defaults to 0).
+        screening_weight: PSR screening weight for the sPSR (useRBF=False) path.
+        Returns a trimesh.Trimesh of the reconstructed surface.
+    """
+    # Invalid tangent points are flagged NaN by get_tangent_points (non-visible projections);
+    # drop them before reconstruction.
+    valid = np.isfinite(tangent_pts).all(axis=1)
+    if useRBF:
+        # Fit the C++ RBF (PU) interpolator to the SDF samples (value constraints) plus the
+        # valid tangent points (zero-level constraints), then extract the surface with the
+        # C++ dual-contouring path. Plain value RBF -- no gradient/Hermite constraints; the
+        # tangent points carry the surface information. No 1:1 correspondence between
+        # tangent_pts and points is required here.
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
+        import sdf_cpp
+        resolution = _adaptive_resolution(points, options.grid_len)
+        print(f"Grid resolution for surface extraction: {resolution}")
+        tp = tangent_pts[valid]
+        interp = sdf_cpp.PUInterpolator(kernel='cubic', overlap=options.interp_overlap, reg=options.reg,
+                                        partition=options.interp_partition, pair_local=options.pair_local,
+                                        verbose=False)
+        fit_pts = np.vstack([points, tp])
+        fit_vals = np.concatenate([distances, np.zeros(len(tp))])
+        interp.fit(fit_pts, fit_vals)
+        bbox_min = points.min(axis=0)
+        bbox_max = points.max(axis=0)
+        verts, faces = interp.extract_surface(
+            bbox_min=bbox_min, bbox_max=bbox_max,
+            nx=resolution, ny=resolution, nz=resolution, iso=0.0, chunk_size=5000,
+            lipschitz_postfix=False, use_dual_contouring=True)
+        return trimesh.Trimesh(vertices=verts, faces=faces)
+    else:
+        # Screened Poisson on the tangent points. Normals are derived from the SDF samples:
+        # (point - tangent) points away from the surface for outside samples; flipping by the
+        # sign of the distance orients every normal outward. Requires tangent_pts 1:1 with
+        # points (true for OURS); restrict to the valid (index-aligned) subset.
+        tp = tangent_pts[valid]
+        pts = points[valid]
+        dst = distances[valid]
+        d = pts - tp
+        n = np.linalg.norm(d, axis=1, keepdims=True)
+        n[n < 1e-12] = 1.0
+        normals = (d / n) * np.sign(dst)[:, np.newaxis]
+        Vr, Fr = gpy.point_cloud_to_mesh(tp, normals, method='PSR', psr_screening_weight=screening_weight)
+        recon = trimesh.Trimesh(vertices=Vr, faces=Fr)
+        # sPSR can emit spurious closed "bubble" components floating outside the sampled
+        # region; drop any component lying entirely outside the input (SDF sample) bbox.
+        bmin, bmax = points.min(axis=0), points.max(axis=0)
+        comps = recon.split(only_watertight=False)
+        if len(comps) > 1:
+            kept = [c for c in comps
+                    if np.any(np.all((np.asarray(c.vertices) >= bmin)
+                                     & (np.asarray(c.vertices) <= bmax), axis=1))]
+            if not kept:  # never emit an empty mesh
+                kept = [max(comps, key=lambda m: len(m.faces))]
+            recon = trimesh.util.concatenate(kept)
+        return recon
+
 if __name__ == "__main__":
     t0 = time.perf_counter()
     batch = False
@@ -687,13 +858,52 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [10]:
-            options = Options(name='bunny', grid_len=length, max_iters=15,interpolator_type='Duchon', cpp_dc=True)
-            # options.tolerance = Tolerance(clamp_sdf_tol=1e-6)
-            # # # plt = test_mesh(grid_len=20, path_to_obj='{data_dir}/holes.obj')
-            plt = test_our_method(options, save_gtmesh=False)
-            # test_rfta(options, screening_weight=10, parallel=False)
-            # test_mes(options, save_gtmesh=False, screening_weight=10)
+        for length in [20]:
+            '''
+            A: Computing tangent points: (1) RFTA/MES vs. (2) the proposed iterative approach.
+            B: Surface reconstruction: (1) Screened Poisson using tangent points and normals vs. (2) proposed RBF using tangent points and SDF samples.
+            '''
+            options = Options(name='bunny', grid_len=length, max_iters=15)
+            out_dir = 'out/' + options.name
+            os.makedirs(out_dir, exist_ok=True)
+
+            # A1B2: RFTA tangent points + RBF reconstruction
+            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.RFTA)
+            recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
+            recon.export(f'{out_dir}/A1B2_rfta_{length}.obj')
+            print(f"Exported: {out_dir}/A1B2_rfta_{length}.obj")
+
+            # A1B2: MES tangent points + RBF reconstruction
+            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.MES)
+            recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
+            recon.export(f'{out_dir}/A1B2_mes_{length}.obj')
+            print(f"Exported: {out_dir}/A1B2_mes_{length}.obj")
+
+            # A2B1: OURS tangent points + sPSR reconstruction
+            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.OURS)
+            recon = construct_mesh(tangent_pts, points, distances, useRBF=False, options=options)
+            recon.export(f'{out_dir}/A2B1_ours_{length}.obj')
+            print(f"Exported: {out_dir}/A2B1_ours_{length}.obj")
+
+            # A2B2: OURS tangent points + RBF reconstruction
+            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.OURS)
+            recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
+            recon.export(f'{out_dir}/A2B2_ours_{length}.obj')
+            print(f"Exported: {out_dir}/A2B2_ours_{length}.obj")
+
+            # A3B1: GT tangent points + sPSR reconstruction
+            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT)
+            recon = construct_mesh(tangent_pts, points, distances, useRBF=False, options=options)
+            recon.export(f'{out_dir}/A3B1_gt_{length}.obj')
+            print(f"Exported: {out_dir}/A3B1_gt_{length}.obj")
+
+            # A3B2: GT tangent points + RBF reconstruction
+            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT)
+            recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
+            recon.export(f'{out_dir}/A3B2_gt_{length}.obj')
+            print(f"Exported: {out_dir}/A3B2_gt_{length}.obj")
+
+
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
 
     elapsed = time.perf_counter() - t0
