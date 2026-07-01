@@ -334,7 +334,10 @@ def main() -> int:
             mc_status = ''
             mc_err_msg = ''
             if algo == 'ours':
-                interp = sorted(out_dir.glob(f'interpolant_{gl}_*.obj'),
+                # test_our_method exports 'ours_<gl>_<iters>_..._<res>.obj'; collapse the
+                # newest such file to the canonical 'ours_<gl>.obj'. (out_file is
+                # 'ours_<gl>.obj', which this pattern does not match, so no self-rename.)
+                interp = sorted(out_dir.glob(f'ours_{gl}_*.obj'),
                                 key=lambda p: p.stat().st_mtime, reverse=True)
                 if interp:
                     interp[0].rename(out_file)

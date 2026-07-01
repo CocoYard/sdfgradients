@@ -6,6 +6,10 @@
 
 namespace sdf {
 
+// Accumulated RBF-evaluation wall-time (s) inside optimize_best_gradients;
+// reset per optimization loop. Defined in interpolator.cpp.
+extern double g_rbf_eval_s;
+
 /// Abstract base class for interpolation, mirroring Python's Interpolator ABC.
 /// Subclasses must implement fit(), predict(), predict_gradients().
 /// sample_best_gradients() is a concrete method that calls predict().

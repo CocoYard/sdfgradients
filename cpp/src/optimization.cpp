@@ -27,6 +27,9 @@ Eigen::MatrixXd iterative_projection_3d(
     bool MES_used = false;
     Eigen::VectorXi vis_cached;
     bool vis_cache_valid = false;
+    double t_loop_fit = 0;  // accumulate the per-iteration RBF fits (in-loop)
+    double t_loop_vis = 0;  // accumulate the per-iteration are_points_visible checks
+    g_rbf_eval_s = 0.0;     // RBF evaluation time inside optimize_best_gradients (accumulated there)
 
     if (gt_gradients) {
         double cos_sum = 0.0;
@@ -84,7 +87,9 @@ Eigen::MatrixXd iterative_projection_3d(
             proj_new.row(i) = points.row(i) - values(i) * new_gradients.row(i);
         if (options.verbose)
             std::cout << "Checking visibility ...\n";
+        auto _tv0 = std::chrono::steady_clock::now();
         Eigen::VectorXi vis_new = are_points_visible(proj_new, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 1e-8, options.verbose);
+        t_loop_vis += std::chrono::duration<double>(std::chrono::steady_clock::now() - _tv0).count();
         Eigen::VectorXi vis_old;
         if (vis_cache_valid) {
             vis_old = vis_cached;
@@ -92,7 +97,9 @@ Eigen::MatrixXd iterative_projection_3d(
             Eigen::MatrixXd proj_old(N, 3);
             for (int i = 0; i < N; i++)
                 proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
+            auto _tv1 = std::chrono::steady_clock::now();
             vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 1e-8, options.verbose);
+            t_loop_vis += std::chrono::duration<double>(std::chrono::steady_clock::now() - _tv1).count();
         }
         // Don't update gradients that would make visible projections invisible
         // Don't update degenerate-arc points
@@ -178,7 +185,10 @@ Eigen::MatrixXd iterative_projection_3d(
         gradients = new_gradients;
 
         // ── Step 2: Refit interpolant with current gradients ───────
+        auto _tf = std::chrono::steady_clock::now();
         interpolator.fit(points, values, &gradients, &vis_mask);
+        t_loop_fit += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - _tf).count();
 
         if (gt_gradients) {
             double gt_cos = 0.0;
@@ -189,6 +199,10 @@ Eigen::MatrixXd iterative_projection_3d(
         }
     }
 
+    if (options.verbose)
+        std::cout << "[DECOMP-loop] rbf_fit: " << t_loop_fit
+                  << " s  visibility: " << t_loop_vis
+                  << " s  rbf_eval: " << g_rbf_eval_s << " s\n";
     return gradients;
 }
 

@@ -225,8 +225,11 @@ Eigen::MatrixXd init_gradients_by_degenerate_pts(
 {
     int N = (int)sdf_points.rows();
     auto& degenerate_pts = options.degenerate_pts;
+    double t_fit_init = 0;  // accumulate the two out-of-loop RBF fits
     // 1. Initial fit without gradients
+    auto _tf1 = clk::now();
     interpolator.fit(sdf_points, sdf_values);
+    t_fit_init += ms_since(_tf1)/1000.0;
     if (options.verbose)
         std::cout << "======== first fit done with input " << N << " points\n";
 
@@ -278,11 +281,14 @@ Eigen::MatrixXd init_gradients_by_degenerate_pts(
     if (options.verbose)
         std::cout << "After adding points for degenerate arcs, total points: "
                   << to_train_points.rows() << "\n";
+    auto _tf2 = clk::now();
     interpolator.fit(to_train_points, to_train_sdf);
+    t_fit_init += ms_since(_tf2)/1000.0;
     if (options.verbose) {
         std::cout << "======== second fit done with input " << to_train_points.rows()
                   << " points (including " << pts_to_add.size() << " degenerate arc points)\n";
         std::cout << "initial gradient estimation done\n";
+        std::cout << "[DECOMP-init] rbf_fit: " << t_fit_init << " s\n";
     }
 
     // Debug check
@@ -367,11 +373,15 @@ void get_visible_arcs(
         //                          for emitting a tangent degen point (length)
         // The cap-dedup / parallel-cut tolerances are file-scope constants in
         // existing_modules_adapter.cpp (DEDUP_COS, DEDUP_LEN).
+        auto t_arc = clk::now();
         sphere_exposed_core::compute_exposed_batch(
             pts_rm.data(), radii.data(), N,
             options.ngbrs_list,
             1e-4, 1e-7, 1e-12, 1e-1,
             options.batch);
+        if (options.verbose)
+            std::cout << "[get_visible_arcs] compute_exposed_batch: "
+                      << ms_since(t_arc)/1000.0 << " s\n";
     }  // pts_rm freed here
 
     // Count fully covered spheres

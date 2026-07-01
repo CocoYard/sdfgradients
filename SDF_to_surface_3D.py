@@ -613,7 +613,10 @@ def test_our_method(options : Options, save_gtmesh=False):
     #     fname = f'ours_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
     print(f"Exported: {out_dir}/{fname}")
-    mesh_distances(recon, mesh, verbose=True)
+    # `mesh` only exists when we generated the SDF from an obj (path_to_sdf is None);
+    # when loading cached SDF (e.g. run_baseline) there is no GT mesh in scope.
+    if path_to_sdf is None:
+        mesh_distances(recon, mesh, verbose=True)
 
 def check_mesh_error(dir_to_meshes, path_to_gt):
     """ Compute the mesh distance (Hausdorff and Chamfer) between meshes in dir_to_meshes and the ground truth mesh at path_to_gt. """

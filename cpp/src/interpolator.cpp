@@ -17,6 +17,12 @@ using sdf::restore_threads;
 
 namespace sdf {
 
+// Accumulates wall-time spent in RBF evaluation (predict / predict_gradients)
+// inside optimize_best_gradients, so the runtime decomposition can report how
+// much of "gradient optimization" is actually RBF interpolation. Reset by
+// iterative_projection_3d at the start of each optimization loop.
+double g_rbf_eval_s = 0.0;
+
 // ── Point-in-sphere BVH over sample AABBs ───────────────────────────
 // Finds the "best containing" sphere for a query point g: among all samples
 // k with dist(g, p_k) < |s_k|, returns the one maximizing margin |s_k|-dist.
@@ -358,7 +364,10 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
                 samples.row(ii * num_coarse + d) =
                     points.row(i) - sdf_values(i) * fib.row(d);
         }
+        auto _tec = std::chrono::steady_clock::now();
         Eigen::VectorXd preds = predict(samples, chunk_size);
+        g_rbf_eval_s += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - _tec).count();
 
         #pragma omp parallel for schedule(static)
         for (int ii = 0; ii < n_inv; ii++) {
@@ -385,7 +394,10 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
         for (int i = 0; i < N; i++)
             proj.row(i) = points.row(i) - sdf_values(i) * dirs.row(i);
 
+        auto _te = std::chrono::steady_clock::now();
         Eigen::MatrixXd sdf_grad = predict_gradients(proj, chunk_size);
+        g_rbf_eval_s += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - _te).count();
 
         #pragma omp parallel for schedule(static)
         for (int i = 0; i < N; i++) {
