@@ -12,7 +12,7 @@ class Options:
                  turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
                 use_MES=0, post_processing=False, iter_gradient_finding='optimize', verbose=True,
-                pair_local=False):
+                pair_local=False, noise=0):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -42,6 +42,8 @@ class Options:
         self.batch = None
         self.ngbrs_list = None
 
+        self.noise = noise
+
         # never used
         self.path_to_sdf = None # set it manually to avoid accidentally loading old data, e.g. f'out/{name}_sdf_{grid_len**3}.npz'
         # self.turn_off_projection = turn_off_projection  # this means only interpolating SDF values without projection or optimization
@@ -68,7 +70,7 @@ class Tolerance:
         self.float_tol = 1e-8
         self.angle_tol = angle_tol
 
-def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False ):
+def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noise=0.0 ):
     '''
     Loads a mesh from the given path and computes signed distances and gradients for its vertices.
     Parameters:
@@ -117,6 +119,10 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False ):
     # Avoid division by zero
     norm_temp[np.abs(norm_temp) <= 1e-8] = 1.0
     gradients /= norm_temp
+
+    # Add noise to the distances
+    if noise > 0:
+        distances += np.random.normal(0, noise, distances.shape)
 
     # Filter out points that are too close to the surface (within 0.1 units), also remove respective gradients
     mask = np.abs(distances) > 1e-8
@@ -207,7 +213,7 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, fo
         distances = data['sdf_values']
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
-        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise)  # Generate new data with 4096 points
     # Export meshes to out/
     import trimesh, os
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
@@ -236,8 +242,12 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, fo
         # largest so we still write a non-empty .obj.
         kept = [max(components, key=lambda m: len(m.faces))]
     filtered = trimesh.util.concatenate(kept)
-    filtered.export(f'{out_dir}/rfta_{grid_len}.obj')
-    print(f"Exported: {out_dir}/rfta_{grid_len}.obj  (kept {len(kept)}/{len(components)} components, {len(filtered.faces)} faces out of {len(Fr)})")
+    if options.noise > 0:
+        fname = f'rfta_{grid_len}_noise{options.noise}.obj'
+    else:
+        fname = f'rfta_{grid_len}.obj'
+    filtered.export(f'{out_dir}/' + fname)
+    print(f"Exported: {out_dir}/" + fname + f"  (kept {len(kept)}/{len(components)} components, {len(filtered.faces)} faces out of {len(Fr)})")
 
 def test_mes(options, save_gtmesh=False, screening_weight=10):
     """
@@ -537,7 +547,7 @@ def test_our_method(options : Options, save_gtmesh=False):
         distances = data['sdf_values']
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
-        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise)  # Generate new data with 4096 points
         options.gt_gradients = gt_gradients
         options.gt_mesh = mesh
 
@@ -608,7 +618,10 @@ def test_our_method(options : Options, save_gtmesh=False):
     if not use_cpp:
         post_str = 'odc'
     # fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}_lr{options.lr}.obj'
-    fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_{resolution}.obj'
+    if options.noise > 0:
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_noise{options.noise}.obj'
+    else:
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}.obj'
     # if options.use_gt_gradients:
     #     fname = f'ours_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
@@ -861,50 +874,10 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [20]:
-            '''
-            A: Computing tangent points: (1) RFTA/MES vs. (2) the proposed iterative approach.
-            B: Surface reconstruction: (1) Screened Poisson using tangent points and normals vs. (2) proposed RBF using tangent points and SDF samples.
-            '''
-            options = Options(name='bunny', grid_len=length, max_iters=15)
-            out_dir = 'out/' + options.name
-            os.makedirs(out_dir, exist_ok=True)
-
-            # A1B2: RFTA tangent points + RBF reconstruction
-            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.RFTA)
-            recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
-            recon.export(f'{out_dir}/A1B2_rfta_{length}.obj')
-            print(f"Exported: {out_dir}/A1B2_rfta_{length}.obj")
-
-            # A1B2: MES tangent points + RBF reconstruction
-            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.MES)
-            recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
-            recon.export(f'{out_dir}/A1B2_mes_{length}.obj')
-            print(f"Exported: {out_dir}/A1B2_mes_{length}.obj")
-
-            # A2B1: OURS tangent points + sPSR reconstruction
-            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.OURS)
-            recon = construct_mesh(tangent_pts, points, distances, useRBF=False, options=options)
-            recon.export(f'{out_dir}/A2B1_ours_{length}.obj')
-            print(f"Exported: {out_dir}/A2B1_ours_{length}.obj")
-
-            # A2B2: OURS tangent points + RBF reconstruction
-            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.OURS)
-            recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
-            recon.export(f'{out_dir}/A2B2_ours_{length}.obj')
-            print(f"Exported: {out_dir}/A2B2_ours_{length}.obj")
-
-            # A3B1: GT tangent points + sPSR reconstruction
-            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT)
-            recon = construct_mesh(tangent_pts, points, distances, useRBF=False, options=options)
-            recon.export(f'{out_dir}/A3B1_gt_{length}.obj')
-            print(f"Exported: {out_dir}/A3B1_gt_{length}.obj")
-
-            # A3B2: GT tangent points + RBF reconstruction
-            tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT)
-            recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
-            recon.export(f'{out_dir}/A3B2_gt_{length}.obj')
-            print(f"Exported: {out_dir}/A3B2_gt_{length}.obj")
+        for length in [30]:
+            options = Options(name='rings', grid_len=length, noise=0.001, )
+            plt = test_our_method(options, save_gtmesh=False)
+            test_rfta(options, screening_weight=10, parallel=False, force_cpu=True)
 
 
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
