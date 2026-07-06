@@ -12,7 +12,7 @@ class Options:
                  turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
                 use_MES=0, post_processing=False, iter_gradient_finding='optimize', verbose=True,
-                pair_local=False, noise=0):
+                pair_local=False, noise=0, bound=1, scatter=False):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -43,6 +43,8 @@ class Options:
         self.ngbrs_list = None
 
         self.noise = noise
+        self.bound = bound
+        self.scatter = scatter
 
         # never used
         self.path_to_sdf = None # set it manually to avoid accidentally loading old data, e.g. f'out/{name}_sdf_{grid_len**3}.npz'
@@ -70,7 +72,7 @@ class Tolerance:
         self.float_tol = 1e-8
         self.angle_tol = angle_tol
 
-def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noise=0.0 ):
+def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noise=0.0, bound=1.0, scatter=False ):
     '''
     Loads a mesh from the given path and computes signed distances and gradients for its vertices.
     Parameters:
@@ -107,6 +109,9 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noi
     print("bbox_min:", bbox_min, "bbox_max:", bbox_max)
     X, Y, Z = np.meshgrid(x, y, z)
     points = np.vstack([X.ravel(), Y.ravel(), Z.ravel()]).T
+    if scatter:
+        # totally random points in the bounding box
+        points = np.random.uniform(bbox_min, bbox_max, (grid_len**3, 3))
     # Find the closest points on the mesh surface
     V = np.asarray(mesh.vertices, dtype=np.float64)
     F = np.asarray(mesh.faces, dtype=np.int32)
@@ -135,6 +140,13 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noi
     mask = W > 0.5  # Points with winding number > 0.5 are inside
     distances[mask] *= -1.0  # Invert distances for points inside the mesh
     gradients[mask] *= -1.0  # Invert gradients for points inside the mesh
+
+    if bound < 1.0:
+        # Filter points based on SDF values to keep only those within the specified bound
+        mask = np.abs(distances) <= bound
+        points = points[mask]
+        distances = distances[mask]
+        gradients = gradients[mask]
 
     # save to file for reuse
     if save:
@@ -213,7 +225,7 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, fo
         distances = data['sdf_values']
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
-        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise)  # Generate new data with 4096 points
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise, bound=options.bound)  # Generate new data with 4096 points
     # Export meshes to out/
     import trimesh, os
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
@@ -244,6 +256,8 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, fo
     filtered = trimesh.util.concatenate(kept)
     if options.noise > 0:
         fname = f'rfta_{grid_len}_noise{options.noise}.obj'
+    elif options.bound < 1.0:
+        fname = f'rfta_{grid_len}_bound{options.bound}.obj'
     else:
         fname = f'rfta_{grid_len}.obj'
     filtered.export(f'{out_dir}/' + fname)
@@ -262,7 +276,7 @@ def test_mes(options, save_gtmesh=False, screening_weight=10):
         distances = data['sdf_values']
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
-        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, bound=options.bound)  # Generate new data with 4096 points
     import sys, os
     # Export meshes to out/
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
@@ -271,9 +285,13 @@ def test_mes(options, save_gtmesh=False, screening_weight=10):
     sys.path.insert(0, os.path.join(_here, 'cpp', 'build', '_deps', 'mes_fork-src'))
     from cgal.EmptySpheresReconstruction import MESReconstruction
     R_cgal = MESReconstruction(points, distances,screening_weight=screening_weight)
-    gpy.write_mesh(f"{out_dir}/mes_{grid_len}.obj", *R_cgal)
 
-    print(f"Exported: {out_dir}/mes_{grid_len}.obj")
+    fname = f'mes_{grid_len}.obj'
+    if options.bound < 1.0:
+        fname = f'mes_{grid_len}_bound{options.bound}.obj'
+    gpy.write_mesh(f"{out_dir}/" + fname, *R_cgal)
+
+    print(f"Exported: {out_dir}/" + fname)
 
 def filter_degenerate_pts(degenerate_pts, interpolator : Interpolator, dist_tol=1e-1):
     """ 
@@ -547,7 +565,7 @@ def test_our_method(options : Options, save_gtmesh=False):
         distances = data['sdf_values']
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
-        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise)  # Generate new data with 4096 points
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise, bound=options.bound, scatter=options.scatter)  # Generate new data with 4096 points
         options.gt_gradients = gt_gradients
         options.gt_mesh = mesh
 
@@ -584,6 +602,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
     bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
     resolution = _adaptive_resolution(points, options.grid_len)
+    # resolution = 200
     print(f"Grid resolution for surface extraction: {resolution}")
 
     if use_cpp:
@@ -620,6 +639,10 @@ def test_our_method(options : Options, save_gtmesh=False):
     # fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}_lr{options.lr}.obj'
     if options.noise > 0:
         fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_noise{options.noise}.obj'
+    elif options.bound < 1.0:
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_bound{options.bound}.obj'
+    elif options.scatter:
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_scatter.obj'
     else:
         fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}.obj'
     # if options.use_gt_gradients:
