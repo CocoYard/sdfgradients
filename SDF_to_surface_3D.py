@@ -293,6 +293,38 @@ def test_mes(options, save_gtmesh=False, screening_weight=10):
 
     print(f"Exported: {out_dir}/" + fname)
 
+def export_mes_spheres(options, radius_threshold=0.05, save_gtmesh=False):
+    """
+    Export the centers of the maximal empty spheres (MES) computed from the
+    SDF samples as a point cloud, keeping only spheres whose |radius| is
+    below `radius_threshold`. Useful to spot small/tight empty regions
+    (thin features, noise, near-degenerate reconstructions).
+    Uses the native sdf_cpp.contact_points_from_sdf binding (no subprocess).
+    """
+    grid_len, path_to_obj, path_to_sdf = options.grid_len, options.path_to_obj, options.path_to_sdf
+    if path_to_sdf is not None:
+        data = np.load(path_to_sdf)
+        points = data['points']
+        distances = data['sdf_values']
+    else:
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, bound=options.bound)
+    import sys, os
+    out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
+    os.makedirs(out_dir, exist_ok=True)
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
+    import sdf_cpp
+
+    _, _, spheres = sdf_cpp.contact_points_from_sdf(points, distances, True, 0)
+    mask = np.abs(spheres[:, 3]) < radius_threshold
+    centers, radii = spheres[mask, :3], spheres[mask, 3]
+    fname = f'mes_spheres_{grid_len}_r{radius_threshold}'
+    np.savez(f"{out_dir}/{fname}.npz", centers=centers, radii=radii)
+    trimesh.PointCloud(centers).export(f"{out_dir}/{fname}.ply")
+
+    print(f"Exported: {out_dir}/{fname}.ply  "
+          f"({len(centers)}/{len(spheres)} spheres with |radius| < {radius_threshold})")
+
 def filter_degenerate_pts(degenerate_pts, interpolator : Interpolator, dist_tol=1e-1):
     """ 
     Filter out degenerate points that are too far from the surface or more than 1 point, since 

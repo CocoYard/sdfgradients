@@ -171,7 +171,9 @@ static void process_group(
     Eigen::MatrixXd& out_pts,
     Eigen::MatrixXd& out_nrm,
     bool filter_bbox,
-    int  debug_level)
+    int  debug_level,
+    bool outside_group,
+    std::vector<Eigen::RowVector4d>* out_sphere_rows)
 {
     int M = (int)G.rows();
     if (M == 0) return;
@@ -223,6 +225,10 @@ static void process_group(
             if (!inside) { n_bbox_filtered++; continue; }
         }
         double r = std::fabs(result(i, 3));
+        if (out_sphere_rows) {
+            double signed_r = outside_group ? r : -r;
+            out_sphere_rows->emplace_back(result(i, 0), result(i, 1), result(i, 2), signed_r);
+        }
         for (int j = 0; j < contact_indices.cols(); j++) {
             int n = contact_indices(i, j);
             if (n < 0 || n >= M) continue;
@@ -271,7 +277,8 @@ void contact_points_from_sdf(
     bool filter_bbox,
     int  debug_level,
     Eigen::MatrixXd& out_pts,
-    Eigen::MatrixXd& out_normals)
+    Eigen::MatrixXd& out_normals,
+    Eigen::MatrixXd* out_spheres)
 {
     // Eigen+OpenMP in this process spawns per-thread scratch buffers that
     // push CGAL MES memory usage into triple digits of GB. Force single-threaded
@@ -306,8 +313,19 @@ void contact_points_from_sdf(
         Gn.row(k) = Eigen::RowVector4d(points(i,0), points(i,1), points(i,2), sdf_values(i));
     }
 
-    process_group(Gp, pos_orig, out_pts, out_normals, filter_bbox, debug_level);
-    process_group(Gn, neg_orig, out_pts, out_normals, filter_bbox, debug_level);
+    std::vector<Eigen::RowVector4d> sphere_rows;
+    std::vector<Eigen::RowVector4d>* sphere_rows_ptr = out_spheres ? &sphere_rows : nullptr;
+
+    process_group(Gp, pos_orig, out_pts, out_normals, filter_bbox, debug_level,
+                  /*outside_group=*/true, sphere_rows_ptr);
+    process_group(Gn, neg_orig, out_pts, out_normals, filter_bbox, debug_level,
+                  /*outside_group=*/false, sphere_rows_ptr);
+
+    if (out_spheres) {
+        out_spheres->resize((int)sphere_rows.size(), 4);
+        for (int i = 0; i < (int)sphere_rows.size(); i++)
+            out_spheres->row(i) = sphere_rows[i];
+    }
 }
 
 }  // namespace mes_contact_core
@@ -324,12 +342,14 @@ void contact_points_from_sdf(
     bool /*filter_bbox*/,
     int  /*debug_level*/,
     Eigen::MatrixXd& out_pts,
-    Eigen::MatrixXd& out_normals)
+    Eigen::MatrixXd& out_normals,
+    Eigen::MatrixXd* out_spheres)
 {
     int N = (int)points.rows();
     const double nan = std::numeric_limits<double>::quiet_NaN();
     out_pts     = Eigen::MatrixXd::Constant(N, 3, nan);
     out_normals = Eigen::MatrixXd::Constant(N, 3, nan);
+    if (out_spheres) out_spheres->resize(0, 4);
     static bool warned = false;
     if (!warned) {
         std::cerr << "[mes_contact_core] HAVE_MES_CONTACT not defined; "

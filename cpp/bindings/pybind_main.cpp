@@ -6,6 +6,7 @@
 #include "duchon_interpolator.h"
 #include "pu_interpolator.h"
 #include "visibility.h"
+#include "mes_contact_core.h"
 
 namespace py = pybind11;
 
@@ -145,4 +146,21 @@ PYBIND11_MODULE(sdf_cpp, m) {
           py::arg("sdf_points"), py::arg("sdf_values"), py::arg("options"),
           "Run the full SDF gradient optimization pipeline.\n"
           "Returns MainResult with projections and visibility_mask.");
+
+    // ── MES contact points / empty spheres ───────────────────────────
+    m.def("contact_points_from_sdf",
+          [](const Eigen::MatrixXd& points, const Eigen::VectorXd& sdf_values,
+             bool filter_bbox, int debug_level) {
+              Eigen::MatrixXd out_pts, out_normals, out_spheres;
+              mes_contact_core::contact_points_from_sdf(
+                  points, sdf_values, filter_bbox, debug_level,
+                  out_pts, out_normals, &out_spheres);
+              return py::make_tuple(out_pts, out_normals, out_spheres);
+          },
+          py::arg("points"), py::arg("sdf_values"),
+          py::arg("filter_bbox") = true, py::arg("debug_level") = 0,
+          "Compute maximal-empty-sphere contact points/normals for each SDF sample.\n"
+          "Returns (contact_pts, normals, spheres). contact_pts/normals are (N,3),\n"
+          "NaN rows where no contact sphere was found. spheres is (M,4): x,y,z,radius,\n"
+          "radius > 0 for spheres built from outside (sdf>=0) samples, < 0 for inside.");
 }
