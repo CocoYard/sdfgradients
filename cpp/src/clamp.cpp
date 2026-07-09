@@ -170,14 +170,14 @@ int clamp_gradients_to_arcs(
         // Fast path: does any of the 2048 curated neighbors contain proj(i)?
         const auto& row = ngbrs_list[i];
         bool inside = !row.empty() &&
-            bvh.any_sphere_contains(pix, piy, piz, float_tol, row.data(), (int)row.size());
+            bvh.any_sphere_contains(pix, piy, piz, 0, row.data(), (int)row.size());
         if (inside) {
             fast_hits.fetch_add(1, std::memory_order_relaxed);
         } else {
             // Fall back to full BVH to confirm visibility (miss in fast path
             // is inconclusive — occluder may be outside the curated list).
             bvh_fallbacks.fetch_add(1, std::memory_order_relaxed);
-            inside = bvh.point_inside_any(pix, piy, piz, float_tol, /*exclude_idx=*/i);
+            inside = bvh.point_inside_any(pix, piy, piz, 0, /*exclude_idx=*/i);
         }
         if (!inside) continue;
 
@@ -187,7 +187,8 @@ int clamp_gradients_to_arcs(
         arc_queries.fetch_add(1, std::memory_order_relaxed);
         query_closest_fast(projections.row(i).transpose(), batch, i, cap_map, arc_map, closest, distance);
 
-        if (distance < clamp_tol) {
+        if (distance < 0.001) {
+        // if (true) {
             gradients.row(i) = (points.row(i).transpose() - closest).transpose() / (values(i) + 1e-10);
             clamped_cnt++;
             continue;
@@ -196,6 +197,7 @@ int clamp_gradients_to_arcs(
     }
     auto t_loop1 = std::chrono::high_resolution_clock::now();
     std::cout << "  [clamp] N=" << N
+              << " clamp_tol=" << clamp_tol
               << " fast_hits=" << fast_hits.load()
               << " bvh_fallbacks=" << bvh_fallbacks.load()
               << " arc_queries=" << arc_queries.load()

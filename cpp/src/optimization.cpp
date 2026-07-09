@@ -24,6 +24,7 @@ Eigen::MatrixXd iterative_projection_3d(
 {
     int N = (int)points.rows();
     Eigen::MatrixXd gradients = init_gradients;
+    bool clamp_used = false;
     bool MES_used = false;
     Eigen::VectorXi vis_cached;
     bool vis_cache_valid = false;
@@ -58,29 +59,6 @@ Eigen::MatrixXd iterative_projection_3d(
                              std::chrono::high_resolution_clock::now() - t_sbg0).count()
                       << "s\n";
 
-        // ── Clamp to arcs ──────────────────────────────────────────
-        // Throughput-bound (N × neighbors), so bump threads up to predict
-        // count for the duration — the surrounding iterative_projection_3d
-        // runs under fit's reduced thread pool.
-        if (options.clamp) {
-            int _saved = sdf::set_threads(sdf::thread_policy().predict);
-            Eigen::MatrixXd pre_clamp_gradients = new_gradients;
-            int clamped_cnt = 0;
-            while (true) {
-                new_gradients = pre_clamp_gradients;
-                clamped_cnt = clamp_gradients_to_arcs(
-                    points, values, new_gradients,
-                    options.degenerate_pts, options.batch,
-                    options.ngbrs_list, *options.sphere_bvh, options.tolerance);
-                if (1. * clamped_cnt / N > .3) {
-                    options.tolerance.clamp_sdf_tol /= 2;
-                } else {
-                    break;
-                }
-            }
-            sdf::restore_threads(_saved);
-        }
-
         // ── Visibility checks ──────────────────────────────────────
         Eigen::MatrixXd proj_new(N, 3);
         for (int i = 0; i < N; i++)
@@ -88,7 +66,7 @@ Eigen::MatrixXd iterative_projection_3d(
         if (options.verbose)
             std::cout << "Checking visibility ...\n";
         auto _tv0 = std::chrono::steady_clock::now();
-        Eigen::VectorXi vis_new = are_points_visible(proj_new, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 1e-8, options.verbose);
+        Eigen::VectorXi vis_new = are_points_visible(proj_new, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 0, options.verbose);
         t_loop_vis += std::chrono::duration<double>(std::chrono::steady_clock::now() - _tv0).count();
         Eigen::VectorXi vis_old;
         if (vis_cache_valid) {
@@ -98,7 +76,7 @@ Eigen::MatrixXd iterative_projection_3d(
             for (int i = 0; i < N; i++)
                 proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
             auto _tv1 = std::chrono::steady_clock::now();
-            vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 1e-8, options.verbose);
+            vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 0, options.verbose);
             t_loop_vis += std::chrono::duration<double>(std::chrono::steady_clock::now() - _tv1).count();
         }
         // Don't update gradients that would make visible projections invisible
@@ -145,6 +123,25 @@ Eigen::MatrixXd iterative_projection_3d(
             std::cout << "Number of visible projected points: " << visible_num
                       << " out of " << N << ". Percentage: "
                       << (100.0 * visible_num / N) << "%\n";
+        }
+        // ── Clamp to arcs ──────────────────────────────────────────
+        // Throughput-bound (N × neighbors), so bump threads up to predict
+        // count for the duration — the surrounding iterative_projection_3d
+        // runs under fit's reduced thread pool.
+        if (options.clamp && it > 5) {
+            int vis_old_sum = vis_old.sum();
+            double gain = (double)(visible_num - vis_old_sum) / N;
+            if (!clamp_used && gain < 0.01 ) {
+                int _saved = sdf::set_threads(sdf::thread_policy().predict);
+                int clamped_cnt = 0;
+                clamped_cnt = clamp_gradients_to_arcs(
+                    points, values, new_gradients,
+                    options.degenerate_pts, options.batch,
+                    options.ngbrs_list, *options.sphere_bvh, options.tolerance);
+                    sdf::restore_threads(_saved);    
+                clamp_used = true;
+                vis_cache_valid = false;  // MES rewrote some gradients; cache stale
+            }
         }
 
         // ── MES contact points: when visibility improvement stalls ─

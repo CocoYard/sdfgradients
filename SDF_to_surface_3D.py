@@ -37,7 +37,7 @@ class Options:
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
 
-        self.tolerance = Tolerance()  # set it manually if you want to adjust the tolerance for clamping, e.g. based on the mean spacing of the input points
+        self.tolerance = None  # set it manually if you want to adjust the tolerance for clamping, e.g. based on the mean spacing of the input points
         self.degenerate_pts = None  # set it after get_visible_arcs, which is a dictionary: point index -> list of degenerate points (the angle points for short arcs)
         self.batch = None
         self.ngbrs_list = None
@@ -657,7 +657,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     os.makedirs(out_dir, exist_ok=True)
     recon = trimesh.Trimesh(vertices=verts, faces=faces)
     # fname = f'ours_{grid_len}_{iters}_clamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj' if options.clamp else f'ours_{grid_len}_{iters}_noclamp_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
-    clamp_str = 'clamp' if options.clamp else 'noclamp'
+    clamp_str = '_clamp' if options.clamp else ''
     mes_str = 'noMES' if options.use_MES == -1 else ('MESforce' if options.use_MES == 1 else 'MES')
     post_str = 'post' if options.post_processing else ''
     pair_str = '_pairLocal' if options.pair_local and options.interpolator_type == 'PU' else ''
@@ -676,7 +676,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     elif options.scatter:
         fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_scatter.obj'
     else:
-        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}.obj'
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{clamp_str}{pair_str}{post_str}.obj'
     # if options.use_gt_gradients:
     #     fname = f'ours_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
@@ -686,7 +686,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     if path_to_sdf is None:
         mesh_distances(recon, mesh, verbose=True)
 
-def check_mesh_error(dir_to_meshes, path_to_gt):
+def check_mesh_error(dir_to_meshes, path_to_gt, edge_chamfer=False):
     """ Compute the mesh distance (Hausdorff and Chamfer) between meshes in dir_to_meshes and the ground truth mesh at path_to_gt. """
     import trimesh, os
     gt_mesh = trimesh.load(path_to_gt, force='mesh')
@@ -699,12 +699,18 @@ def check_mesh_error(dir_to_meshes, path_to_gt):
     meshes = os.listdir(dir_to_meshes)
     meshes.sort()
     print(f"{os.path.basename(dir_to_meshes):<30}")
+    import edgeChamfer
     for mesh_file in meshes:
         if mesh_file.endswith('.obj'):
             mesh = trimesh.load(os.path.join(dir_to_meshes, mesh_file), force='mesh')
             haus, chamfer, f1 = mesh_distances(mesh, gt_mesh)
+            if edge_chamfer:
+                ecd, ef1 = edgeChamfer.compute_ecd(mesh, gt_mesh, sample_num=1000_000)
             print(f"{mesh_file:<50} against ground truth...", end='')
-            print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}  F1: {f1:.4f}")
+            if edge_chamfer:
+                print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}  F1: {f1:.4f}  EdgeChamfer: {ecd:.5f}  EdgeF1: {ef1:.4f}")
+            else:
+                print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}  F1: {f1:.4f}")
 
 def test_mc(options : Options, save_gtmesh=False):
     """
@@ -929,13 +935,18 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [30]:
-            options = Options(name='rings', grid_len=length, noise=0.001, )
-            plt = test_our_method(options, save_gtmesh=False)
-            test_rfta(options, screening_weight=10, parallel=False, force_cpu=True)
+        for length in [100]:
+                options = Options(name='fandisk', grid_len=length, export_short_arcs=False, use_MES=0, clamp=True )
+                tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
+                recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
+                recon.export(f'out/{options.name}/ours_{length}_gtgrad.obj')
 
-
-        check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj')
+                # export_mes_spheres(options, radius_threshold=0.001)
+                # plt = test_our_method(options, save_gtmesh=False)
+                # test_rfta(options, screening_weight=10, parallel=True)
+                # test_mes(options, save_gtmesh=False, screening_weight=1)
+                # test_mc(options)
+        check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=True)
 
     elapsed = time.perf_counter() - t0
     print(f"  ⏱  {'Total execution time':<30} {elapsed:>7.2f} s")

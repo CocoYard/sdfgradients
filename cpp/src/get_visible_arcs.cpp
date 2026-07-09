@@ -25,7 +25,7 @@ namespace sphere_exposed_core {
 namespace sdf {
 using clk = std::chrono::steady_clock;
 
-auto ms_since = [](const clk::time_point& t) {
+static auto ms_since = [](const clk::time_point& t) {
     return std::chrono::duration<double, std::milli>(clk::now() - t).count();
 };
 
