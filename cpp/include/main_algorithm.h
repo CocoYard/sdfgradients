@@ -2,6 +2,7 @@
 
 #include "types.h"
 #include "interpolator.h"
+#include "get_visible_arcs.h"
 #include <Eigen/Dense>
 #include <memory>
 
@@ -20,13 +21,6 @@ namespace sdf {
 /// @param options     algorithm parameters (modified in-place with runtime state)
 /// @return            MainResult { projections (N,3), visibility_mask (N,) }
 MainResult main_algorithm(
-    const Eigen::MatrixXd& sdf_points,
-    const Eigen::VectorXd& sdf_values,
-    Options& options);
-
-/// Compute visible arcs and degenerate points for all spheres.
-/// Populates options.batch, options.degenerate_pts, options.ngbrs_list.
-void get_visible_arcs(
     const Eigen::MatrixXd& sdf_points,
     const Eigen::VectorXd& sdf_values,
     Options& options);

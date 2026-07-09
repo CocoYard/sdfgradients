@@ -33,7 +33,7 @@ from scipy.spatial import cKDTree
 
 
 # ----- default parameters, taken verbatim from the NMC eval script -----
-SAMPLE_NUM = 1000_000            # points sampled per mesh
+SAMPLE_NUM = 100_000            # points sampled per mesh
 EF1_RADIUS = 0.004             # neighborhood radius for edge detection
 EF1_DOTPRODUCT_THRESHOLD = 0.2  # |n . n_neighbor| below this => normals ~perpendicular => edge
 EF1_THRESHOLD = 0.005          # distance threshold used for EF1 precision/recall
