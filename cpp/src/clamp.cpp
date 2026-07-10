@@ -149,6 +149,27 @@ int clamp_gradients_to_arcs(
     SphereArcMap arc_map;
     arc_map.build(batch);
 
+    // Precompute per-sphere total exposed-arc length. Only spheres whose
+    // arcs are short get clamped; a long total arc means the projection
+    // lands on a genuine visible surface region, not a spurious tuck-in.
+    const double max_arc_len_to_clamp = 0.01;
+    std::vector<double> sphere_arc_len(N, 0.0);
+    {
+        int n_arcs = (int)batch.arc_sphere_idx.size();
+        for (int a = 0; a < n_arcs; a++) {
+            int s = batch.arc_sphere_idx[a];
+            if (s < 0 || s >= N) continue;
+            auto cap_it = cap_map.cap_rows.find(s);
+            if (cap_it == cap_map.cap_rows.end()) continue;
+            int arc_cap = batch.arc_cap_idx[a];
+            if (arc_cap < 0 || arc_cap >= (int)cap_it->second.size()) continue;
+            int cap_row = cap_it->second[arc_cap];
+            double R = batch.cap_radii(cap_row);
+            double span = batch.arc_end[a] - batch.arc_start[a];
+            sphere_arc_len[s] += span * R;
+        }
+    }
+
     // Compute all projections
     Eigen::MatrixXd projections(N, 3);
     #pragma omp parallel for schedule(static)
@@ -165,6 +186,8 @@ int clamp_gradients_to_arcs(
     for (int i = 0; i < N; i++) {
         // Skip degenerate-arc points
         if (degenerate_pts.count(i)) continue;
+        // Skip spheres whose total exposed arc is long — only clamp short-arc spheres
+        if (sphere_arc_len[i] > max_arc_len_to_clamp) continue;
 
         double pix = projections(i, 0), piy = projections(i, 1), piz = projections(i, 2);
         // Fast path: does any of the 2048 curated neighbors contain proj(i)?
@@ -178,6 +201,9 @@ int clamp_gradients_to_arcs(
             // is inconclusive — occluder may be outside the curated list).
             bvh_fallbacks.fetch_add(1, std::memory_order_relaxed);
             inside = bvh.point_inside_any(pix, piy, piz, 0, /*exclude_idx=*/i);
+            if (inside) {
+                debug_cnt++;
+            }
         }
         if (!inside) continue;
 
@@ -187,7 +213,7 @@ int clamp_gradients_to_arcs(
         arc_queries.fetch_add(1, std::memory_order_relaxed);
         query_closest_fast(projections.row(i).transpose(), batch, i, cap_map, arc_map, closest, distance);
 
-        if (distance < 0.001) {
+        if (distance < 0.01) {
         // if (true) {
             gradients.row(i) = (points.row(i).transpose() - closest).transpose() / (values(i) + 1e-10);
             clamped_cnt++;
@@ -204,7 +230,7 @@ int clamp_gradients_to_arcs(
               << " wall=" << std::chrono::duration<double>(t_loop1 - t_loop0).count() << "s\n";
 
     if (debug_cnt > 0)
-        std::cout << "\n there are " << debug_cnt << " samples without any arcs\n";
+        std::cout << "\n [Warning] there are " << debug_cnt << " samples whose RT neighbors are not enough for visibility testing\n";
     std::cout << " there are " << clamped_cnt << " samples clamped to arcs\n";
     return clamped_cnt;
 }
