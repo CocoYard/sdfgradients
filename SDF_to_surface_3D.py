@@ -946,16 +946,17 @@ if __name__ == "__main__":
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
         for length in [20]:
-                options = Options(name='bunny', grid_len=length, use_MES=-1, clamp=True, noise=0.02, reg=1e-5)
+                options = Options(name='bunny', grid_len=length, use_MES=-1, clamp=True, reg=0)
+                options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
                 # recon.export(f'out/{options.name}/ours_{length}_gtgrad.obj')
 
                 # export_mes_spheres(options, radius_threshold=0.001)
                 plt = test_our_method(options, save_gtmesh=False)
-                # test_rfta(options, screening_weight=10, parallel=True)
-                # test_mes(options, save_gtmesh=False, screening_weight=1)
-                # test_mc(options)
+                test_rfta(options, screening_weight=10, parallel=True)
+                test_mes(options, save_gtmesh=False, screening_weight=1)
+                test_mc(options)
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=True)
 
     elapsed = time.perf_counter() - t0
