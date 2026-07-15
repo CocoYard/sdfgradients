@@ -170,7 +170,6 @@ struct Tolerances {
     double interval_eps;
     double degen_tol;
     double merge_tol;
-    double tangent_tol;
 };
 
 // Internal cap-dedup / degeneracy tolerances. Not exposed in the API
@@ -178,18 +177,14 @@ struct Tolerances {
 // (radians) and from each other:
 //   DEDUP_COS      : dimensionless, threshold on 1 - cos(angle between
 //                    cap normals). 1e-4 ≈ 0.81° — caps within this
-//                    angle and offset are treated as the same cap.
+//                    angle are parallel; only the tighter one is kept.
 //   DEDUP_LEN_FRAC : DIMENSIONLESS — fraction of the main sphere's
-//                    radius (mr). Every use is `DEDUP_LEN_FRAC * mr`,
-//                    so the effective length threshold scales with
-//                    sphere size and stays scale-invariant.
-//                    Applies to:
-//                      - cap-plane offset dedup (cap.d - caps[e].d)
-//                      - parallel-cut early-out where `c` is the
-//                        signed distance from host circle center to
-//                        the cutter plane; `c > DEDUP_LEN_FRAC * mr`
-//                        means the whole host circle is on the
-//                        covered side.
+//                    radius (mr), used as `DEDUP_LEN_FRAC * mr` so the
+//                    effective length threshold scales with sphere size.
+//                    Only use: the parallel-cut early-out where `c` is
+//                    the signed distance from host circle center to the
+//                    cutter plane; `c > DEDUP_LEN_FRAC * mr` means the
+//                    whole host circle is on the covered side.
 static constexpr double DEDUP_COS      = 1e-4;
 static constexpr double DEDUP_LEN_FRAC = 1e-4;
 
@@ -332,8 +327,12 @@ static int intersect_circle_with_plane(const Cap &circle_cap, const Cap &cutting
     double b = dot(cutting_cap.normal, circle_cap.local_v);
     double c_val = (cutting_cap.d - dot(cutting_cap.normal, circle_cap.circle_center)) / R;
 
+    // Parallel test at EPS10, not EPS: a, b are dot products of unit vectors
+    // whose rounding-noise floor is ~1e-16, and the ratio below divides by
+    // A_amp. Between 1e-14 and 1e-10 the division is ill-conditioned and
+    // alpha = atan2(b, a) is pure noise, so route that band here too.
     double A_amp = std::sqrt(a*a + b*b);
-    if (A_amp < EPS) return 0;
+    if (A_amp < EPS10) return 0;
 
     double ratio = c_val / A_amp;
     if (std::fabs(ratio) > 1.0 + EPS10) return 0;
@@ -504,7 +503,12 @@ static int compute_exposed_arcs_on_circle(int cap_idx, const Cap caps[],
         double c = -(other.d - dot(other.normal, host.circle_center));
 
         double A_line = std::sqrt(a*a + b*b);
-        if (A_line < EPS) {
+        // Parallel test at EPS10, not EPS: a, b are dot products of unit
+        // vectors (noise floor ~1e-16), and ratio below divides by A_line —
+        // in the 1e-14..1e-10 band that division is ill-conditioned and
+        // alpha = atan2(b, a) is rounding noise, so such near-parallel
+        // cutters must take this branch (sign-of-c logic, no division).
+        if (A_line < EPS10) {
             // Other cap's plane is parallel to host's circle plane (their
             // normals are (anti)parallel). Same-direction parallels would
             // have been collapsed at compute_one's dedup, so in practice
@@ -618,7 +622,7 @@ static int find_degen_pts(const Cap caps[],
 // Parameter glossary (used throughout this function and its helpers):
 //   mc       : main sphere center (the sphere whose exposed region we compute)
 //   mr       : main sphere radius — also the length scale for tolerances
-//              (DEDUP_LEN_FRAC, tangent_tol, etc.) so they stay scale-invariant
+//              (DEDUP_LEN_FRAC, etc.) so they stay scale-invariant
 //   oc       : neighbor (other) sphere centers, packed [x,y,z, x,y,z, ...]
 //   or_      : neighbor sphere radii
 //   n_others : number of neighbors
@@ -742,7 +746,7 @@ static void compute_one(
         // neighbor swallows us. Emit tangent point if applicable and
         // bail — exposed region is empty.
         if (cap.phi >= PI - EPS10) {
-            if (cap.containment_gap <= tol.tangent_tol && *out_npts < MAX_DEGEN_PTS) {
+            if (cap.containment_gap <= EPS10 && *out_npts < MAX_DEGEN_PTS) {
                 out_pts[(*out_npts)++] = mc - mr * cap.normal;
             }
             *out_ncaps = 0;
@@ -760,9 +764,8 @@ static void compute_one(
         for (int e = nc - 1; e >= 0; e--) {
             double d = dot(cap.normal, caps[e].normal);
             if (d > 1 - DEDUP_COS) {
-                if (std::fabs(cap.d - caps[e].d) < DEDUP_LEN_FRAC * mr) { dup = true; break; }
-                else if (cap.d > caps[e].d)                   { dup = true; break; }
-                else { replaced = e; break; }
+                if (cap.d >= caps[e].d) { dup = true; break; }  // existing cap is at least as tight
+                else                    { replaced = e; break; }
             }
         }
         if (prof) t_dedup_acc += now_sec() - _t_dd;
@@ -1006,10 +1009,10 @@ static void compute_one(
 void compute_exposed_batch(
     const double* centers, const double* radii, int n,
     const std::vector<std::vector<int>>& nbrs,
-    double interval_eps, double degen_tol, double merge_tol, double tangent_tol,
+    double interval_eps, double degen_tol, double merge_tol,
     sdf::Options::BatchData& out)
 {
-    Tolerances tol{interval_eps, degen_tol, merge_tol, tangent_tol};
+    Tolerances tol{interval_eps, degen_tol, merge_tol};
     const bool prof = sdf_batch_verbose();
     if (prof) {
         g_us_compute_one.store(0);
