@@ -7,6 +7,11 @@ from interpolation import Interpolator, PUInterpolator, DuchonInterpolator
 import time
 from util import mesh_distances
 
+# Seed for all randomness in generate_test_mesh_data (scatter sampling, noise).
+# __main__ overrides this; importers can set it via `sdf3d.seed = ...` like data_dir.
+# None = nondeterministic.
+seed = None
+
 class Options:
     def __init__(self, grid_len=20, gt_mesh=None, clamp=False, max_iters=10, name='horse', lr=0.2,
                  turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
@@ -87,6 +92,10 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noi
         The gradient vectors at each vertex.
     '''
     import trimesh
+    # All random draws below (scatter points, noise) come from this generator,
+    # seeded by the module-level `seed` (set in __main__, like data_dir).
+    # seed=None keeps the old nondeterministic behavior for importers.
+    rng = np.random.default_rng(seed)
 
     # Load the mesh
     mesh = trimesh.load(path_to_mesh)
@@ -111,7 +120,7 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noi
     points = np.vstack([X.ravel(), Y.ravel(), Z.ravel()]).T
     if scatter:
         # totally random points in the bounding box
-        points = np.random.uniform(bbox_min, bbox_max, (grid_len**3, 3))
+        points = rng.uniform(bbox_min, bbox_max, (grid_len**3, 3))
     # Find the closest points on the mesh surface
     V = np.asarray(mesh.vertices, dtype=np.float64)
     F = np.asarray(mesh.faces, dtype=np.int32)
@@ -127,7 +136,7 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noi
 
     # Add noise to the distances
     if noise > 0:
-        distances += np.random.normal(0, noise, distances.shape)
+        distances += rng.normal(0, noise, distances.shape)
 
     # Filter out points that are too close to the surface (within 0.1 units), also remove respective gradients
     mask = np.abs(distances) > 1e-8
@@ -670,7 +679,7 @@ def test_our_method(options : Options, save_gtmesh=False):
         post_str = 'odc'
     # fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}_lr{options.lr}.obj'
     if options.noise > 0:
-        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_noise{options.noise}.obj'
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_noise{options.noise}_reg{options.reg}.obj'
     elif options.bound < 1.0:
         fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_bound{options.bound}.obj'
     elif options.scatter:
@@ -911,6 +920,7 @@ def construct_mesh(tangent_pts, points, distances, useRBF : bool, options : Opti
 
 if __name__ == "__main__":
     t0 = time.perf_counter()
+    seed = 1
     batch = False
     data_dir = 'examples'
     if batch:
@@ -935,14 +945,14 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [100]:
-                options = Options(name='fandisk', grid_len=length, export_short_arcs=False, use_MES=0, clamp=True )
-                tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
-                recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
-                recon.export(f'out/{options.name}/ours_{length}_gtgrad.obj')
+        for length in [20]:
+                options = Options(name='bunny', grid_len=length, use_MES=-1, clamp=True, noise=0.02, reg=1e-5)
+                # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
+                # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
+                # recon.export(f'out/{options.name}/ours_{length}_gtgrad.obj')
 
                 # export_mes_spheres(options, radius_threshold=0.001)
-                # plt = test_our_method(options, save_gtmesh=False)
+                plt = test_our_method(options, save_gtmesh=False)
                 # test_rfta(options, screening_weight=10, parallel=True)
                 # test_mes(options, save_gtmesh=False, screening_weight=1)
                 # test_mc(options)
