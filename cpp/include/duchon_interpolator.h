@@ -63,7 +63,7 @@ private:
     bool trained_ = false;
     bool dedup_ = true;             // deduplicate fit() inputs (see set_dedup)
     double dist_threshold_ = 0.2;
-    double reg_ = 1e-5; // regularization
+    double reg_ = 0; // regularization
 };
 
 }  // namespace sdf

@@ -600,8 +600,8 @@ void export_projection_ply(
     write_ply_subset(sdf_points, projections, invis_idx,
                      100, 100, 100,   // SDF: gray
                      255, 50, 50,     // proj: red
-                     stem + "_ln.ply");
-    std::cout << "[export_projection_ply] " << stem << "_ln.ply"
+                     stem + "_invisible.ply");
+    std::cout << "[export_projection_ply] " << stem << "_invisible.ply"
               << "  (" << invis_idx.size() << " invisible pairs)\n";
 }
 

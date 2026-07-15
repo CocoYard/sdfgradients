@@ -93,7 +93,7 @@ private:
     std::vector<PatchBVHNode> patch_bvh_nodes_;
     std::vector<int> patch_bvh_leaves_;
     std::vector<double> patch_aabb_lo_, patch_aabb_hi_;  // flat 3*np
-    double reg_ = 1e-5;
+    double reg_ = 0;
 
     void build_patch_bvh();
     void query_patches_containing(
