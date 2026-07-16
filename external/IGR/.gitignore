@@ -1,0 +1,4 @@
+# Generated training outputs (checkpoints, plots) — not source
+exps/
+# IGR's bundled DFAUST pretrained models — unused by our reconstruction
+trained_models/
