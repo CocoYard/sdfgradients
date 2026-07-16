@@ -74,7 +74,7 @@ class NeuralSDF(nn.Module):
     def __init__(self, hidden=256, n_layers=6, n_freqs=6):
         super().__init__()
         self.n_freqs = n_freqs
-        in_dim = 3 + 3 * 2 * n_freqs  # xyz + sin/cos encodings
+        self.in_dim = in_dim = 3 + 3 * 2 * n_freqs  # xyz + sin/cos encodings
         self.skip_at = n_layers // 2
         layers = []
         dim = in_dim
@@ -105,6 +105,31 @@ class NeuralSDF(nn.Module):
             h = self.act(layer(h))
         return self.out(h).squeeze(-1)
 
+    @torch.no_grad()
+    def geometric_init(self, radius=0.5, center=(0.0, 0.0, 0.0)):
+        """SAL/IGR geometric initialization: f(x) ≈ ||x-center|| - radius at init
+        (an approximate sphere SDF). Required for the HotSpot / Eikonal mode,
+        whose losses are symmetric in sign(u) — the geometric init is what fixes
+        the interior as negative, so the sphere must be placed on the shape (pass
+        the mesh centroid). Fourier-encoding columns are zeroed so the initial
+        field depends only on the raw coordinates (smooth)."""
+        c = torch.tensor(center, dtype=self.layers[0].weight.dtype,
+                         device=self.layers[0].weight.device)
+        for i, lin in enumerate(self.layers):
+            out_dim = lin.weight.shape[0]
+            nn.init.constant_(lin.bias, 0.0)
+            nn.init.normal_(lin.weight, 0.0, np.sqrt(2.0 / out_dim))
+            if i == 0 and self.in_dim > 3:
+                lin.weight[:, 3:] = 0.0            # zero encoded input, keep raw xyz
+            if i == 0:
+                lin.bias.copy_(-(lin.weight[:, :3] @ c))  # center: W(x-center)
+        if self.in_dim > 3:
+            self.layers[self.skip_at].weight[:, -(self.in_dim - 3):] = 0.0
+        nn.init.normal_(self.out.weight,
+                        mean=np.sqrt(np.pi) / np.sqrt(self.out.weight.shape[1]),
+                        std=1e-4)
+        nn.init.constant_(self.out.bias, -radius)
+
 
 def _sample_training_points(mesh, n_surface=150_000, n_uniform=50_000, rng=None,
                             pad=0.1, near_sigmas=(0.005, 0.02, 0.08)):
@@ -125,58 +150,141 @@ def _sample_training_points(mesh, n_surface=150_000, n_uniform=50_000, rng=None,
     return points, mesh_sdf(mesh, points)
 
 
-def train_neural_sdf(path_to_mesh, outbase, retrain=False, n_steps=3000, batch_size=16384,
-                     lr=1e-3, hidden=256, n_layers=6, n_freqs=6, verbose=True):
-    """
-    Train (or load from cache) a NeuralSDF fitting the mesh at path_to_mesh.
-    Returns (model, mesh) where mesh is the normalized ground-truth mesh.
-    """
-    mesh = load_normalized_mesh(path_to_mesh)
-    device = _device()
-    model = NeuralSDF(hidden=hidden, n_layers=n_layers, n_freqs=n_freqs).to(device)
+def _grad(model, x):
+    """f(x) and ∇f(x) with create_graph=True so the Eikonal term is trainable."""
+    y = model(x)
+    g, = torch.autograd.grad(y.sum(), x, create_graph=True)
+    return y, g
 
-    os.makedirs(_CACHE_DIR, exist_ok=True)
-    ckpt_path = f'{_CACHE_DIR}/{outbase}_h{hidden}_l{n_layers}_f{n_freqs}.pt'
-    if os.path.exists(ckpt_path) and not retrain:
-        model.load_state_dict(torch.load(ckpt_path, map_location=device))
-        model.eval()
-        if verbose:
-            print(f"Loaded cached neural SDF from {ckpt_path}")
-        return model, mesh
 
-    rng = np.random.default_rng(seed)
-    torch.manual_seed(seed if seed is not None else np.random.SeedSequence().entropy % 2**31)
+def _train_hotspot(model, mesh, device, rng, n_steps, batch_size, lr, verbose,
+                   pad=0.1, near_sigmas=(0.01, 0.03, 0.08), lam0=5.0, lam1=50.0,
+                   w_b=20.0, w_e=0.5, w_h=0.5, p=1):
+    """HotSpot training (Wang et al., arXiv:2411.14628): boundary + Eikonal +
+    heat loss, using ONLY the mesh surface (the zero level set) — no ground-truth
+    signed-distance values anywhere off the surface.
 
-    timer = time.perf_counter()
-    pts_np, sdf_np = _sample_training_points(mesh, rng=rng)
-    if verbose:
-        print(f"  ⏱  {'GT SDF for training set':<30} {time.perf_counter() - timer:>7.2f} s "
-              f"({len(pts_np)} points)")
+    The heat term ½·E[e^{-2λ|u|}(‖∇u‖²+1)] is an asymptotically sufficient
+    condition for a true SDF (as λ→∞), which the plain Eikonal term lacks; that
+    sufficiency is what suppresses the spurious ghost interiors that Eikonal-only
+    training produces. No normals are used — the sign of the field comes from the
+    geometric initialization (sphere centered on the mesh centroid). λ is annealed
+    up and the heat integral is importance-sampled toward the surface."""
+    surf_np, _ = trimesh.sample.sample_surface(mesh, 200_000)
+    surf_np = np.asarray(surf_np, dtype=np.float64)
+    surf = torch.tensor(surf_np, dtype=torch.float32, device=device)
 
-    pts = torch.tensor(pts_np, dtype=torch.float32, device=device)
-    sdf = torch.tensor(sdf_np, dtype=torch.float32, device=device)
+    # off-surface pool: near-surface Gaussian shells (importance sampling toward
+    # the surface, where the heat weight has its mass) + uniform in the padded bbox
+    bbox_min = mesh.vertices.min(axis=0) - pad
+    bbox_max = mesh.vertices.max(axis=0) + pad
+    per = 80_000
+    pool = [surf_np[rng.integers(0, len(surf_np), per)] + rng.normal(0, s, (per, 3))
+            for s in near_sigmas]
+    pool.append(rng.uniform(bbox_min, bbox_max, (80_000, 3)))
+    off = torch.tensor(np.vstack(pool), dtype=torch.float32, device=device)
 
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=n_steps)
-    timer = time.perf_counter()
+    nb = batch_size // 2
     model.train()
     for step in range(n_steps):
-        idx = torch.randint(0, len(pts), (batch_size,), device=device)
-        pred = model(pts[idx])
-        loss = torch.mean(torch.abs(pred - sdf[idx]))  # L1 on signed distance
+        lam = lam0 + (lam1 - lam0) * step / max(1, n_steps - 1)
+        si = torch.randint(0, len(surf), (nb,), device=device)
+        oi = torch.randint(0, len(off), (nb,), device=device)
+        xs = surf[si].clone().requires_grad_(True)
+        xo = off[oi].clone().requires_grad_(True)
+        us, gs = _grad(model, xs)
+        uo, go = _grad(model, xo)
+
+        boundary = us.abs().pow(p).mean()                        # u=0 on surface
+        g_all = torch.cat([gs, go], dim=0)
+        eikonal = (g_all.norm(dim=1) - 1.0).abs().pow(p).mean()  # |∇u|=1
+        heat = 0.5 * (torch.exp(-2.0 * lam * uo.abs())
+                      * (go.norm(dim=1) ** 2 + 1.0)).mean()       # HotSpot Eq.7
+        loss = w_b * boundary + w_e * eikonal + w_h * heat
         opt.zero_grad()
         loss.backward()
         opt.step()
         sched.step()
-        if verbose and (step % 500 == 0 or step == n_steps - 1):
-            print(f"    step {step:>5d}  L1 loss {loss.item():.6f}")
+        if verbose and (step % 1000 == 0 or step == n_steps - 1):
+            print(f"    step {step:>5d}  λ {lam:5.1f}  boundary {boundary.item():.5f}  "
+                  f"eik {eikonal.item():.4f}  heat {heat.item():.4f}")
+
+
+def train_neural_sdf(path_to_mesh, outbase, mode='gt', retrain=False, n_steps=3000,
+                     batch_size=16384, lr=1e-3, hidden=256, n_layers=6, n_freqs=6,
+                     verbose=True):
+    """
+    Train (or load from cache) a NeuralSDF fitting the mesh at path_to_mesh.
+
+    mode:
+      'gt'      - regress the exact mesh SDF sampled in space (DeepSDF-style;
+                  the network sees ground-truth signed-distance values).
+      'hotspot' - HotSpot loss (boundary + Eikonal + heat, arXiv:2411.14628):
+                  trains from surface points only, with NO ground-truth SDF and
+                  NO normals. Fourier encoding is disabled and a geometric init
+                  is used, as required by the PDE-based losses.
+
+    Returns (model, mesh) where mesh is the normalized ground-truth mesh.
+    """
+    mesh = load_normalized_mesh(path_to_mesh)
+    device = _device()
+    # The PDE-based HotSpot loss fights Fourier features (high frequencies spawn
+    # ghost regions), so it uses plain coordinates like canonical IGR/HotSpot.
+    if mode == 'hotspot':
+        n_freqs = 0
+    model = NeuralSDF(hidden=hidden, n_layers=n_layers, n_freqs=n_freqs).to(device)
+
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    suffix = '' if mode == 'gt' else f'_{mode}'  # keep the gt cache name unchanged
+    ckpt_path = f'{_CACHE_DIR}/{outbase}{suffix}_h{hidden}_l{n_layers}_f{n_freqs}.pt'
+    if os.path.exists(ckpt_path) and not retrain:
+        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        model.eval()
+        if verbose:
+            print(f"Loaded cached neural SDF ({mode}) from {ckpt_path}")
+        return model, mesh
+
+    rng = np.random.default_rng(seed)
+    torch.manual_seed(seed if seed is not None else np.random.SeedSequence().entropy % 2**31)
+    timer = time.perf_counter()
+
+    if mode == 'hotspot':
+        centroid = np.asarray(mesh.vertices).mean(axis=0)
+        model.geometric_init(radius=0.3, center=tuple(centroid))
+        _train_hotspot(model, mesh, device, rng, max(n_steps, 10000),
+                       batch_size, lr, verbose)
+    else:  # 'gt'
+        pts_np, sdf_np = _sample_training_points(mesh, rng=rng)
+        if verbose:
+            print(f"  ⏱  {'GT SDF for training set':<30} {time.perf_counter() - timer:>7.2f} s "
+                  f"({len(pts_np)} points)")
+        pts = torch.tensor(pts_np, dtype=torch.float32, device=device)
+        sdf = torch.tensor(sdf_np, dtype=torch.float32, device=device)
+        opt = torch.optim.Adam(model.parameters(), lr=lr)
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=n_steps)
+        timer = time.perf_counter()
+        model.train()
+        for step in range(n_steps):
+            idx = torch.randint(0, len(pts), (batch_size,), device=device)
+            pred = model(pts[idx])
+            loss = torch.mean(torch.abs(pred - sdf[idx]))  # L1 on signed distance
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            if verbose and (step % 500 == 0 or step == n_steps - 1):
+                print(f"    step {step:>5d}  L1 loss {loss.item():.6f}")
+
     model.eval()
     if verbose:
-        print(f"  ⏱  {'Neural SDF training':<30} {time.perf_counter() - timer:>7.2f} s")
+        print(f"  ⏱  {'Neural SDF training (' + mode + ')':<30} "
+              f"{time.perf_counter() - timer:>7.2f} s")
 
     torch.save(model.state_dict(), ckpt_path)
     if verbose:
-        print(f"Saved neural SDF to {ckpt_path}")
+        print(f"Saved neural SDF ({mode}) to {ckpt_path}")
     return model, mesh
 
 
