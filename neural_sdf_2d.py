@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 
 seed = None
-_CACHE_DIR = 'out/neural_sdf'
+_CACHE_DIR = 'neural_sdf'
 
 
 def _device():

@@ -25,3 +25,8 @@ gallery/out/*
 /logs
 /debug/data
 .claude
+# neural-SDF cache (checkpoints + isosurface objs) and IGR generated inputs
+/neural_sdf/
+external/IGR/data/
+external/IGR/code/reconstruction/setup_*.conf
+tmp.csv
