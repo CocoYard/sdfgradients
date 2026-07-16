@@ -373,29 +373,6 @@ def generate_neural_sdf_data(path_to_mesh, outbase, grid_len=10, save=False, noi
     return mesh, points, distances, gradients
 
 
-def save_neural_sdf_npz(path_to_mesh, outbase, grid_len=10, noise=0.0, bound=1.0,
-                        scatter=False, retrain=False, verbose=True, **train_kwargs):
-    """
-    Generate neural SDF samples and save them in the npz format that the
-    reconstruction pipeline already reads via options.path_to_sdf
-    (keys: points, sdf_values; gradients included as extra).
-
-    IMPORTANT: torch and sdf_cpp bundle conflicting libomp runtimes and crash when
-    loaded in the same process, so use this two-step flow: run this (torch process)
-    to write the npz, then run the pipeline (sdf_cpp process) with
-    options.path_to_sdf pointing at it. Also saves the normalized GT mesh to
-    normalized_examples/<outbase>.obj for error evaluation.
-    """
-    mesh, points, distances, gradients = generate_neural_sdf_data(
-        path_to_mesh, outbase, grid_len=grid_len, save=True, noise=noise, bound=bound,
-        scatter=scatter, retrain=retrain, verbose=verbose, **train_kwargs)
-    os.makedirs('out', exist_ok=True)
-    out_path = f'out/{outbase}_neural_sdf_{len(points)}.npz'
-    np.savez(out_path, points=points, sdf_values=distances, gradients=gradients)
-    print(f"Saved neural SDF samples to {out_path}")
-    return out_path
-
-
 def export_neural_marching_cubes(model, outpath, resolution=128, pad=0.1, level=0.0):
     """Marching cubes directly on the neural field, for a visual sanity check of
     how well the network fits the mesh."""
@@ -413,27 +390,24 @@ def export_neural_marching_cubes(model, outpath, resolution=128, pad=0.1, level=
 
 
 if __name__ == "__main__":
+    # Train (or refresh) the cached neural field for one mesh. The reconstruction
+    # pipeline loads these weights in-process, so this is only for (re)training and
+    # an optional marching-cubes sanity check of the raw field.
+    import argparse
+    ap = argparse.ArgumentParser(description="Train/cache a neural SDF for a mesh.")
+    ap.add_argument('--name', default='bunny', help='examples/<name>.obj')
+    ap.add_argument('--mode', default='hotspot', choices=['gt', 'hotspot'])
+    ap.add_argument('--retrain', action='store_true', help='retrain even if cached')
+    ap.add_argument('--mc', type=int, default=128,
+                    help='marching-cubes resolution for a sanity export (0 = skip)')
+    args = ap.parse_args()
+
     seed = 1
-    name = 'bunny'
     t0 = time.perf_counter()
-    mesh, points, distances, gradients = generate_neural_sdf_data(
-        f'examples/{name}.obj', name, grid_len=20, retrain=False)
-    print(f"points {points.shape}, distances {distances.shape}, gradients {gradients.shape}")
-
-    # save npz for the reconstruction pipeline (separate process, see save_neural_sdf_npz)
-    save_neural_sdf_npz(f'examples/{name}.obj', name, grid_len=20, verbose=False)
-
-    # sanity check: marching cubes on the raw neural field
-    model, _ = train_neural_sdf(f'examples/{name}.obj', name, verbose=False)
-    export_neural_marching_cubes(model, f'out/neural_sdf/{name}_mc128.obj', resolution=128)
-
-    # compare gradient direction with GT (closest-point direction)
-    V = np.asarray(mesh.vertices, dtype=np.float64)
-    F = np.asarray(mesh.faces, dtype=np.int32)
-    _, _, closest = igl.point_mesh_squared_distance(points, V, F)
-    gt_dir = points - closest
-    gt_dir /= np.maximum(np.linalg.norm(gt_dir, axis=1, keepdims=True), 1e-12)
-    gt_dir *= np.sign(mesh_sdf(mesh, points))[:, None]
-    cos = np.abs(np.sum(gradients * gt_dir, axis=1))
-    print(f"gradient alignment |cos|: mean {cos.mean():.4f}  min {cos.min():.4f}")
+    model, mesh = train_neural_sdf(f'examples/{args.name}.obj', args.name,
+                                   mode=args.mode, retrain=args.retrain)
+    if args.mc:
+        export_neural_marching_cubes(
+            model, f'{_CACHE_DIR}/{args.name}_{args.mode}_mc{args.mc}.obj',
+            resolution=args.mc)
     print(f"  ⏱  {'Total':<30} {time.perf_counter() - t0:>7.2f} s")
