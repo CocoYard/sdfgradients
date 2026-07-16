@@ -1,4 +1,9 @@
-import trimesh, os
+import os
+# torch (pulled in lazily via neural_sdf) and sdf_cpp each bundle their own
+# libomp; without this the second one to initialize aborts (OMP Error #15). Set
+# before anything can import torch so the neural-SDF source can run in-process.
+os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+import trimesh
 import gpytoolbox as gpy
 import igl
 import numpy as np
@@ -53,6 +58,10 @@ class Options:
 
         # never used
         self.path_to_sdf = None # set it manually to avoid accidentally loading old data, e.g. f'out/{name}_sdf_{grid_len**3}.npz'
+        # Source the SDF from a neural field trained on the obj, computed in-process
+        # (no npz round-trip). None = exact mesh SDF; 'gt' or 'hotspot' = neural.
+        self.neural_sdf = None
+        self.neural_retrain = False  # retrain the neural field instead of using the cached weights
         # self.turn_off_projection = turn_off_projection  # this means only interpolating SDF values without projection or optimization
     def print(self):
         print(f"Options: grid_len={self.grid_len}, name={self.name},"
@@ -604,6 +613,17 @@ def test_our_method(options : Options, save_gtmesh=False):
         data = np.load(path_to_sdf)
         points = data['points']
         distances = data['sdf_values']
+    elif options.neural_sdf is not None:
+        # Source the SDF from a neural field trained on the obj, in-process — no
+        # npz round-trip. torch and sdf_cpp coexist thanks to KMP_DUPLICATE_LIB_OK
+        # (set at module import). options.neural_sdf selects the training mode.
+        from neural_sdf import generate_neural_sdf_data
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, _ = generate_neural_sdf_data(
+            path_to_obj, base_name, grid_len=grid_len, mode=options.neural_sdf,
+            noise=options.noise, bound=options.bound, scatter=options.scatter,
+            retrain=options.neural_retrain, verbose=options.verbose)
+        options.gt_mesh = mesh  # exact mesh kept for error evaluation
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
         mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise, bound=options.bound, scatter=options.scatter)  # Generate new data with 4096 points
