@@ -22,7 +22,7 @@ class Options:
                  turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
                 use_MES=0, post_processing=False, iter_gradient_finding='optimize', verbose=True,
-                pair_local=False, noise=0, bound=1, scatter=False):
+                pair_local=False, noise=0, bound=1, scatter=False, neural_sdf=None):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -60,7 +60,7 @@ class Options:
         self.path_to_sdf = None # set it manually to avoid accidentally loading old data, e.g. f'out/{name}_sdf_{grid_len**3}.npz'
         # Source the SDF from a neural field trained on the obj, computed in-process
         # (no npz round-trip). None = exact mesh SDF; 'gt' or 'hotspot' = neural.
-        self.neural_sdf = None
+        self.neural_sdf = neural_sdf
         self.neural_retrain = False  # retrain the neural field instead of using the cached weights
         # self.turn_off_projection = turn_off_projection  # this means only interpolating SDF values without projection or optimization
     def print(self):
@@ -230,7 +230,7 @@ def test_mesh(grid_len=20, path_to_sdf=None, path_to_obj=None, save_gtmesh=True)
     mesh_distances(recon, mesh, verbose=True)
     return plt
 
-def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, force_cpu=False):
+def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, force_cpu=False, sdf=None):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -241,6 +241,8 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, fo
         data = np.load(path_to_sdf)
         points = data['points']
         distances = data['sdf_values']
+    elif sdf is not None:
+        points, distances = sdf
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
         mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise, bound=options.bound)  # Generate new data with 4096 points
@@ -281,7 +283,7 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, fo
     filtered.export(f'{out_dir}/' + fname)
     print(f"Exported: {out_dir}/" + fname + f"  (kept {len(kept)}/{len(components)} components, {len(filtered.faces)} faces out of {len(Fr)})")
 
-def test_mes(options, save_gtmesh=False, screening_weight=10):
+def test_mes(options, save_gtmesh=False, screening_weight=10, sdf=None):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -292,6 +294,8 @@ def test_mes(options, save_gtmesh=False, screening_weight=10):
         data = np.load(path_to_sdf)
         points = data['points']
         distances = data['sdf_values']
+    elif sdf is not None:
+        points, distances = sdf
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
         mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, bound=options.bound)  # Generate new data with 4096 points
@@ -616,12 +620,16 @@ def test_our_method(options : Options, save_gtmesh=False):
     elif options.neural_sdf is not None:
         # Source the SDF from a neural field trained on the obj, in-process — no
         # npz round-trip. torch and sdf_cpp coexist thanks to KMP_DUPLICATE_LIB_OK
-        # (set at module import). options.neural_sdf selects the training mode.
+        # (set at module import). options.neural_sdf selects the mode:
+        #   'gt' / 'mesh' / 'pc' / 'igr'  (see neural_sdf.train_neural_sdf).
+        # No artificial noise is injected: the neural field is itself the
+        # imperfect (learned, smoothed) SDF, which is the point of the test. The
+        # exact mesh is kept for error evaluation.
         from neural_sdf import generate_neural_sdf_data
         base_name = path_to_obj.split('/')[-1].split('.')[0]
         mesh, points, distances, _ = generate_neural_sdf_data(
             path_to_obj, base_name, grid_len=grid_len, mode=options.neural_sdf,
-            noise=options.noise, bound=options.bound, scatter=options.scatter,
+            bound=options.bound, scatter=options.scatter,
             retrain=options.neural_retrain, verbose=options.verbose)
         options.gt_mesh = mesh  # exact mesh kept for error evaluation
     else:
@@ -714,6 +722,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     # when loading cached SDF (e.g. run_baseline) there is no GT mesh in scope.
     if path_to_sdf is None:
         mesh_distances(recon, mesh, verbose=True)
+    return points, distances
 
 def check_mesh_error(dir_to_meshes, path_to_gt, edge_chamfer=False):
     """ Compute the mesh distance (Hausdorff and Chamfer) between meshes in dir_to_meshes and the ground truth mesh at path_to_gt. """
@@ -741,7 +750,7 @@ def check_mesh_error(dir_to_meshes, path_to_gt, edge_chamfer=False):
             else:
                 print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}  F1: {f1:.4f}")
 
-def test_mc(options : Options, save_gtmesh=False):
+def test_mc(options : Options, save_gtmesh=False, sdf=None):
     """
     Test function to demonstrate the process of loading SDF data, fitting an interpolator, and visualizing the results by Marching Cubes.
     e.g. path_to_sdf='out/bunny_sdf_1000.npz', path_to_obj='examples/bunny.obj')
@@ -756,6 +765,8 @@ def test_mc(options : Options, save_gtmesh=False):
         data = np.load(path_to_sdf)
         points = data['points']
         distances = data['sdf_values']
+    elif sdf is not None:
+        points, distances = sdf
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
         mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
@@ -965,18 +976,18 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [20]:
-                options = Options(name='bunny', grid_len=length, use_MES=-1, clamp=True, reg=0)
-                options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
+        for length in [100]:
+                options = Options(name='eiffel', grid_len=length, use_MES=-1, clamp=True, neural_sdf='igr')
+                # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
                 # recon.export(f'out/{options.name}/ours_{length}_gtgrad.obj')
 
                 # export_mes_spheres(options, radius_threshold=0.001)
-                plt = test_our_method(options, save_gtmesh=False)
-                test_rfta(options, screening_weight=10, parallel=True)
-                test_mes(options, save_gtmesh=False, screening_weight=1)
-                test_mc(options)
+                points, distances = test_our_method(options, save_gtmesh=False)
+                # test_rfta(options, screening_weight=10, parallel=True)
+                test_mes(options, save_gtmesh=False, screening_weight=1, sdf=(points, distances))
+                test_mc(options, sdf=(points, distances))
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=True)
 
     elapsed = time.perf_counter() - t0
