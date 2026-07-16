@@ -243,6 +243,21 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, fo
         distances = data['sdf_values']
     elif sdf is not None:
         points, distances = sdf
+    elif options.neural_sdf is not None:
+        # Source the SDF from a neural field trained on the obj, in-process — no
+        # npz round-trip. torch and sdf_cpp coexist thanks to KMP_DUPLICATE_LIB_OK
+        # (set at module import). options.neural_sdf selects the mode:
+        #   'gt' / 'mesh' / 'pc' / 'igr'  (see neural_sdf.train_neural_sdf).
+        # No artificial noise is injected: the neural field is itself the
+        # imperfect (learned, smoothed) SDF, which is the point of the test. The
+        # exact mesh is kept for error evaluation.
+        from neural_sdf import generate_neural_sdf_data
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, _ = generate_neural_sdf_data(
+            path_to_obj, base_name, grid_len=grid_len, mode=options.neural_sdf,
+            bound=options.bound, scatter=options.scatter,
+            retrain=options.neural_retrain, verbose=options.verbose)
+        options.gt_mesh = mesh  # exact mesh kept for error evaluation
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
         mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise, bound=options.bound)  # Generate new data with 4096 points
@@ -296,6 +311,21 @@ def test_mes(options, save_gtmesh=False, screening_weight=10, sdf=None):
         distances = data['sdf_values']
     elif sdf is not None:
         points, distances = sdf
+    elif options.neural_sdf is not None:
+        # Source the SDF from a neural field trained on the obj, in-process — no
+        # npz round-trip. torch and sdf_cpp coexist thanks to KMP_DUPLICATE_LIB_OK
+        # (set at module import). options.neural_sdf selects the mode:
+        #   'gt' / 'mesh' / 'pc' / 'igr'  (see neural_sdf.train_neural_sdf).
+        # No artificial noise is injected: the neural field is itself the
+        # imperfect (learned, smoothed) SDF, which is the point of the test. The
+        # exact mesh is kept for error evaluation.
+        from neural_sdf import generate_neural_sdf_data
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, _ = generate_neural_sdf_data(
+            path_to_obj, base_name, grid_len=grid_len, mode=options.neural_sdf,
+            bound=options.bound, scatter=options.scatter,
+            retrain=options.neural_retrain, verbose=options.verbose)
+        options.gt_mesh = mesh  # exact mesh kept for error evaluation
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
         mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, bound=options.bound)  # Generate new data with 4096 points
@@ -767,6 +797,21 @@ def test_mc(options : Options, save_gtmesh=False, sdf=None):
         distances = data['sdf_values']
     elif sdf is not None:
         points, distances = sdf
+    elif options.neural_sdf is not None:
+        # Source the SDF from a neural field trained on the obj, in-process — no
+        # npz round-trip. torch and sdf_cpp coexist thanks to KMP_DUPLICATE_LIB_OK
+        # (set at module import). options.neural_sdf selects the mode:
+        #   'gt' / 'mesh' / 'pc' / 'igr'  (see neural_sdf.train_neural_sdf).
+        # No artificial noise is injected: the neural field is itself the
+        # imperfect (learned, smoothed) SDF, which is the point of the test. The
+        # exact mesh is kept for error evaluation.
+        from neural_sdf import generate_neural_sdf_data
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, _ = generate_neural_sdf_data(
+            path_to_obj, base_name, grid_len=grid_len, mode=options.neural_sdf,
+            bound=options.bound, scatter=options.scatter,
+            retrain=options.neural_retrain, verbose=options.verbose)
+        options.gt_mesh = mesh  # exact mesh kept for error evaluation
     else:
         base_name = path_to_obj.split('/')[-1].split('.')[0]
         mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh)  # Generate new data with 4096 points
@@ -976,8 +1021,8 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [100]:
-                options = Options(name='eiffel', grid_len=length, use_MES=-1, clamp=True, neural_sdf='igr')
+        for length in [50]:
+                options = Options(name='rings', grid_len=length, use_MES=-1, clamp=True, neural_sdf='mesh')
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
@@ -985,9 +1030,9 @@ if __name__ == "__main__":
 
                 # export_mes_spheres(options, radius_threshold=0.001)
                 points, distances = test_our_method(options, save_gtmesh=False)
-                # test_rfta(options, screening_weight=10, parallel=True)
-                test_mes(options, save_gtmesh=False, screening_weight=1, sdf=(points, distances))
-                test_mc(options, sdf=(points, distances))
+                test_rfta(options, screening_weight=10, parallel=True, sdf=(points, distances))
+                test_mc(options, save_gtmesh=False, sdf=(points, distances))
+                test_mes(options, save_gtmesh=False, screening_weight=10, sdf=(points, distances))
         check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=True)
 
     elapsed = time.perf_counter() - t0
