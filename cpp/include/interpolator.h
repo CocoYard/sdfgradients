@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <string>
 #include <memory>
+#include <vector>
 
 namespace sdf {
 
@@ -61,6 +62,10 @@ public:
     /// Find best gradient directions via Fibonacci init + projected gradient
     /// descent on S². Uses predict_gradients() for analytic ∇sdf instead of
     /// sampling many directions per refinement step.
+    /// `frozen` (N,) optional: rows with frozen[i]=1 (degenerate/short-arc
+    /// points whose update the caller reverts anyway) are excluded from the
+    /// search entirely — no predict()/predict_gradients() cost — and returned
+    /// as their initial_guess row (NaN if no initial_guess).
     Eigen::MatrixXd optimize_best_gradients(
         const Eigen::MatrixXd& points,
         const Eigen::VectorXd& sdf_values,
@@ -68,7 +73,8 @@ public:
         int optim_steps  = 10,
         double lr        = 0.2,
         const Eigen::MatrixXd* initial_guess = nullptr,
-        int chunk_size   = 200) const;
+        int chunk_size   = 200,
+        const std::vector<char>* frozen = nullptr) const;
 
     /// Extract an isosurface of this interpolator via libigl's marching cubes.
     /// Samples the implicit field on a regular (nx × ny × nz) grid covering

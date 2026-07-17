@@ -24,6 +24,12 @@ Eigen::MatrixXd iterative_projection_3d(
 {
     int N = (int)points.rows();
     Eigen::MatrixXd gradients = init_gradients;
+    // Degenerate points never keep an optimized gradient (their update is
+    // reverted in the skip loop below), so exclude them from the optimizer
+    // up front — saves their share of the RBF evaluations.
+    std::vector<char> frozen(N, 0);
+    for (const auto& [i, pts] : options.degenerate_pts)
+        if (i >= 0 && i < N) frozen[i] = 1;
     bool clamp_used = false;
     bool MES_used = false;
     Eigen::VectorXi vis_cached;
@@ -48,7 +54,8 @@ Eigen::MatrixXd iterative_projection_3d(
         Eigen::MatrixXd new_gradients;
         if (options.iter_gradient_finding == "optimize") {
             new_gradients = interpolator.optimize_best_gradients(
-                points, values, num_coarse, optim_steps, lr, &gradients);
+                points, values, num_coarse, optim_steps, lr, &gradients,
+                /*chunk_size=*/200, &frozen);
         } else {
             new_gradients = interpolator.sample_best_gradients(
                 points, values, num_coarse, /*refine_steps=*/4, /*num_refine=*/5, &gradients);

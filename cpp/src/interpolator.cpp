@@ -317,8 +317,42 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
     int optim_steps,
     double lr,
     const Eigen::MatrixXd* initial_guess,
-    int chunk_size) const
+    int chunk_size,
+    const std::vector<char>* frozen) const
 {
+    // Frozen rows: gather the active points, recurse on the compact arrays
+    // (frozen = nullptr, so no second gather), scatter the refined rows back.
+    // Frozen points keep their initial_guess gradient and never reach
+    // predict()/predict_gradients().
+    if (frozen) {
+        int N_all = (int)points.rows();
+        std::vector<int> act;
+        act.reserve(N_all);
+        for (int i = 0; i < N_all; i++)
+            if (i >= (int)frozen->size() || !(*frozen)[i]) act.push_back(i);
+        int M = (int)act.size();
+        if (M < N_all) {
+            Eigen::MatrixXd P(M, 3);
+            Eigen::VectorXd S(M);
+            Eigen::MatrixXd G(initial_guess ? M : 0, 3);
+            for (int k = 0; k < M; k++) {
+                P.row(k) = points.row(act[k]);
+                S(k) = sdf_values(act[k]);
+                if (initial_guess) G.row(k) = initial_guess->row(act[k]);
+            }
+            Eigen::MatrixXd active_dirs = optimize_best_gradients(
+                P, S, num_coarse, optim_steps, lr,
+                initial_guess ? &G : nullptr, chunk_size);
+            Eigen::MatrixXd out = initial_guess
+                ? *initial_guess
+                : Eigen::MatrixXd::Constant(
+                      N_all, 3, std::numeric_limits<double>::quiet_NaN());
+            for (int k = 0; k < M; k++)
+                out.row(act[k]) = active_dirs.row(k);
+            return out;
+        }
+    }
+
     int N = (int)points.rows();
 
     // Bump to predict thread count for the duration: surrounding

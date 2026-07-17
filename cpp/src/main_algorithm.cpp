@@ -360,7 +360,7 @@ MainResult main_algorithm(
             *interpolator, options,
             options.max_iters,
             /*num_coarse=*/64,
-            /*optim_steps=*/10,
+            /*optim_steps=*/4,
             /*lr=*/options.lr);
         if (options.verbose)
             std::cout << "[main_algorithm] iterative_projection_3d: "
