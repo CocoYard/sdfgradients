@@ -265,7 +265,9 @@ def test_rfta(options, save_gtmesh=False, screening_weight=10, parallel=True, fo
     import trimesh, os
     out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
     os.makedirs(out_dir, exist_ok=True)
+    timer = time.perf_counter()
     Vr, Fr = gpy.reach_for_the_arcs(points, distances, screening_weight=screening_weight, parallel=parallel, force_cpu=force_cpu)
+    print(f"  ⏱  {'RFTA reconstruction':<30} {time.perf_counter() - timer:>7.2f} s")
     rfta = trimesh.Trimesh(vertices=Vr, faces=Fr)
     # Keep only components whose mean coordinates are fully inside the input bbox and 
     # percent of coordinates inside the input bbox is at least 50%, so PSR "bubble"
@@ -336,7 +338,9 @@ def test_mes(options, save_gtmesh=False, screening_weight=10, sdf=None):
     _here = os.path.dirname(__file__)
     sys.path.insert(0, os.path.join(_here, 'cpp', 'build', '_deps', 'mes_fork-src'))
     from cgal.EmptySpheresReconstruction import MESReconstruction
+    timer = time.perf_counter()
     R_cgal = MESReconstruction(points, distances,screening_weight=screening_weight)
+    print(f"  ⏱  {'MES reconstruction':<30} {time.perf_counter() - timer:>7.2f} s")
 
     fname = f'mes_{grid_len}.obj'
     if options.bound < 1.0:
@@ -1021,8 +1025,8 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [50]:
-                options = Options(name='rings', grid_len=length, use_MES=-1, clamp=True, neural_sdf='mesh')
+        for length in [100]:
+                options = Options(name='rings', grid_len=length, use_MES=-1, clamp=True)
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
@@ -1031,9 +1035,9 @@ if __name__ == "__main__":
                 # export_mes_spheres(options, radius_threshold=0.001)
                 points, distances = test_our_method(options, save_gtmesh=False)
                 test_rfta(options, screening_weight=10, parallel=True, sdf=(points, distances))
-                test_mc(options, save_gtmesh=False, sdf=(points, distances))
+                # test_mc(options, save_gtmesh=False, sdf=(points, distances))
                 test_mes(options, save_gtmesh=False, screening_weight=10, sdf=(points, distances))
-        check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=True)
+        # check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=True)
 
     elapsed = time.perf_counter() - t0
     print(f"  ⏱  {'Total execution time':<30} {elapsed:>7.2f} s")
