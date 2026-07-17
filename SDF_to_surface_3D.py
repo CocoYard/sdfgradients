@@ -59,7 +59,7 @@ class Options:
         # never used
         self.path_to_sdf = None # set it manually to avoid accidentally loading old data, e.g. f'out/{name}_sdf_{grid_len**3}.npz'
         # Source the SDF from a neural field trained on the obj, computed in-process
-        # (no npz round-trip). None = exact mesh SDF; 'gt' or 'hotspot' = neural.
+        # (no npz round-trip). None = exact mesh SDF; 'gt' / 'pc' / 'igr' = neural.
         self.neural_sdf = neural_sdf
         self.neural_retrain = False  # retrain the neural field instead of using the cached weights
         # self.turn_off_projection = turn_off_projection  # this means only interpolating SDF values without projection or optimization
@@ -621,7 +621,7 @@ def test_our_method(options : Options, save_gtmesh=False):
         # Source the SDF from a neural field trained on the obj, in-process — no
         # npz round-trip. torch and sdf_cpp coexist thanks to KMP_DUPLICATE_LIB_OK
         # (set at module import). options.neural_sdf selects the mode:
-        #   'gt' / 'mesh' / 'pc' / 'igr'  (see neural_sdf.train_neural_sdf).
+        #   'gt' / 'pc' / 'igr'  (see neural_sdf.train_neural_sdf).
         # No artificial noise is injected: the neural field is itself the
         # imperfect (learned, smoothed) SDF, which is the point of the test. The
         # exact mesh is kept for error evaluation.

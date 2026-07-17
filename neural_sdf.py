@@ -270,27 +270,28 @@ def _train_igr(mesh, outbase, nepoch=10000, n_points=100_000, gpu='0',
     return model
 
 
-def train_neural_sdf(path_to_mesh, outbase, mode='mesh', retrain=False, n_steps=3000,
+def train_neural_sdf(path_to_mesh, outbase, mode='pc', retrain=False, n_steps=3000,
                      batch_size=16384, lr=1e-3, hidden=256, n_layers=6, n_freqs=6,
-                     n_pc=50_000, pc_noise=0.0, igr_nepoch=10000, verbose=True):
+                     n_pc=200_000, pc_noise=0.0, igr_nepoch=10000, verbose=True):
     """
     Train (or load from cache) a neural SDF for the mesh at path_to_mesh.
 
     mode:
-      'gt'   - regress the exact mesh SDF sampled in space (DeepSDF-style; the
-               network sees ground-truth signed-distance values). Softplus MLP + PE.
-      'mesh' - HotSpot loss (boundary + Eikonal + heat, arXiv:2411.14628) trained
-               from mesh surface samples: NO ground-truth SDF, NO normals. Plain
-               coordinates + geometric init.
-      'pc'   - same HotSpot loss but trained from a point cloud sampled off the
-               mesh (the realistic-scan scenario; pc_noise simulates scan noise).
-      'igr'  - IGR (Gropp et al., ICML 2020) trained via the vendored external/IGR
-               from a points+normals cloud, driven as a subprocess.
+      'gt'  - regress the exact mesh SDF sampled in space (DeepSDF-style; the
+              network sees ground-truth signed-distance values). Softplus MLP + PE.
+      'pc'  - HotSpot loss (boundary + Eikonal + heat, arXiv:2411.14628) trained
+              from a point cloud sampled off the mesh: NO ground-truth SDF, NO
+              normals. Plain coordinates + geometric init. n_pc sets the sample
+              count and pc_noise the simulated scan noise — the defaults
+              (200k clean points) are ideal dense sampling; lower/noisier is the
+              realistic-scan scenario.
+      'igr' - IGR (Gropp et al., ICML 2020) trained via the vendored external/IGR
+              from a points+normals cloud, driven as a subprocess.
 
     Returns (model, mesh); model(x) -> (N,) SDF for every mode.
     """
-    if mode == 'hotspot':
-        mode = 'mesh'  # backward-compatible alias
+    if mode in ('mesh', 'hotspot'):
+        mode = 'pc'  # former names for the same HotSpot-from-surface-samples path
     mesh = load_normalized_mesh(path_to_mesh)
     device = _device()
 
@@ -310,15 +311,11 @@ def train_neural_sdf(path_to_mesh, outbase, mode='mesh', retrain=False, n_steps=
             lr=lr, hidden=hidden, n_layers=n_layers, verbose=verbose)
         return model, mesh
 
-    # 'gt' or 'mesh' : a NeuralSDF trained here. The PDE-based 'mesh' loss fights
-    # Fourier features (high frequencies spawn ghosts), so it uses plain coords.
-    if mode == 'mesh':
-        n_freqs = 0
+    # 'gt': a NeuralSDF regressed here on exact signed distances (Softplus MLP + PE).
     model = NeuralSDF(hidden=hidden, n_layers=n_layers, n_freqs=n_freqs).to(device)
 
     os.makedirs(_CACHE_DIR, exist_ok=True)
-    suffix = '' if mode == 'gt' else f'_{mode}'  # keep the gt cache name unchanged
-    ckpt_path = f'{_CACHE_DIR}/{outbase}{suffix}_h{hidden}_l{n_layers}_f{n_freqs}.pt'
+    ckpt_path = f'{_CACHE_DIR}/{outbase}_h{hidden}_l{n_layers}_f{n_freqs}.pt'
     if os.path.exists(ckpt_path) and not retrain:
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
         model.eval()
@@ -330,34 +327,26 @@ def train_neural_sdf(path_to_mesh, outbase, mode='mesh', retrain=False, n_steps=
     torch.manual_seed(seed if seed is not None else np.random.SeedSequence().entropy % 2**31)
     timer = time.perf_counter()
 
-    if mode == 'mesh':
-        model.geometric_init(radius=0.3, center=tuple(np.asarray(mesh.vertices).mean(axis=0)))
-        surf_np, _ = trimesh.sample.sample_surface(mesh, 200_000)
-        bbox_min = mesh.vertices.min(axis=0) - 0.1
-        bbox_max = mesh.vertices.max(axis=0) + 0.1
-        _train_hotspot(model, np.asarray(surf_np), bbox_min, bbox_max, device, rng,
-                       max(n_steps, 10000), batch_size, lr, verbose)
-    else:  # 'gt'
-        pts_np, sdf_np = _sample_training_points(mesh, rng=rng)
-        if verbose:
-            print(f"  ⏱  {'GT SDF for training set':<30} {time.perf_counter() - timer:>7.2f} s "
-                  f"({len(pts_np)} points)")
-        pts = torch.tensor(pts_np, dtype=torch.float32, device=device)
-        sdf = torch.tensor(sdf_np, dtype=torch.float32, device=device)
-        opt = torch.optim.Adam(model.parameters(), lr=lr)
-        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=n_steps)
-        timer = time.perf_counter()
-        model.train()
-        for step in range(n_steps):
-            idx = torch.randint(0, len(pts), (batch_size,), device=device)
-            pred = model(pts[idx])
-            loss = torch.mean(torch.abs(pred - sdf[idx]))  # L1 on signed distance
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            sched.step()
-            if verbose and (step % 500 == 0 or step == n_steps - 1):
-                print(f"    step {step:>5d}  L1 loss {loss.item():.6f}")
+    pts_np, sdf_np = _sample_training_points(mesh, rng=rng)
+    if verbose:
+        print(f"  ⏱  {'GT SDF for training set':<30} {time.perf_counter() - timer:>7.2f} s "
+              f"({len(pts_np)} points)")
+    pts = torch.tensor(pts_np, dtype=torch.float32, device=device)
+    sdf = torch.tensor(sdf_np, dtype=torch.float32, device=device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=n_steps)
+    timer = time.perf_counter()
+    model.train()
+    for step in range(n_steps):
+        idx = torch.randint(0, len(pts), (batch_size,), device=device)
+        pred = model(pts[idx])
+        loss = torch.mean(torch.abs(pred - sdf[idx]))  # L1 on signed distance
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        sched.step()
+        if verbose and (step % 500 == 0 or step == n_steps - 1):
+            print(f"    step {step:>5d}  L1 loss {loss.item():.6f}")
 
     model.eval()
     if verbose:
@@ -449,7 +438,7 @@ def generate_neural_sdf_data(path_to_mesh, outbase, grid_len=10, save=False, noi
     Drop-in replacement for SDF_to_surface_3D.generate_test_mesh_data, except the
     SDF values (and gradients) come from a neural field instead of the exact mesh
     distance. The neural field's mode is chosen via train_kwargs['mode'] and may be
-    'gt', 'mesh', 'pc', or 'igr' (see train_neural_sdf).
+    'gt', 'pc', or 'igr' (see train_neural_sdf).
 
     Returns:
     mesh: the normalized ground-truth mesh (for error evaluation)
@@ -533,7 +522,7 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Train/cache a neural SDF for a mesh.")
     ap.add_argument('--name', default='bunny', help='examples/<name>.obj')
-    ap.add_argument('--mode', default='mesh', choices=['gt', 'mesh', 'pc', 'igr'])
+    ap.add_argument('--mode', default='pc', choices=['gt', 'pc', 'igr'])
     ap.add_argument('--retrain', action='store_true', help='retrain even if cached')
     args = ap.parse_args()
 
