@@ -44,7 +44,7 @@ Eigen::VectorXi are_points_visible(
 Eigen::VectorXi are_points_visible(
     const Eigen::MatrixXd& query_points,
     const Eigen::VectorXd& /*sdf_values*/,
-    const std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
+    const std::vector<char>& frozen,
     const std::vector<std::vector<int>>& ngbrs_list,
     const SphereBVH& bvh,
     double epsilon,
@@ -60,7 +60,7 @@ Eigen::VectorXi are_points_visible(
 
     #pragma omp parallel for schedule(dynamic, 256)
     for (int i = 0; i < N; i++) {
-        if (degenerate_pts.count(i) > 0) continue;
+        if (i < (int)frozen.size() && frozen[i]) continue;
         if (query_points.row(i).array().isNaN().any()) {
             result(i) = 0;
             continue;

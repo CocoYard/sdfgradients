@@ -133,7 +133,7 @@ int clamp_gradients_to_arcs(
     const Eigen::MatrixXd& points,
     const Eigen::VectorXd& values,
     Eigen::MatrixXd& gradients,
-    const std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
+    const std::vector<char>& frozen,
     const Options::BatchData& batch,
     const std::vector<std::vector<int>>& ngbrs_list,
     const SphereBVH& bvh,
@@ -185,7 +185,7 @@ int clamp_gradients_to_arcs(
     #pragma omp parallel for reduction(+:clamped_cnt) schedule(dynamic, 1024)
     for (int i = 0; i < N; i++) {
         // Skip degenerate-arc points
-        if (degenerate_pts.count(i)) continue;
+        if (i < (int)frozen.size() && frozen[i]) continue;
         // Skip spheres whose total exposed arc is long — only clamp short-arc spheres
         if (sphere_arc_len[i] > max_arc_len_to_clamp) continue;
 

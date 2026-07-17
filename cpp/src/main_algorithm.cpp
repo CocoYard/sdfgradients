@@ -373,8 +373,11 @@ MainResult main_algorithm(
     for (int i = 0; i < N; i++)
         projections.row(i) = sdf_points.row(i) - sdf_values(i) * gradients.row(i);
 
+    std::vector<char> frozen(N, 0);
+    for (const auto& [di, dpts] : options.degenerate_pts)
+        if (di >= 0 && di < N) frozen[di] = 1;
     Eigen::VectorXi vis = are_points_visible(
-        projections, sdf_values, options.degenerate_pts,
+        projections, sdf_values, frozen,
         options.ngbrs_list, *options.sphere_bvh, 1e-8, options.verbose);
     if (options.verbose) {
         std::cout << "[main_algorithm] final projection + visibility: "

@@ -2,7 +2,6 @@
 
 #include <Eigen/Dense>
 #include <vector>
-#include <unordered_map>
 
 namespace sdf {
 
@@ -30,11 +29,12 @@ Eigen::VectorXi are_points_visible(
 /// in the neighbor list is always truly occluded; a miss only means the
 /// occluder (if any) is outside the curated list and must be confirmed
 /// against the full BVH.
-/// degenerate_pts entries are treated as visible (occluder check skipped).
+/// frozen[i]=1 points (degenerate/short-arc, mask built from
+/// options.degenerate_pts) are treated as visible (occluder check skipped).
 Eigen::VectorXi are_points_visible(
     const Eigen::MatrixXd& query_points,
     const Eigen::VectorXd& sdf_values,
-    const std::unordered_map<int, std::vector<Eigen::Vector3d>>& degenerate_pts,
+    const std::vector<char>& frozen,
     const std::vector<std::vector<int>>& ngbrs_list,
     const SphereBVH& bvh,
     double epsilon = 1e-8,

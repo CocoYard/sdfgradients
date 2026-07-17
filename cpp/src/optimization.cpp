@@ -73,7 +73,7 @@ Eigen::MatrixXd iterative_projection_3d(
         if (options.verbose)
             std::cout << "Checking visibility ...\n";
         auto _tv0 = std::chrono::steady_clock::now();
-        Eigen::VectorXi vis_new = are_points_visible(proj_new, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 0, options.verbose);
+        Eigen::VectorXi vis_new = are_points_visible(proj_new, values, frozen, options.ngbrs_list, *options.sphere_bvh, 0, options.verbose);
         t_loop_vis += std::chrono::duration<double>(std::chrono::steady_clock::now() - _tv0).count();
         Eigen::VectorXi vis_old;
         if (vis_cache_valid) {
@@ -83,7 +83,7 @@ Eigen::MatrixXd iterative_projection_3d(
             for (int i = 0; i < N; i++)
                 proj_old.row(i) = points.row(i) - values(i) * gradients.row(i);
             auto _tv1 = std::chrono::steady_clock::now();
-            vis_old = are_points_visible(proj_old, values, options.degenerate_pts, options.ngbrs_list, *options.sphere_bvh, 0, options.verbose);
+            vis_old = are_points_visible(proj_old, values, frozen, options.ngbrs_list, *options.sphere_bvh, 0, options.verbose);
             t_loop_vis += std::chrono::duration<double>(std::chrono::steady_clock::now() - _tv1).count();
         }
         // Don't update gradients that would make visible projections invisible
@@ -93,7 +93,7 @@ Eigen::MatrixXd iterative_projection_3d(
         Eigen::VectorXi vis_next(N);
         for (int i = 0; i < N; i++) {
             bool skip = (vis_old(i) && !vis_new(i));
-            if (options.degenerate_pts.count(i)) skip = true;
+            if (frozen[i]) skip = true;
             if (!options.turn_off_short_arcs) {
                 if (it == 0 && options.ngbrs_list[i].empty()) skip = true;
             }
@@ -143,7 +143,7 @@ Eigen::MatrixXd iterative_projection_3d(
                 int clamped_cnt = 0;
                 clamped_cnt = clamp_gradients_to_arcs(
                     points, values, new_gradients,
-                    options.degenerate_pts, options.batch,
+                    frozen, options.batch,
                     options.ngbrs_list, *options.sphere_bvh, options.tolerance);
                     sdf::restore_threads(_saved);    
                 clamp_used = true;
