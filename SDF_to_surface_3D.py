@@ -18,7 +18,7 @@ from util import mesh_distances
 seed = None
 
 class Options:
-    def __init__(self, grid_len=20, gt_mesh=None, clamp=False, max_iters=10, name='horse', lr=0.2,
+    def __init__(self, grid_len=20, gt_mesh=None, clamp=False, max_iters=10, name='horse', lr=0.2, optim_steps=5,
                  turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
                 use_MES=0, post_processing=False, iter_gradient_finding='optimize', verbose=True,
@@ -43,6 +43,7 @@ class Options:
         self.cpp_dc = cpp_dc
         self.verbose = verbose
         self.lr = lr
+        self.optim_steps = optim_steps  # gradient-ascent steps per outer iteration
 
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
@@ -617,6 +618,7 @@ def _build_cpp_options(options : Options):
     cpp_opts.export_short_arcs  = options.export_short_arcs
     cpp_opts.iter_gradient_finding = options.iter_gradient_finding
     cpp_opts.lr = options.lr
+    cpp_opts.optim_steps = options.optim_steps
     cpp_opts.verbose = options.verbose
     if options.use_gt_gradients:
         cpp_opts.gt_gradients = options.gt_gradients
@@ -696,6 +698,8 @@ def test_our_method(options : Options, save_gtmesh=False):
         mask = result.visibility_mask
     else:
         interpolator, projections, mask = main_algorithm(points, distances, options)
+    _vis = np.asarray(mask).ravel()
+    print(f"Final visibility: {int((_vis != 0).sum())}/{len(_vis)} ({100.0 * (_vis != 0).mean():.2f}%)")
     print(f"  ⏱  {'Interpolator fitted':<30} {time.perf_counter() - timer:>7.2f} s")
 
     # visualize results using marching cubes to extract isosurface

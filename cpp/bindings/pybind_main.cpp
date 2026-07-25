@@ -41,7 +41,8 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def_readwrite("tolerance", &sdf::Options::tolerance)
         .def_readwrite("gt_gradients", &sdf::Options::gt_gradients)
         .def_readwrite("iter_gradient_finding", &sdf::Options::iter_gradient_finding)
-        .def_readwrite("lr", &sdf::Options::lr);
+        .def_readwrite("lr", &sdf::Options::lr)
+        .def_readwrite("optim_steps", &sdf::Options::optim_steps);
 
     // ── MainResult ──────────────────────────────────────────────────
     py::class_<sdf::MainResult>(m, "MainResult")
