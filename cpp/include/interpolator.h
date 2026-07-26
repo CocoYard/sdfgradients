@@ -72,6 +72,9 @@ public:
 
     /// Solver used by optimize_best_gradients() after the Fibonacci init.
     enum class GradOpt {
+        /// In-house Riemannian BFGS. All points step in lockstep so each
+        /// iteration is a single batched predict_with_gradients() call.
+        BatchedBFGS,
         /// Reference implementation: an independent LBFGS++ solve per point,
         /// in a 2-D gnomonic chart around the point's initial direction.
         /// Parallel over points, but the RBF is evaluated one point at a time.

@@ -1036,14 +1036,15 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [50]:
-                options = Options(name='horse', grid_len=length, use_MES=0, clamp=False, optim_steps=3)
+        for length in [100]:
+                options = Options(name='horse', grid_len=length, use_MES=0, clamp=True, optim_steps=5)
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
                 # recon.export(f'out/{options.name}/ours_{length}_gtgrad.obj')
+                # options.grad_optimizer = "lbfgspp"  # 每点独立跑 LBFGS++
+                options.grad_optimizer = "bfgs"
                 # options.grad_optimizer = "ascent"    # 固定步长投影梯度上升(原方法)
-                options.grad_optimizer = "lbfgspp"  # 每点独立跑 LBFGS++
 
                 # export_mes_spheres(options, radius_threshold=0.001)
                 points, distances = test_our_method(options, save_gtmesh=False)

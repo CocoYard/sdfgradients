@@ -57,14 +57,16 @@ Eigen::MatrixXd iterative_projection_3d(
             // Throw rather than silently defaulting: a typo here would quietly
             // benchmark the wrong solver.
             Interpolator::GradOpt method;
-            if (options.grad_optimizer == "lbfgspp")
+            if (options.grad_optimizer == "bfgs")
+                method = Interpolator::GradOpt::BatchedBFGS;
+            else if (options.grad_optimizer == "lbfgspp")
                 method = Interpolator::GradOpt::LBFGSpp;
             else if (options.grad_optimizer == "ascent")
                 method = Interpolator::GradOpt::GradientAscent;
             else
                 throw std::runtime_error(
                     "unknown grad_optimizer '" + options.grad_optimizer +
-                    "' (expected \"ascent\" or \"lbfgspp\")");
+                    "' (expected \"ascent\", \"bfgs\" or \"lbfgspp\")");
             new_gradients = interpolator.optimize_best_gradients(
                 points, values, num_coarse, optim_steps, lr, &gradients,
                 /*chunk_size=*/200, &frozen, method);
