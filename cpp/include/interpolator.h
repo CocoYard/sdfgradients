@@ -32,6 +32,17 @@ public:
     /// Predict gradients at query points. (M, 3) -> (M, 3)
     virtual Eigen::MatrixXd predict_gradients(const Eigen::MatrixXd& x_new, int chunk_size = 500) const = 0;
 
+    /// Fused evaluation: value and gradient at the same query points, in one
+    /// pass. Subclasses that share work between the two (kernel matrix, patch
+    /// lookup) override this; the default just makes both calls.
+    virtual void predict_with_gradients(const Eigen::MatrixXd& x_new,
+                                        Eigen::VectorXd& values,
+                                        Eigen::MatrixXd& grads,
+                                        int chunk_size = 500) const {
+        values = predict(x_new, chunk_size);
+        grads  = predict_gradients(x_new, chunk_size);
+    }
+
     virtual bool is_trained() const = 0;
 
     /// Toggle stdout logging in fit() / extract_surface(). Default: true.
@@ -59,13 +70,29 @@ public:
         const Eigen::MatrixXd* initial_guess = nullptr,
         int chunk_size   = 200) const;
 
-    /// Find best gradient directions via Fibonacci init + projected gradient
-    /// descent on S². Uses predict_gradients() for analytic ∇sdf instead of
-    /// sampling many directions per refinement step.
+    /// Solver used by optimize_best_gradients() after the Fibonacci init.
+    enum class GradOpt {
+        /// Reference implementation: an independent LBFGS++ solve per point,
+        /// in a 2-D gnomonic chart around the point's initial direction.
+        /// Parallel over points, but the RBF is evaluated one point at a time.
+        /// Requires SDF_HAVE_LBFGSPP; throws otherwise.
+        LBFGSpp,
+        /// The original solver: projected gradient ascent on ⟨∇D̃(q), g⟩ with
+        /// a fixed step size and no line search. One batched
+        /// predict_gradients() per step, so it is the cheapest per step but
+        /// needs ~10× the steps to converge.
+        GradientAscent,
+    };
+
+    /// Find best gradient directions via Fibonacci init + descent on S².
+    /// Uses predict_gradients() for analytic ∇sdf instead of sampling many
+    /// directions per refinement step.
     /// `frozen` (N,) optional: rows with frozen[i]=1 (degenerate/short-arc
     /// points whose update the caller reverts anyway) are excluded from the
     /// search entirely — no predict()/predict_gradients() cost — and returned
     /// as their initial_guess row (NaN if no initial_guess).
+    /// `lr` is the fixed step size for GradientAscent; LBFGSpp ignores it and
+    /// lets its own line search set the step.
     Eigen::MatrixXd optimize_best_gradients(
         const Eigen::MatrixXd& points,
         const Eigen::VectorXd& sdf_values,
@@ -74,7 +101,8 @@ public:
         double lr        = 0.2,
         const Eigen::MatrixXd* initial_guess = nullptr,
         int chunk_size   = 200,
-        const std::vector<char>* frozen = nullptr) const;
+        const std::vector<char>* frozen = nullptr,
+        GradOpt method   = GradOpt::GradientAscent) const;
 
     /// Extract an isosurface of this interpolator via libigl's marching cubes.
     /// Samples the implicit field on a regular (nx × ny × nz) grid covering

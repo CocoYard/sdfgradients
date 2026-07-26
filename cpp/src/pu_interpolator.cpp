@@ -817,12 +817,94 @@ Eigen::VectorXd PUInterpolator::predict(const Eigen::MatrixXd& x_new, int /*chun
     return result;
 }
 
-// ── predict_gradients ───────────────────────────────────────────────
+// ── predict_gradients / predict_with_gradients ──────────────────────
 
 Eigen::MatrixXd PUInterpolator::predict_gradients(const Eigen::MatrixXd& x_new, int /*chunk_size*/) const {
+    Eigen::MatrixXd grads;
+    eval_gradients(x_new, nullptr, grads);
+    return grads;
+}
+
+void PUInterpolator::predict_with_gradients(const Eigen::MatrixXd& x_new,
+                                            Eigen::VectorXd& values,
+                                            Eigen::MatrixXd& grads,
+                                            int /*chunk_size*/) const {
+    eval_gradients(x_new, &values, grads);
+}
+
+void PUInterpolator::eval_gradients_pointwise(const Eigen::MatrixXd& x_new,
+                                              Eigen::VectorXd* values_out,
+                                              Eigen::MatrixXd& result) const {
+    const int M = (int)x_new.rows();
+
+    #pragma omp parallel if(!omp_in_parallel())
+    {
+        std::vector<int> hits;
+        Eigen::MatrixXd qpt(1, 3);
+        Eigen::VectorXd fp;
+        Eigen::MatrixXd g;
+
+        #pragma omp for schedule(static)
+        for (int i = 0; i < M; i++) {
+            Eigen::Vector3d pt = x_new.row(i).transpose();
+            query_patches_containing(pt, hits);
+            // The batched path sums each point's contributions in ascending
+            // patch order (it fills the slot table by iterating patches); match
+            // that so both paths agree to the last bit of the blend.
+            std::sort(hits.begin(), hits.end());
+
+            double Wi = 0.0, Vwi = 0.0;
+            Eigen::Vector3d Gi = Eigen::Vector3d::Zero();
+            Eigen::Vector3d Ai = Eigen::Vector3d::Zero();
+            Eigen::Vector3d Bi = Eigen::Vector3d::Zero();
+            qpt.row(0) = x_new.row(i);
+
+            for (int p : hits) {
+                const auto& patch = patches_[p];
+                patch.interp->predict_with_gradients(qpt, fp, g);
+                Eigen::Vector3d dw;
+                double w = use_box_
+                    ? box_weight_grad(pt, patch.center, patch.half_ext, dw)
+                    : wendland_weight_grad(pt, patch.center, patch.half_ext(0), dw);
+                Wi  += w;
+                Vwi += w * fp(0);
+                Gi  += w * g.row(0).transpose();
+                Ai  += fp(0) * dw;
+                Bi  += dw;
+            }
+
+            if (Wi > 0.0) {
+                double f = Vwi / Wi;
+                result.row(i) = ((Gi + Ai - f * Bi) / Wi).transpose();
+                if (values_out) (*values_out)(i) = f;
+            } else {
+                // Uncovered: outside every patch support, where ∇w_p = 0 for
+                // all patches, so the nearest patch's raw values are correct.
+                auto [dist_sq, nearest] = patch_tree_->query_nearest(pt);
+                patches_[nearest].interp->predict_with_gradients(qpt, fp, g);
+                result.row(i) = g.row(0);
+                if (values_out) (*values_out)(i) = fp(0);
+            }
+        }
+    }
+}
+
+void PUInterpolator::eval_gradients(const Eigen::MatrixXd& x_new,
+                                    Eigen::VectorXd* values_out,
+                                    Eigen::MatrixXd& result) const {
     int M = (int)x_new.rows();
-    Eigen::MatrixXd result = Eigen::MatrixXd::Zero(M, 3);
-    if (M == 0) return result;
+    result = Eigen::MatrixXd::Zero(M, 3);
+    if (values_out) *values_out = Eigen::VectorXd::Zero(M);
+    if (M == 0) return;
+
+    // Batching only pays once patches hold several points each. Below that the
+    // patch → points table is mostly empty and its O(#patches) construction
+    // dominates: a 1-row call would build (and merge, per thread) a table of
+    // thousands of empty lists to serve one point.
+    if ((long long)M * 8 <= (long long)patches_.size()) {
+        eval_gradients_pointwise(x_new, values_out, result);
+        return;
+    }
 
     // Partition-of-unity gradient needs the weight-derivative term. Per query
     // point we combine five accumulated quantities at the end:
@@ -946,22 +1028,30 @@ Eigen::MatrixXd PUInterpolator::predict_gradients(const Eigen::MatrixXd& x_new, 
         if (Wi > 0.0) {
             double f = Vwi / Wi;
             result.row(i) = ((Gi + Ai - f * Bi) / Wi).transpose();
+            if (values_out) (*values_out)(i) = f;
         }
     }
 
     // Fallback: uncovered points sit outside every patch support, where ∇w_p=0
-    // for all patches, so the nearest patch's raw gradient is already correct.
+    // for all patches, so the nearest patch's raw value/gradient are already
+    // correct.
     #pragma omp parallel for schedule(dynamic, 256)
     for (int i = 0; i < M; i++) {
         if (W(i) <= 0) {
             Eigen::Vector3d pt = x_new.row(i);
             auto [dist_sq, nearest] = patch_tree_->query_nearest(pt);
             Eigen::MatrixXd qpt = x_new.middleRows(i, 1);
-            result.row(i) = patches_[nearest].interp->predict_gradients(qpt).row(0);
+            if (values_out) {
+                Eigen::VectorXd v;
+                Eigen::MatrixXd g;
+                patches_[nearest].interp->predict_with_gradients(qpt, v, g);
+                result.row(i) = g.row(0);
+                (*values_out)(i) = v(0);
+            } else {
+                result.row(i) = patches_[nearest].interp->predict_gradients(qpt).row(0);
+            }
         }
     }
-
-    return result;
 }
 
 }  // namespace sdf

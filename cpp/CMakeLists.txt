@@ -264,6 +264,29 @@ if(NOT libigl_POPULATED)
 endif()
 set(LIBIGL_INCLUDE_DIR ${libigl_SOURCE_DIR}/include)
 
+# ── LBFGS++ ──────────────────────────────────────────────────────────
+# Header-only, Eigen-based. Only used by the reference implementation of
+# optimize_best_gradients (LBFGSPP method) that the batched in-house BFGS is
+# benchmarked against — see Interpolator::optimize_best_gradients.
+option(SDF_WITH_LBFGSPP "Build the LBFGS++ reference gradient optimizer" ON)
+if(SDF_WITH_LBFGSPP)
+    find_path(LBFGSPP_INCLUDE_DIR LBFGS.h
+        PATHS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/LBFGSpp/include
+        NO_DEFAULT_PATH)
+    if(NOT LBFGSPP_INCLUDE_DIR)
+        message(STATUS "LBFGS++ not found — fetching v0.4.0")
+        FetchContent_Declare(lbfgspp
+            GIT_REPOSITORY https://github.com/yixuan/LBFGSpp.git
+            GIT_TAG        v0.4.0
+            GIT_SHALLOW    TRUE)
+        FetchContent_GetProperties(lbfgspp)
+        if(NOT lbfgspp_POPULATED)
+            FetchContent_Populate(lbfgspp)
+        endif()
+        set(LBFGSPP_INCLUDE_DIR ${lbfgspp_SOURCE_DIR}/include)
+    endif()
+endif()
+
 # ── OpenMP ───────────────────────────────────────────────────────────
 if(USE_OPENMP)
     find_package(OpenMP)
@@ -312,6 +335,7 @@ set(ROOT_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/..)
 # ── Core static library ──────────────────────────────────────────────
 add_library(sdf_core STATIC
     src/interpolator.cpp
+    src/optimize_lbfgspp.cpp
     src/duchon_interpolator.cpp
     src/pu_interpolator.cpp
     src/visibility.cpp
@@ -334,6 +358,11 @@ target_include_directories(sdf_core PUBLIC
 )
 
 target_link_libraries(sdf_core PUBLIC Eigen3::Eigen)
+
+if(SDF_WITH_LBFGSPP AND LBFGSPP_INCLUDE_DIR)
+    target_include_directories(sdf_core SYSTEM PUBLIC ${LBFGSPP_INCLUDE_DIR})
+    target_compile_definitions(sdf_core PUBLIC SDF_HAVE_LBFGSPP)
+endif()
 
 # CPU-specific tuning. Must apply to ALL targets (sdf_core AND sdf_cpp) —
 # inconsistent vectorization between TUs causes Eigen ABI mismatch

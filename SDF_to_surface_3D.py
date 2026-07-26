@@ -22,7 +22,8 @@ class Options:
                  turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
                 use_MES=0, post_processing=False, iter_gradient_finding='optimize', verbose=True,
-                pair_local=False, noise=0, bound=1, scatter=False, neural_sdf=None):
+                pair_local=False, noise=0, bound=1, scatter=False, neural_sdf=None,
+                grad_optimizer='ascent'):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -43,7 +44,11 @@ class Options:
         self.cpp_dc = cpp_dc
         self.verbose = verbose
         self.lr = lr
-        self.optim_steps = optim_steps  # gradient-ascent steps per outer iteration
+        self.optim_steps = optim_steps  # quasi-Newton steps per outer iteration
+        # solver behind iter_gradient_finding='optimize':
+        # 'ascent' = fixed-step projected gradient ascent (lr is its step size),
+        # 'lbfgspp' = one LBFGS++ solve per point
+        self.grad_optimizer = grad_optimizer
 
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
@@ -76,6 +81,7 @@ class Options:
               f" interp_overlap={self.interp_overlap}",
               f" pair_local={self.pair_local}",
               f" use_MES={self.use_MES}",
+              f" grad_optimizer={self.grad_optimizer}",
               f" lr={self.lr}")
 
 class Tolerance:
@@ -617,6 +623,7 @@ def _build_cpp_options(options : Options):
     cpp_opts.export_projections = options.export_projections
     cpp_opts.export_short_arcs  = options.export_short_arcs
     cpp_opts.iter_gradient_finding = options.iter_gradient_finding
+    cpp_opts.grad_optimizer = getattr(options, 'grad_optimizer', 'bfgs')
     cpp_opts.lr = options.lr
     cpp_opts.optim_steps = options.optim_steps
     cpp_opts.verbose = options.verbose
@@ -1029,18 +1036,20 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [100]:
-                options = Options(name='rings', grid_len=length, use_MES=-1, clamp=True)
+        for length in [50]:
+                options = Options(name='horse', grid_len=length, use_MES=0, clamp=False, optim_steps=3)
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
                 # recon.export(f'out/{options.name}/ours_{length}_gtgrad.obj')
+                # options.grad_optimizer = "ascent"    # 固定步长投影梯度上升(原方法)
+                options.grad_optimizer = "lbfgspp"  # 每点独立跑 LBFGS++
 
                 # export_mes_spheres(options, radius_threshold=0.001)
                 points, distances = test_our_method(options, save_gtmesh=False)
-                test_rfta(options, screening_weight=10, parallel=True, sdf=(points, distances))
+                # test_rfta(options, screening_weight=10, parallel=True, sdf=(points, distances))
                 # test_mc(options, save_gtmesh=False, sdf=(points, distances))
-                test_mes(options, save_gtmesh=False, screening_weight=10, sdf=(points, distances))
+                # test_mes(options, save_gtmesh=False, screening_weight=10, sdf=(points, distances))
         # check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=True)
 
     elapsed = time.perf_counter() - t0

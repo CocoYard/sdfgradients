@@ -32,7 +32,7 @@ public:
     void predict_with_gradients(const Eigen::MatrixXd& x_new,
                                 Eigen::VectorXd& values,
                                 Eigen::MatrixXd& grads,
-                                int chunk_size = 500) const;
+                                int chunk_size = 500) const override;
 
     bool is_trained() const override { return trained_; }
 

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <algorithm>
 #include <chrono>
+#include <stdexcept>
 
 namespace sdf {
 
@@ -53,9 +54,20 @@ Eigen::MatrixXd iterative_projection_3d(
         auto t_sbg0 = std::chrono::high_resolution_clock::now();
         Eigen::MatrixXd new_gradients;
         if (options.iter_gradient_finding == "optimize") {
+            // Throw rather than silently defaulting: a typo here would quietly
+            // benchmark the wrong solver.
+            Interpolator::GradOpt method;
+            if (options.grad_optimizer == "lbfgspp")
+                method = Interpolator::GradOpt::LBFGSpp;
+            else if (options.grad_optimizer == "ascent")
+                method = Interpolator::GradOpt::GradientAscent;
+            else
+                throw std::runtime_error(
+                    "unknown grad_optimizer '" + options.grad_optimizer +
+                    "' (expected \"ascent\" or \"lbfgspp\")");
             new_gradients = interpolator.optimize_best_gradients(
                 points, values, num_coarse, optim_steps, lr, &gradients,
-                /*chunk_size=*/200, &frozen);
+                /*chunk_size=*/200, &frozen, method);
         } else {
             new_gradients = interpolator.sample_best_gradients(
                 points, values, num_coarse, /*refine_steps=*/4, /*num_refine=*/5, &gradients);

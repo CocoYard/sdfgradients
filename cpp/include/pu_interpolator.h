@@ -34,6 +34,35 @@ public:
 
     Eigen::MatrixXd predict_gradients(const Eigen::MatrixXd& x_new, int chunk_size = 5000) const override;
 
+    /// Fused evaluation. The blended value costs nothing extra here: the
+    /// gradient blend already forms f = Σw·f_p / Σw per query point, and the
+    /// per-patch solves already run through Duchon's fused kernel.
+    void predict_with_gradients(const Eigen::MatrixXd& x_new,
+                                Eigen::VectorXd& values,
+                                Eigen::MatrixXd& grads,
+                                int chunk_size = 5000) const override;
+
+private:
+    /// Shared implementation of predict_gradients / predict_with_gradients.
+    /// `values_out` may be null when only the gradient is wanted.
+    void eval_gradients(const Eigen::MatrixXd& x_new,
+                        Eigen::VectorXd* values_out,
+                        Eigen::MatrixXd& grads) const;
+
+    /// Same result as eval_gradients, computed one query point at a time.
+    ///
+    /// eval_gradients inverts the query set into a patch → points table so each
+    /// patch can solve its whole batch at once. That table costs O(#patches)
+    /// per call no matter how many points are asked for — with far fewer points
+    /// than patches it is pure overhead, and the table is almost all empty.
+    /// This path skips it: per point, walk the patches containing it and blend
+    /// on the spot. Chosen by eval_gradients when the query set is small
+    /// relative to the patch count.
+    void eval_gradients_pointwise(const Eigen::MatrixXd& x_new,
+                                  Eigen::VectorXd* values_out,
+                                  Eigen::MatrixXd& grads) const;
+
+public:
     bool is_trained() const override { return trained_; }
 
 private:

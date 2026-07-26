@@ -2,6 +2,7 @@
 #include "thread_policy.h"
 #include <cassert>  // libigl's march_cube.cpp uses assert() without including <cassert>
 #include <igl/marching_cubes.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -310,6 +311,16 @@ Eigen::MatrixXd Interpolator::sample_best_gradients(
 
 // ── optimize_best_gradients ─────────────────────────────────────────
 
+// Reference solver in optimize_lbfgspp.cpp; returns the RBF evaluation count.
+namespace lbfgspp_opt {
+long long optimize(const Interpolator& interp,
+                   const Eigen::MatrixXd& points,
+                   const Eigen::VectorXd& sdf_values,
+                   const std::vector<int>& act,
+                   int max_iter,
+                   Eigen::MatrixXd& dirs);
+}
+
 Eigen::MatrixXd Interpolator::optimize_best_gradients(
     const Eigen::MatrixXd& points,
     const Eigen::VectorXd& sdf_values,
@@ -318,7 +329,8 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
     double lr,
     const Eigen::MatrixXd* initial_guess,
     int chunk_size,
-    const std::vector<char>* frozen) const
+    const std::vector<char>* frozen,
+    GradOpt method) const
 {
     // Frozen rows: gather the active points, recurse on the compact arrays
     // (frozen = nullptr, so no second gather), scatter the refined rows back.
@@ -342,7 +354,7 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
             }
             Eigen::MatrixXd active_dirs = optimize_best_gradients(
                 P, S, num_coarse, optim_steps, lr,
-                initial_guess ? &G : nullptr, chunk_size);
+                initial_guess ? &G : nullptr, chunk_size, nullptr, method);
             Eigen::MatrixXd out = initial_guess
                 ? *initial_guess
                 : Eigen::MatrixXd::Constant(
@@ -400,8 +412,14 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
         }
         auto _tec = std::chrono::steady_clock::now();
         Eigen::VectorXd preds = predict(samples, chunk_size);
-        g_rbf_eval_s += std::chrono::duration<double>(
+        double _sweep_s = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - _tec).count();
+        g_rbf_eval_s += _sweep_s;
+        // The sweep costs num_coarse predict rows per point, so it dwarfs the
+        // refinement whenever many rows arrive without a usable initial guess.
+        if (verbose())
+            std::cout << "  [optimize_best_gradients] fibonacci sweep: "
+                      << n_inv << " / " << N << " pts, " << _sweep_s << " s\n";
 
         #pragma omp parallel for schedule(static)
         for (int ii = 0; ii < n_inv; ii++) {
@@ -415,38 +433,61 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
             dirs.row(i) = fib.row(best_idx);
         }
     }
-    // Gradient ascent on ⟨∇D̃(q), g⟩ over S² with retraction by normalization.
-    // The gradient is unit-normalized so the effective step size lr is the
-    // same at every point regardless of ‖∇D̃‖ (which is not 1 in general
-    // because the RBF interpolant is not strictly Eikonal).
+
+    // Original solver, kept selectable for comparison: gradient ascent on
+    // ⟨∇D̃(q), g⟩ over S² with retraction by normalization. The gradient is
+    // unit-normalized so the effective step size lr is the same at every point
+    // regardless of ‖∇D̃‖ (which is not 1 in general because the RBF
+    // interpolant is not strictly Eikonal).
     //   q  = p − s·g
     //   n̂ = ∇D̃(q) / ‖∇D̃(q)‖
     //   g  ← normalize(g + lr · n̂)
-    Eigen::MatrixXd proj(N, 3);
-    for (int step = 0; step < optim_steps; step++) {
-        #pragma omp parallel for schedule(static)
-        for (int i = 0; i < N; i++)
-            proj.row(i) = points.row(i) - sdf_values(i) * dirs.row(i);
+    if (method == GradOpt::GradientAscent) {
+        Eigen::MatrixXd proj(N, 3);
+        for (int step = 0; step < optim_steps; step++) {
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < N; i++)
+                proj.row(i) = points.row(i) - sdf_values(i) * dirs.row(i);
 
-        auto _te = std::chrono::steady_clock::now();
-        Eigen::MatrixXd sdf_grad = predict_gradients(proj, chunk_size);
-        g_rbf_eval_s += std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - _te).count();
+            auto _te = std::chrono::steady_clock::now();
+            Eigen::MatrixXd sdf_grad = predict_gradients(proj, chunk_size);
+            g_rbf_eval_s += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - _te).count();
 
-        #pragma omp parallel for schedule(static)
-        for (int i = 0; i < N; i++) {
-            Eigen::RowVector3d n = sdf_grad.row(i);
-            double gn = n.norm();
-            if (gn < 1e-15) continue;
-            n /= gn;
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < N; i++) {
+                Eigen::RowVector3d n = sdf_grad.row(i);
+                double gn = n.norm();
+                if (gn < 1e-15) continue;
+                n /= gn;
 
-            Eigen::RowVector3d updated = dirs.row(i) + lr * n;
-            double norm = updated.norm();
-            if (norm > 1e-15)
-                dirs.row(i) = updated / norm;
+                Eigen::RowVector3d updated = dirs.row(i) + lr * n;
+                double norm = updated.norm();
+                if (norm > 1e-15)
+                    dirs.row(i) = updated / norm;
+            }
         }
+        restore_threads(_saved);
+        return dirs;
     }
 
+    // Reference path: hand every point to its own LBFGS++ solve.
+    if (method == GradOpt::LBFGSpp) {
+        std::vector<int> all(N);
+        for (int i = 0; i < N; i++) all[i] = i;
+        auto _tl = std::chrono::steady_clock::now();
+        lbfgspp_opt::optimize(*this, points, sdf_values, all, optim_steps, dirs);
+        g_rbf_eval_s += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - _tl).count();
+        restore_threads(_saved);
+        return dirs;
+    }
+
+    // The in-house batched Riemannian BFGS that used to live here is
+    // stashed in optimize_bfgs_batched.stashed.cpp — at a matched
+    // evaluation budget it produced the same mesh as the LBFGS++ path,
+    // so it was not worth carrying a second hand-rolled solver.
+    throw std::runtime_error("optimize_best_gradients: unhandled GradOpt");
     restore_threads(_saved);
     return dirs;
 }

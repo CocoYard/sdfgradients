@@ -40,8 +40,13 @@ struct Options {
     double interp_overlap         = 0.5;
     bool pair_local               = true;     // PU: pair each local RBF solve with missing input/projection partners
     std::string iter_gradient_finding = "optimize";  // "optimize" or "sample"
-    double lr = 0.2;  // step size for optimize_best_gradients (S² normalized GD)
-    int optim_steps = 5;  // gradient-ascent steps per outer iteration in optimize_best_gradients
+    // Solver behind iter_gradient_finding == "optimize":
+    //   "ascent"  — the original fixed-step projected gradient ascent
+    //   "lbfgspp" — one LBFGS++ solve per point (needs SDF_WITH_LBFGSPP)
+    std::string grad_optimizer = "ascent";
+    // Step size for "ascent"; "lbfgspp" ignores it.
+    double lr = 0.2;
+    int optim_steps = 5;  // quasi-Newton steps per outer iteration in optimize_best_gradients
 
     Tolerance tolerance;
     bool tolerance_initialized = false;
