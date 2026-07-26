@@ -758,7 +758,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     elif options.scatter:
         fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_scatter.obj'
     else:
-        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{clamp_str}{pair_str}{post_str}.obj'
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{clamp_str}{pair_str}{post_str}_{options.grad_optimizer}.obj'
     # if options.use_gt_gradients:
     #     fname = f'ours_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
@@ -1037,14 +1037,16 @@ if __name__ == "__main__":
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
         for length in [100]:
-                options = Options(name='horse', grid_len=length, use_MES=0, clamp=True, optim_steps=5)
+            for optimizer in [ 'lbfgspp', 'bfgs', 'ascent']:
+                options = Options(name='eiffel', grid_len=length, use_MES=0, clamp=True, optim_steps=5)
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
                 # recon.export(f'out/{options.name}/ours_{length}_gtgrad.obj')
                 # options.grad_optimizer = "lbfgspp"  # 每点独立跑 LBFGS++
-                options.grad_optimizer = "bfgs"
+                # options.grad_optimizer = "bfgs"
                 # options.grad_optimizer = "ascent"    # 固定步长投影梯度上升(原方法)
+                options.grad_optimizer = optimizer
 
                 # export_mes_spheres(options, radius_threshold=0.001)
                 points, distances = test_our_method(options, save_gtmesh=False)
