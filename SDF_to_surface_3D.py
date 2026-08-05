@@ -18,12 +18,12 @@ from util import mesh_distances
 seed = None
 
 class Options:
-    def __init__(self, grid_len=20, gt_mesh=None, clamp=False, max_iters=10, name='horse', lr=0.2, optim_steps=5,
+    def __init__(self, grid_len=20, gt_mesh=None, clamp=True, max_iters=10, name='horse', lr=0.2, optim_steps=5,
                  turn_off_short_arcs=False, export_short_arcs=False, export_projections=False, reg=0,
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
-                use_MES=0, post_processing=False, iter_gradient_finding='optimize', verbose=True,
+                use_MES=-1, post_processing=False, iter_gradient_finding='optimize', verbose=True,
                 pair_local=False, noise=0, bound=1, scatter=False, neural_sdf=None,
-                grad_optimizer='ascent'):
+                grad_optimizer='bfgs'):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -1036,9 +1036,9 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [100]:
+        for length in [30]:
             for optimizer in [ 'lbfgspp', 'bfgs', 'ascent']:
-                options = Options(name='eiffel', grid_len=length, use_MES=0, clamp=True, optim_steps=5)
+                options = Options(name='eiffel', grid_len=length, use_MES=-1, clamp=True, optim_steps=5)
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)

@@ -1,8 +1,23 @@
 #!/bin/bash
 #
-# Run metrics + topology + summaries on the solid-300 batch outputs.
-# Submit AFTER the main array job:
-#   sbatch --dependency=afterany:<JOBID> scripts/submit_metrics.sbatch
+# Metrics + summaries for one run directory.
+#
+#   sbatch scripts/submit_metrics.sbatch <RUN_DIR> [COMPARE ...]
+#
+#   RUN_DIR   the run to score, e.g. /scratch/ycheng27/new_solid_bfgs_post
+#             (reconstructions are read from <RUN_DIR>/out/)
+#   COMPARE   zero or more other runs (dir or metrics CSV) to line up
+#             beside it in the summary tables
+#
+# Examples:
+#   # three-way: this run vs bfgs vs the original
+#   sbatch scripts/submit_metrics.sbatch /scratch/ycheng27/new_solid_bfgs_post \
+#          /scratch/ycheng27/new_solid_bfgs /scratch/ycheng27/new_solid
+#   sbatch scripts/submit_metrics.sbatch /scratch/ycheng27/new_solid   # score only
+#
+# Labels, algo list and output paths are all derived from RUN_DIR. The
+# comparison tables show 'ours' only; everything is overridable:
+#   ALGOS=ours,mc  COMPARE_ALGOS=ours,mc  INDEX=...  RUN_TOPOLOGY=1  sbatch ...
 #
 #SBATCH --job-name=sdf-metrics
 #SBATCH --partition=normal
@@ -11,96 +26,156 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
 #SBATCH --time=4:00:00
-#SBATCH --output=/scratch/ycheng27/new_solid/metrics_%j.out
-#SBATCH --error=/scratch/ycheng27/new_solid/metrics_%j.err
+#SBATCH --output=/scratch/ycheng27/metrics_logs/metrics_%j.out
+#SBATCH --error=/scratch/ycheng27/metrics_logs/metrics_%j.err
 
 set -uo pipefail
-export OMP_NUM_THREADS=2  # multiprocessing.Pool will spawn workers; keep per-worker threads small
+export OMP_NUM_THREADS=2  # multiprocessing.Pool spawns workers; keep per-worker threads small
 export OPENBLAS_NUM_THREADS=2
 export MKL_NUM_THREADS=2
 
 REPO=/home/ycheng27/code/sdfgradients
 PYTHON=/home/ycheng27/envs/sdf/bin/python
+mkdir -p /scratch/ycheng27/metrics_logs
 
-INDEX=/scratch/ycheng27/new_solid/index.csv
-OUT_ROOT=/scratch/ycheng27/new_solid/out
-GT_ROOT=/scratch/ycheng27/thingi10k/preview_obj
+RUN_DIR=${1:-${RUN_DIR:-/scratch/ycheng27/new_solid}}
+shift || true
+COMPARE=${COMPARE:-$(printf '%s\n' "$@")}   # zero or more runs to line up against
+COMPARE_ALGOS=${COMPARE_ALGOS:-ours}        # comparison tables show these algos only
+
+# Short label for the summary tables: new_solid_bfgs_post -> bfgs_post
+label_of() { basename "$1" | sed 's/^new_solid_*//; s/^$/base/'; }
+
+INDEX=${INDEX:-/scratch/ycheng27/new_solid/index.csv}   # shared mesh list
+GT_ROOT=${GT_ROOT:-/scratch/ycheng27/thingi10k/preview_obj}
+GRIDS=${GRIDS:-6,10,20,30,40,50,60,80,100}
+OUT_ROOT="${RUN_DIR}/out"
+METRICS_CSV=${METRICS_CSV:-${RUN_DIR}/metrics.csv}
+RUN_TOPOLOGY=${RUN_TOPOLOGY:-0}
+
+# Which algos are actually in this run? Read them off the .obj filenames
+# instead of making the caller spell them out.
+ALGOS=${ALGOS:-$(OUT_ROOT="${OUT_ROOT}" "${PYTHON}" - <<'PYEOF'
+import os, re, glob
+out = os.environ['OUT_ROOT']
+algos = set()
+for d in sorted(glob.glob(f'{out}/*'))[:20]:      # a few meshes is enough
+    for f in glob.glob(f'{d}/*.obj'):
+        m = re.fullmatch(r'(.+)_\d+\.obj', os.path.basename(f))
+        if m:
+            algos.add(m.group(1))
+print(','.join(sorted(algos)))
+PYEOF
+)}
+
+if [[ -z "${ALGOS}" ]]; then
+    echo "ERROR: no <algo>_<gl>.obj files found under ${OUT_ROOT}" >&2
+    exit 1
+fi
 
 cd "${REPO}"
-echo "=== ${SLURM_JOB_ID} on ${SLURM_JOB_NODELIST} cpus=${SLURM_CPUS_PER_TASK} ──"
+echo "=== ${SLURM_JOB_ID:-local} on ${SLURM_JOB_NODELIST:-$(hostname)} ──"
 date -Iseconds
+echo "RUN_DIR : ${RUN_DIR}"
+echo "ALGOS   : ${ALGOS}   (auto-detected unless overridden)"
+echo "GRIDS   : ${GRIDS}"
+[[ -n "${COMPARE}" ]] && echo "COMPARE : ${COMPARE}"
 echo
 
-echo "── 0/5 collect rfta/mes from 3 sources (sw=1, sw=10, sw=100) into out/ ──"
-# Pre-step: gather all screening_weight variants under out/{fid}/ with
-# explicit suffix names so compute_metrics can iterate them as separate
-# algos:
-#   - out/{fid}/{rfta,mes}_X.obj                                 (in-place rename) → {algo}_sw1_X.obj
-#   - screen10/{fid}/{rfta,mes}_X.obj                           (mv + rename)     → {algo}_sw10_X.obj
-#   - /scratch/ycheng27/new_solid_sw100/out/{fid}/{rfta,mes}_X.obj (mv + rename) → {algo}_sw100_X.obj
-"${PYTHON}" - <<'PYEOF'
-import csv, os, glob, shutil
-INDEX = '/scratch/ycheng27/new_solid/index.csv'
-OUT = '/scratch/ycheng27/new_solid/out'
-SOURCES = [
-    ('sw1',   None,                                       'in-place'),
-    ('sw10',  '/scratch/ycheng27/new_solid/screen10',     'move'),
-    ('sw100', '/scratch/ycheng27/new_solid_sw100/out',    'move'),
-]
-
-with open(INDEX) as f:
-    fids = [r['file_id'] for r in csv.DictReader(f)]
-
-stats = {tag: 0 for tag, _, _ in SOURCES}
-for fid in fids:
-    od = f'{OUT}/{fid}'
-    os.makedirs(od, exist_ok=True)
-    for tag, src_root, mode in SOURCES:
-        sd = od if mode == 'in-place' else (f'{src_root}/{fid}' if src_root else None)
-        if not sd or not os.path.isdir(sd): continue
-        for algo in ('rfta', 'mes'):
-            for p in glob.glob(f'{sd}/{algo}_*.obj'):
-                base = os.path.basename(p)
-                if '_sw' in base: continue  # already renamed (idempotent)
-                gl = base[len(algo)+1:-4]
-                dst = f'{od}/{algo}_{tag}_{gl}.obj'
-                if os.path.exists(dst): continue
-                shutil.move(p, dst)
-                stats[tag] += 1
-for tag, _, _ in SOURCES:
-    print(f'  collected {tag}: {stats[tag]} files')
-PYEOF
-echo
-
-echo "── 1/5 compute_metrics.py ──"
+echo "── compute_metrics.py ──"
 "${PYTHON}" scripts/compute_metrics.py \
-    --index "${INDEX}" \
-    --gt-root "${GT_ROOT}" \
-    --out-root "${OUT_ROOT}" \
-    --algos rfta_sw1,rfta_sw10,rfta_sw100,mes_sw1,mes_sw10,mes_sw100,ours,mc \
-    --output /scratch/ycheng27/new_solid/metrics.csv \
-    --workers ${SLURM_CPUS_PER_TASK}
+    --index "${INDEX}" --gt-root "${GT_ROOT}" --out-root "${OUT_ROOT}" \
+    --algos "${ALGOS}" --grids "${GRIDS}" --output "${METRICS_CSV}" \
+    --workers "${SLURM_CPUS_PER_TASK:-8}"
+
+if [[ "${RUN_TOPOLOGY}" == "1" ]]; then
+    echo
+    echo "── topology_check.py ──"
+    "${PYTHON}" scripts/topology_check.py \
+        --index "${INDEX}" --gt-root "${GT_ROOT}" --out-root "${OUT_ROOT}" \
+        --algos "${ALGOS}" --output "${RUN_DIR}/topology.csv" \
+        --workers "${SLURM_CPUS_PER_TASK:-8}"
+    "${PYTHON}" scripts/summarize_topology.py --input "${RUN_DIR}/topology.csv"
+fi
 
 echo
-echo "── 2/5 topology_check.py ──"
-"${PYTHON}" scripts/topology_check.py \
-    --index "${INDEX}" \
-    --gt-root "${GT_ROOT}" \
-    --out-root "${OUT_ROOT}" \
-    --algos rfta_sw1,rfta_sw10,rfta_sw100,mes_sw1,mes_sw10,mes_sw100,ours,mc \
-    --output /scratch/ycheng27/new_solid/topology.csv \
-    --workers ${SLURM_CPUS_PER_TASK}
-
-echo
-echo "── 3/5 summarize_metrics.py ──"
+echo "── summarize_metrics.py (percentile tables + boxplots.pdf) ──"
 "${PYTHON}" scripts/summarize_metrics.py \
-    --csv-glob /scratch/ycheng27/new_solid/metrics.csv \
-    --output /scratch/ycheng27/new_solid/summary_metrics.tsv
+    --csv-glob "${METRICS_CSV}" --output "${RUN_DIR}/summary_metrics.tsv"
 
 echo
-echo "── 4/5 summarize_topology.py ──"
-"${PYTHON}" scripts/summarize_topology.py \
-    --input /scratch/ycheng27/new_solid/topology.csv
+echo "── summary tables for this run -> summary_metrics.txt ──"
+"${PYTHON}" scripts/summarize_AB.py --csv "${METRICS_CSV}" \
+    --report "${RUN_DIR}/summary_metrics.txt"
+
+if [[ -n "${COMPARE}" ]]; then
+    MERGED="${RUN_DIR}/metrics_compare.csv"
+    echo
+    echo "── comparison (${COMPARE_ALGOS}): $(label_of "${RUN_DIR}") vs others ──"
+    # Runs to line up: this one first, then every COMPARE entry. Each may be a
+    # run dir or a metrics CSV; resolution + labelling happens in python.
+    RUNS="${METRICS_CSV}
+${COMPARE}"
+    RUNS="${RUNS}" CUR_DIR="${RUN_DIR}" KEEP_ALGOS="${COMPARE_ALGOS}" \
+    GRIDS="${GRIDS}" MERGED="${MERGED}" \
+    "${PYTHON}" - <<'PYEOF'
+import glob
+import os
+import sys
+
+import pandas as pd
+
+keep = [a.strip() for a in os.environ['KEEP_ALGOS'].split(',') if a.strip()]
+grids = [int(g) for g in os.environ['GRIDS'].split(',') if g.strip()]
+entries = [e for e in os.environ['RUNS'].split('\n') if e.strip()]
+
+
+def label_of(path):
+    name = os.path.basename(path.rstrip('/'))
+    name = name[len('new_solid'):].lstrip('_') if name.startswith('new_solid') else name
+    return name or 'base'
+
+
+def load(entry, fallback_dir=None):
+    """entry -> (label, rows). A dir picks whichever metrics*.csv actually
+    holds the algos we want — 'newest' is not a safe rule when a run dir has
+    several CSVs (metrics.csv, metrics_AB.csv, metrics_highres.csv ...)."""
+    if os.path.isdir(entry):
+        cands, label = sorted(glob.glob(f'{entry}/metrics*.csv')), label_of(entry)
+    else:
+        cands, label = [entry], label_of(fallback_dir or os.path.dirname(entry))
+    for c in cands:
+        try:
+            d = pd.read_csv(c)
+        except Exception:
+            continue
+        d = d[d.algo.isin(keep) & d.grid_len.isin(grids)]
+        if len(d):
+            return label, d.copy(), c
+    return label, None, None
+
+
+parts = []
+for i, entry in enumerate(entries):
+    label, d, src = load(entry, fallback_dir=os.environ['CUR_DIR'] if i == 0 else None)
+    if d is None:
+        print(f'  WARN: no rows for algos={keep} in {entry} — skipped', file=sys.stderr)
+        continue
+    d['algo'] = d['algo'] + '_' + label
+    parts.append(d)
+    print(f'  {label:<12} {len(d):>5} rows  <- {src}')
+
+if len(parts) < 2:
+    print('  need at least 2 runs with data; skipping comparison', file=sys.stderr)
+    raise SystemExit(1)
+
+merged = pd.concat(parts, ignore_index=True)
+merged.to_csv(os.environ['MERGED'], index=False)
+print(f'  merged {len(merged)} rows -> {os.environ["MERGED"]}')
+PYEOF
+    [[ -f "${MERGED}" ]] && "${PYTHON}" scripts/summarize_AB.py --csv "${MERGED}" \
+        --report "${RUN_DIR}/summary_compare.txt"
+fi
 
 echo
 echo "=== ALL DONE $(date -Iseconds) ==="

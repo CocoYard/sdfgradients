@@ -4,8 +4,12 @@ configured grid_lens, and write reconstructions + a timing CSV.
 
 Idempotent: if ``{out_root}/out/{file_id}/{algo}_{gl}.obj`` already exists
 and is non-empty, the (algo, gl) pair is skipped. SDF samples are
-generated once per grid_len and cached to ``sdf_{gl}.npz``, so RFTA
-and MES share the same input instead of recomputing it.
+generated once per grid_len and cached to ``sdf_{gl}.npz``, so all algos
+share the same input instead of recomputing it.
+
+Each algo is independent and owns exactly one output file per grid_len:
+running ``--algos ours`` produces only ours_<gl>.obj. Pass
+``--algos ours,mc`` if you also want the marching-cubes baseline.
 
 Typical usage from sbatch:
     python scripts/run_baseline.py --task-id $SLURM_ARRAY_TASK_ID
@@ -33,14 +37,12 @@ DEFAULT_ALGOS = ['rfta', 'mes', 'ours']
 
 
 def _compute_mc_only(sdf_cache_path: 'Path', out_path: 'Path') -> None:
-    """Run only the MC-on-samples baseline from a cached SDF .npz.
+    """Run the MC-on-samples baseline from a cached SDF .npz.
 
-    Mirrors the marching-cubes block of test_our_method (lines 670-685
-    of SDF_to_surface_3D.py). Used as a fast path when ours_<gl>.obj is
-    already present but mc_<gl>.obj is missing — saves us re-running the
-    full ours pipeline (interpolator fit + surface extract) just to
-    rebuild the cheap MC baseline. Raises on degenerate SDFs (e.g.
-    ``ValueError: Surface level must be within volume data range``).
+    Rebuilds the voxel grid from the sample coordinates and runs marching
+    cubes on it — same construction as the block in ``test_mc``. Raises on
+    degenerate SDFs (e.g. ``ValueError: Surface level must be within volume
+    data range``), which is common at very coarse grids.
     """
     import numpy as np
     import trimesh
@@ -86,10 +88,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--rfta-force-cpu', action='store_true',
                    help='disable RFTA GPU path (for CPU-only timing benchmarks)')
     p.add_argument('--screening-weight', type=float, default=10.0)
-    p.add_argument('--ours-use-mes', type=int, default=0,
+    # --- ours ablation knobs (defaults = the pinned main config) ---
+    p.add_argument('--ours-use-mes', type=int, default=-1,
                    choices=[-1, 0, 1],
                    help='use_MES setting for ours: -1=noMES, 0=default MES, '
                         '1=MESforce (paper timing variants)')
+    p.add_argument('--ours-clamp', type=int, default=1, choices=[0, 1])
+    p.add_argument('--ours-optimizer', default='bfgs',
+                   choices=['bfgs', 'ascent', 'lbfgspp'])
+    p.add_argument('--ours-post', type=int, default=0, choices=[0, 1],
+                   help='post_processing (Lipschitz post-fix) for ours')
     return p.parse_args()
 
 
@@ -165,13 +173,10 @@ def main() -> int:
 
     for gl in grid_lens:
         # Check whether anything is still missing at this gl before we bother
-        # with SDF generation. 'ours' implicitly produces 'mc' as a side
-        # product, so include 'mc' in the expected set whenever 'ours' is
-        # requested — otherwise an old ours_<gl>.obj could mask a missing
-        # mc_<gl>.obj.
+        # with SDF generation. Every algo owns exactly one output file — 'mc'
+        # is its own algo, so ask for it explicitly (--algos ours,mc) if you
+        # want the marching-cubes baseline alongside ours.
         expected = {algo: out_dir / f'{algo}_{gl}.obj' for algo in algos}
-        if 'ours' in algos:
-            expected['mc'] = out_dir / f'mc_{gl}.obj'
         need_any = any(not (p.exists() and p.stat().st_size > 0)
                        for p in expected.values())
         if not need_any:
@@ -203,64 +208,15 @@ def main() -> int:
         for algo in algos:
             out_file = expected[algo]
 
-            # 'ours' produces ours_<gl>.obj AND mc_<gl>.obj as a pair (mc
-            # is a marching-cubes baseline written near the end of
-            # test_our_method). Only treat the work as done if BOTH files
-            # exist; otherwise re-run test_our_method to backfill the
-            # missing one. Note: simply checking ours alone misses the
-            # case where a previous run was killed mid-way between the
-            # interpolant export (line 578) and the sample_points export
-            # (line 685).
-            if algo == 'ours':
-                mc_path = out_dir / f'mc_{gl}.obj'
-                ours_present = (out_file.exists()
-                                and out_file.stat().st_size > 0)
-                mc_present = (mc_path.exists()
-                              and mc_path.stat().st_size > 0)
-                if ours_present and mc_present:
-                    rows.append(('ours', gl, 'skipped', 0.0,
-                                 out_file.stat().st_size, ''))
-                    rows.append(('mc',   gl, 'skipped', 0.0,
-                                 mc_path.stat().st_size, ''))
-                    continue
-                if ours_present and not mc_present:
-                    # Fast path: only mc is missing. Don't redo the
-                    # expensive test_our_method (interpolator fit + surface
-                    # extract); just rebuild the marching-cubes baseline
-                    # from the cached SDF samples directly.
-                    t_mc = time.perf_counter()
-                    mc_err = ''
-                    try:
-                        _compute_mc_only(sdf_cache, mc_path)
-                    except Exception:
-                        mc_err = traceback.format_exc().strip().splitlines()[-1]
-                    dt_mc = time.perf_counter() - t_mc
-                    mc_size = (mc_path.stat().st_size
-                               if mc_path.exists() else 0)
-                    mc_status = 'ok' if mc_size > 0 else 'fail'
-                    print(f'[{file_id}]   mc gl={gl:<3} '
-                          f'(only) {mc_status:>4} {dt_mc:>6.2f}s '
-                          f'{mc_size:>10}B {mc_err}', flush=True)
-                    rows.append(('ours', gl, 'skipped', 0.0,
-                                 out_file.stat().st_size, ''))
-                    rows.append(('mc', gl, mc_status, dt_mc, mc_size,
-                                 mc_err if mc_status == 'fail'
-                                 else ''))
-                    continue
-                # else: ours is missing — fall through and run the full
-                # test_our_method (which writes both ours and mc).
-            elif out_file.exists() and out_file.stat().st_size > 0:
+            if out_file.exists() and out_file.stat().st_size > 0:
                 rows.append((algo, gl, 'skipped', 0.0,
                              out_file.stat().st_size, ''))
                 continue
 
             if algo == 'mc':
-                # Standalone marching-cubes timing: run _compute_mc_only on the
-                # cached SDF and record real wall-time. Used for paper timing
-                # benchmarks — the "free" mc-from-ours side-product reports
-                # wall=0 which is correct for "ours total cost" but misleading
-                # if the reader wants to know how expensive marching cubes
-                # alone is.
+                # Marching cubes straight on the cached SDF samples, timed like
+                # any other algo. It shares the SDF cache with the other algos
+                # but is otherwise independent of them.
                 t0 = time.perf_counter()
                 mc_err: str | None = None
                 try:
@@ -277,12 +233,12 @@ def main() -> int:
                 continue
 
             if algo == 'ours':
-                # Pinned "main config" for our method. Mirrors the __main__
-                # block of SDF_to_surface_3D.py — change here if the canonical
-                # config evolves. verbose=True so per-step prints land in the
-                # SLURM stdout for later inspection.
+                # "Main config" for our method; the four --ours-* flags select
+                # the ablation cell (defaults reproduce the pinned config).
+                # verbose=True so per-step prints land in the SLURM stdout.
                 opts = Options(name=mesh_basename, grid_len=gl,
-                               max_iters=15, clamp=False, cpp_dc=True,
+                               max_iters=15, cpp_dc=True,
+                               clamp=bool(args.ours_clamp),
                                export_short_arcs=False,
                                export_projections=False,
                                turn_off_short_arcs=False,
@@ -291,7 +247,9 @@ def main() -> int:
                                interp_partition='sphere',
                                overlap=0.2, reg=0, lr=0.2,
                                use_MES=args.ours_use_mes,
-                               post_processing=False,
+                               optim_steps=5,
+                               grad_optimizer=args.ours_optimizer,
+                               post_processing=bool(args.ours_post),
                                iter_gradient_finding='optimize',
                                verbose=True)
             else:
@@ -320,19 +278,6 @@ def main() -> int:
             except Exception:
                 err = traceback.format_exc().strip().splitlines()[-1]
 
-            # 'ours' produces two outputs we care about, and may raise
-            # *after* either is exported. Report status independently:
-            # ours = ok if interpolant_*.obj got renamed (test_our_method
-            # got past line 578), mc = ok if sample_points_<gl>.obj got
-            # renamed (test_our_method got past line 685). Common failure
-            # mode: skimage.marching_cubes throws "Surface level must be
-            # within volume data range" on degenerate SDFs at small grids
-            # — that aborts mc but ours has already been written.
-            #   interpolant_<gl>_*.obj  -> ours_<gl>.obj   (our method)
-            #   sample_points_<gl>.obj  -> mc_<gl>.obj     (MC-on-samples baseline)
-            mc_size = 0
-            mc_status = ''
-            mc_err_msg = ''
             if algo == 'ours':
                 # test_our_method exports 'ours_<gl>_<iters>_..._<res>.obj'; collapse the
                 # newest such file to the canonical 'ours_<gl>.obj'. (out_file is
@@ -341,44 +286,6 @@ def main() -> int:
                                 key=lambda p: p.stat().st_mtime, reverse=True)
                 if interp:
                     interp[0].rename(out_file)
-                sp = out_dir / f'sample_points_{gl}.obj'
-                mc_dst = out_dir / f'mc_{gl}.obj'
-                # If 'mc' is a standalone algo in this run, mc_<gl>.obj was
-                # already written with proper timing — don't overwrite it
-                # with the side-product copy (which has wall=0 by definition).
-                mc_standalone = 'mc' in algos
-                if sp.exists():
-                    if mc_standalone and mc_dst.exists() and mc_dst.stat().st_size > 0:
-                        sp.unlink()
-                    else:
-                        sp.rename(mc_dst)
-                elif not (mc_standalone and mc_dst.exists()
-                          and mc_dst.stat().st_size > 0):
-                    # test_our_method no longer exports sample_points_<gl>.obj —
-                    # regenerate mc from the cached SDF (same path used when
-                    # ours_<gl>.obj already exists but mc_<gl>.obj is missing).
-                    try:
-                        _compute_mc_only(sdf_cache, mc_dst)
-                    except Exception:
-                        pass  # falls through to mc_present=False below
-
-                ours_present = (out_file.exists()
-                                and out_file.stat().st_size > 0)
-                mc_present = (mc_dst.exists()
-                              and mc_dst.stat().st_size > 0)
-
-                # If ours export succeeded, any captured exception was
-                # raised AFTER ours landed — it is mc's problem, not ours'.
-                # Move the err to mc and clear it for the ours row.
-                if ours_present:
-                    if not mc_present and err:
-                        mc_err_msg = err
-                    err = None
-
-                mc_size = mc_dst.stat().st_size if mc_present else 0
-                mc_status = 'ok' if mc_present else 'fail'
-                if mc_status == 'fail' and not mc_err_msg:
-                    mc_err_msg = 'mc not produced'
 
             dt = time.perf_counter() - t0
             size = out_file.stat().st_size if out_file.exists() else 0
@@ -387,16 +294,6 @@ def main() -> int:
                   f'{status:>7} {dt:>7.2f}s {size:>10}B {err or ""}',
                   flush=True)
             rows.append((algo, gl, status, dt, size, err or ''))
-
-            # 'mc' is a side-product of running 'ours': log a separate
-            # row with wall=0 (we paid the cost under 'ours' already).
-            # Skip if 'mc' was a standalone algo this run — its real timing
-            # row is already in the CSV.
-            if algo == 'ours' and 'mc' not in algos:
-                rows.append(('mc', gl, mc_status, 0.0, mc_size, mc_err_msg))
-                print(f'[{file_id}]   mc gl={gl:<3} '
-                      f'{mc_status:>7}    0.00s {mc_size:>10}B {mc_err_msg}',
-                      flush=True)
 
     # Per-task timing CSV. SLURM concurrency is fine since each task writes
     # its own file.

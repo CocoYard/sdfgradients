@@ -98,6 +98,23 @@ if [[ -n "${OURS_USE_MES:-}" ]]; then
     OURS_USE_MES_ARG=(--ours-use-mes "${OURS_USE_MES}")
     echo "OursUseMES  : ${OURS_USE_MES}"
 fi
+# ours ablation cell: clamp / gradient optimizer / Lipschitz post-fix.
+#   sbatch --export=ALL,OURS_CLAMP=0,OURS_OPTIMIZER=ascent ...
+OURS_CLAMP_ARG=()
+if [[ -n "${OURS_CLAMP:-}" ]]; then
+    OURS_CLAMP_ARG=(--ours-clamp "${OURS_CLAMP}")
+    echo "OursClamp   : ${OURS_CLAMP}"
+fi
+OURS_OPT_ARG=()
+if [[ -n "${OURS_OPTIMIZER:-}" ]]; then
+    OURS_OPT_ARG=(--ours-optimizer "${OURS_OPTIMIZER}")
+    echo "OursOptim   : ${OURS_OPTIMIZER}"
+fi
+OURS_POST_ARG=()
+if [[ -n "${OURS_POST:-}" ]]; then
+    OURS_POST_ARG=(--ours-post "${OURS_POST}")
+    echo "OursPost    : ${OURS_POST}"
+fi
 
 # Hard time limit: SLURM kills cleanly when time is up (no trap, no retry,
 # no resubmit). If a task didn't finish, just resubmit that array index
@@ -109,4 +126,7 @@ exec "${PYTHON}" scripts/run_baseline.py --task-id "${SLURM_ARRAY_TASK_ID}" \
     "${GRID_LENS_ARG[@]}" \
     "${SCREENING_ARG[@]}" \
     "${RFTA_CPU_ARG[@]}" \
-    "${OURS_USE_MES_ARG[@]}"
+    "${OURS_USE_MES_ARG[@]}" \
+    "${OURS_CLAMP_ARG[@]}" \
+    "${OURS_OPT_ARG[@]}" \
+    "${OURS_POST_ARG[@]}"
