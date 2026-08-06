@@ -1,4 +1,5 @@
 #include "pu_interpolator.h"
+#include <Eigen/SVD>
 #include "kdtree.h"
 #include "dedup.h"
 #include <cmath>
@@ -134,6 +135,114 @@ void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& value
     points = new_pts;
     values = new_vals;
 }
+
+// ── Rank repair for degenerate local solves ─────────────────────────
+//
+// A local solve's polynomial block is [x y z 1], so it needs the patch's points
+// to span 3D affinely. When they don't — coplanar points are the case that
+// actually happens — the block loses a column's worth of rank and the linear
+// term is unconstrained along the direction the points fail to span. The fit
+// still reproduces every data value exactly; it just picks up an arbitrary slope
+// away from the plane. Inside a small patch, whose centre carries most of the
+// blend weight, that is enough to drag the blended field through zero and grow a
+// detached blob in the isosurface. Axis-aligned sample grids and axis-aligned
+// cell splits produce such patches routinely: a thin cell can hold exactly one
+// layer of the grid.
+//
+// Repair it with data rather than with a threshold on the solve — pull in one
+// real sample lying off the direction the patch is blind to. Only `local_idx`
+// changes: the patch's centre, extent and weight function are untouched, so the
+// partition of unity is exactly as before and just this one local system gains a
+// row. It is the same mechanism as pair_local (whose partners are offset along
+// the gradient, hence usually off-plane), which is why enabling that also makes
+// the problem disappear.
+//
+// A candidate has to clear the patch's own extent along the weak direction —
+// anything closer barely pins the slope down — and among those the nearest is
+// taken, to perturb the local fit as little as possible. Measured on a 36-point
+// slab carrying a known field, queried 0.02 off the plane: with no added point
+// the error is 24.4; one point 1e-4 off the plane brings it to 7e-4, and one
+// real sample a grid step away to 1.5e-4, which is what a healthy patch gives.
+//
+// The loop repeats because a point set can be short of more than one direction
+// (collinear points span only 1D), each pass repairing the weakest remaining one.
+namespace {
+
+constexpr double kRankTol = 1e-2;   // sigma_min/sigma_max below this is degenerate
+
+// Returns: 0 = spanned 3D already, 1 = repaired, 2 = degenerate, no candidate found.
+int augment_to_full_rank(const Eigen::MatrixXd& pts, const KDTree3D& tree,
+                          const Eigen::Vector3d& center,
+                          const Eigen::Vector3d& half_ext, bool use_box,
+                          std::vector<int>& local_idx) {
+    int status = 0;
+    for (int pass = 0; pass < 3; pass++) {
+        const int n = (int)local_idx.size();
+        if (n < 3) return status;
+
+        Eigen::Vector3d mean = Eigen::Vector3d::Zero();
+        for (int i : local_idx) mean += pts.row(i).transpose();
+        mean /= (double)n;
+
+        Eigen::MatrixXd centered(n, 3);
+        for (int i = 0; i < n; i++)
+            centered.row(i) = pts.row(local_idx[i]) - mean.transpose();
+
+        Eigen::JacobiSVD<Eigen::MatrixXd> svd(centered, Eigen::ComputeThinV);
+        const Eigen::VectorXd& sv = svd.singularValues();
+        if (sv(0) <= 0.0) return status;                // all points coincident
+        if (sv(2) > kRankTol * sv(0)) return status;    // already spans 3D
+
+        const Eigen::Vector3d u = svd.matrixV().col(2); // direction not spanned
+
+        // Two different lengths, and mixing them up costs the repair its point:
+        //   `reach` — how far the support extends *along u*. A candidate has to
+        //     clear it to lie outside the region this patch votes on, which is
+        //     what makes it constrain the slope rather than restate the plane.
+        //     For a coplanar box patch that is just the overlap padding, so the
+        //     bar is low; for a ball it is the full radius. The asymmetry is real
+        //     — a flat cell's box really is thin along its normal, a ball is not.
+        //   `scale` — the size of the patch, which is what the search has to
+        //     cover. Sizing the ball by `reach` instead searches a sliver the
+        //     thickness of the padding, which for a flat patch is smaller than
+        //     the sample spacing: it finds nothing and the repair silently
+        //     gives up, which is most of what it used to do.
+        const double reach = use_box ? half_ext.cwiseAbs().dot(u.cwiseAbs())
+                                     : half_ext(0);
+        const double scale = half_ext.norm();
+        if (!(reach > 0.0) || !(scale > 0.0)) return 2;
+
+        // One point per direction restores the rank but rests the whole slope on
+        // a single lever arm — nothing contradicts it if its value is off. Take
+        // the nearest qualifying point on *each* side of the plane instead, so
+        // the linear term along u is determined by a bracket rather than by one
+        // sample. Either side alone is still accepted: a patch at the boundary of
+        // the sampled region may only have neighbours on one side.
+        const std::unordered_set<int> present(local_idx.begin(), local_idx.end());
+        int best[2] = {-1, -1};                         // [0] = u < 0, [1] = u > 0
+        double best_off[2] = {std::numeric_limits<double>::max(),
+                              std::numeric_limits<double>::max()};
+        for (double span = 2.0; span <= 8.0; span *= 2.0) {
+            for (int c : tree.query_ball_point(center, span * scale)) {
+                double signed_off = (pts.row(c).transpose() - mean).dot(u);
+                double off = std::abs(signed_off);
+                const int side = signed_off > 0.0 ? 1 : 0;
+                if (off <= reach || off >= best_off[side]) continue;
+                if (present.count(c)) continue;         // keep looking, don't give up
+                best_off[side] = off;
+                best[side] = c;
+            }
+            if (best[0] >= 0 && best[1] >= 0) break;    // bracketed, stop growing
+        }
+        if (best[0] < 0 && best[1] < 0) return 2;       // nothing off the plane
+        for (int side = 0; side < 2; side++)
+            if (best[side] >= 0) local_idx.push_back(best[side]);
+        status = 1;
+    }
+    return status;
+}
+
+}  // namespace
 
 // ── KDTree partition ─────────────────────────────────────────────────
 
@@ -473,7 +582,8 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     std::vector<int> tmp_sizes(P, 0);
     std::vector<char> valid(P, 0);
 
-    #pragma omp parallel for schedule(dynamic, 4) reduction(+:t_local_fit)
+    int n_repaired = 0, n_unrepaired = 0;
+    #pragma omp parallel for schedule(dynamic, 4) reduction(+:t_local_fit,n_repaired,n_unrepaired)
     for (int p = 0; p < P; p++) {
         auto& pi = patches_info[p];
         if ((int)pi.ext_idx.size() < min_pts) continue;
@@ -492,6 +602,12 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
                     local_idx.push_back(q);
             }
         }
+
+        // Same contract as pair_local above: local_idx only, patch shape intact.
+        int rank_status = augment_to_full_rank(pts, tree, pi.center, pi.half_ext,
+                                               use_box_, local_idx);
+        if (rank_status == 1) n_repaired++;
+        else if (rank_status == 2) n_unrepaired++;
 
         Eigen::MatrixXd local_pts(local_idx.size(), dim);
         Eigen::VectorXd local_vals(local_idx.size());
@@ -525,6 +641,10 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
         std::cout << "  [PU fit] patch loop: "
                   << std::chrono::duration<double>(t3-t2).count() << "s  (local fit: "
                   << t_local_fit << "s)\n";
+    if (verbose_ && (n_repaired || n_unrepaired))
+        std::cout << "  [PU fit] rank-deficient patches: " << (n_repaired + n_unrepaired)
+                  << " (repaired " << n_repaired << ", no off-plane point found "
+                  << n_unrepaired << ")\n";
     if (!patch_sizes.empty() && verbose_) {
         int ps_min = *std::min_element(patch_sizes.begin(), patch_sizes.end());
         int ps_max = *std::max_element(patch_sizes.begin(), patch_sizes.end());

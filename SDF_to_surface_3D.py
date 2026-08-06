@@ -48,6 +48,7 @@ class Options:
         # solver behind iter_gradient_finding='optimize':
         # 'ascent' = fixed-step projected gradient ascent (lr is its step size),
         # 'lbfgspp' = one LBFGS++ solve per point
+        # 'bfgs' = batched BFGS
         self.grad_optimizer = grad_optimizer
 
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
@@ -1037,7 +1038,7 @@ if __name__ == "__main__":
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
         for length in [30]:
-            for optimizer in [ 'lbfgspp', 'bfgs', 'ascent']:
+            # for optimizer in [ 'lbfgspp', 'bfgs', 'ascent']:
                 options = Options(name='eiffel', grid_len=length, use_MES=-1, clamp=True, optim_steps=5)
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
@@ -1046,7 +1047,7 @@ if __name__ == "__main__":
                 # options.grad_optimizer = "lbfgspp"  # 每点独立跑 LBFGS++
                 # options.grad_optimizer = "bfgs"
                 # options.grad_optimizer = "ascent"    # 固定步长投影梯度上升(原方法)
-                options.grad_optimizer = optimizer
+                # options.grad_optimizer = optimizer
 
                 # export_mes_spheres(options, radius_threshold=0.001)
                 points, distances = test_our_method(options, save_gtmesh=False)
