@@ -20,32 +20,55 @@ def f(pat, s):
     m = re.search(pat, s)
     return float(m.group(1)) if m else None
 
+TAGS = [
+    ('rt',     r'\[get_visible_arcs\] find_intersections:\s+([\d.eE+-]+) s'),
+    ('arc',    r'compute_exposed_batch:\s+([\d.eE+-]+) s'),
+    ('init_fit', r'\[DECOMP-init\] rbf_fit:\s+([\d.eE+-]+) s'),
+    ('iploop', r'iterative_projection_3d:\s+([\d.eE+-]+) s'),
+    ('final_vis', r'final projection \+ visibility:\s+([\d.eE+-]+) s'),
+    ('main_total', r'\[main_algorithm\] total:\s+([\d.eE+-]+) s'),
+    ('coarse_pred', r'coarse predict \(\d+ pts\):\s+([\d.eE+-]+) s'),
+    ('fine_pred',   r'fine predict \(\d+ pts\):\s+([\d.eE+-]+) s'),
+    ('dc',          r'dual_contouring:\s+([\d.eE+-]+) s'),
+]
+
 def parse_log(path):
-    """Yield dict per (fid, gl) ours run found in one slurm log."""
-    acc = {}
-    for ln in open(path, errors='ignore'):
-        for key, pat in [
-            ('bvh',    r'build SphereBVH:\s+([\d.eE+-]+) s'),
-            ('rt',     r'\[get_visible_arcs\] find_intersections:\s+([\d.eE+-]+) s'),
-            ('arc',    r'compute_exposed_batch:\s+([\d.eE+-]+) s'),
-            ('init_fit', r'\[DECOMP-init\] rbf_fit:\s+([\d.eE+-]+) s'),
-            ('iploop', r'iterative_projection_3d:\s+([\d.eE+-]+) s'),
-            ('final_vis', r'final projection \+ visibility:\s+([\d.eE+-]+) s'),
-            ('main_total', r'\[main_algorithm\] total:\s+([\d.eE+-]+) s'),
-            ('extract', r'\[extract_surface\] total:\s+([\d.eE+-]+) s'),
-        ]:
-            v = f(pat, ln)
-            if v is not None:
-                acc[key] = v
-        m = re.search(r'\[DECOMP-loop\] rbf_fit:\s+([\d.eE+-]+) s\s+visibility:\s+([\d.eE+-]+) s', ln)
-        if m:
-            acc['loop_fit'] = float(m.group(1)); acc['loop_vis'] = float(m.group(2))
+    """C++ stdout (block-buffered) and Python stdout interleave, so we CANNOT
+    segment by the Python 'ours gl=' line. Instead: (1) collect ordered C++
+    blocks bounded by 'build SphereBVH' .. '[extract_surface] total' (the C++
+    stream is internally ordered), (2) collect ordered (gl, wall) from the
+    Python 'ours gl=' lines, (3) zip positionally — both are in gl-ascending
+    order with the same count."""
+    lines = open(path, errors='ignore').read().splitlines()
+    gls = []; fid = None
+    for ln in lines:
         m = re.search(r'\[(\d+)\]\s+ours gl=(\d+)\s+(\w+)\s+([\d.]+)s', ln)
         if m:
-            acc['fid'] = m.group(1); acc['gl'] = int(m.group(2))
-            acc['status'] = m.group(3); acc['wall'] = float(m.group(4))
-            yield acc
-            acc = {}
+            fid = m.group(1)
+            if m.group(3) == 'ok':
+                gls.append((int(m.group(2)), float(m.group(4))))
+    blocks, cur = [], None
+    for ln in lines:
+        if 'build SphereBVH' in ln:
+            if cur is not None: blocks.append(cur)
+            cur = {'bvh': f(r'build SphereBVH:\s+([\d.eE+-]+) s', ln)}
+        if cur is None:
+            continue
+        for key, pat in TAGS:
+            v = f(pat, ln)
+            if v is not None: cur[key] = v
+        m = re.search(r'\[DECOMP-loop\] rbf_fit:\s+([\d.eE+-]+) s\s+visibility:\s+([\d.eE+-]+) s\s+rbf_eval:\s+([\d.eE+-]+) s', ln)
+        if m:
+            cur['loop_fit'] = float(m.group(1)); cur['loop_vis'] = float(m.group(2)); cur['loop_eval'] = float(m.group(3))
+        if '[extract_surface] total' in ln:
+            cur['extract'] = f(r'\[extract_surface\] total:\s+([\d.eE+-]+) s', ln)
+            blocks.append(cur); cur = None
+    if cur is not None: blocks.append(cur)
+    if len(blocks) != len(gls):
+        print(f"  WARN {path}: {len(blocks)} cpp blocks vs {len(gls)} ok gl-lines")
+    for (gl, wall), blk in zip(gls, blocks):
+        blk['gl'] = gl; blk['wall'] = wall; blk['status'] = 'ok'; blk['fid'] = fid
+        yield blk
 
 def main():
     ap = argparse.ArgumentParser()
@@ -91,6 +114,25 @@ def main():
     print(hdr); print("-"*len(hdr))
     for b in BUCKETS:
         print(LABEL[b].ljust(16) + "".join(f"{100*by[b][gl]/by['wall'][gl]:>8.1f}%" for gl in gls))
+
+    # ---- RBF interpolation total (fit + all evaluations) — the reviewer's question ----
+    # fit           = init + in-loop refits
+    # eval(opt)     = predict_gradients inside optimize_best_gradients (g_rbf_eval_s)
+    # eval(extract) = coarse + fine predict on the extraction grid
+    for r in runs:
+        r['rbf_eval_opt'] = r.get('loop_eval',0) or 0
+        r['rbf_eval_ext'] = (r.get('coarse_pred',0) or 0) + (r.get('fine_pred',0) or 0)
+        r['rbf_total'] = r['rbf_fit'] + r['rbf_eval_opt'] + r['rbf_eval_ext']
+    print("\n=== RBF interpolation share of ours wall (%) — fit vs evaluation ===")
+    print(hdr); print("-"*len(hdr))
+    for key, lab in [('rbf_fit','RBF fit'), ('rbf_eval_opt','RBF eval (opt)'),
+                     ('rbf_eval_ext','RBF eval (extract)'), ('rbf_total','RBF TOTAL')]:
+        row = lab.ljust(16)
+        for gl in gls:
+            rr = [r for r in runs if r['gl']==gl]
+            m = np.mean([r.get(key,0) or 0 for r in rr])
+            row += f"{100*m/by['wall'][gl]:>8.1f}%"
+        print(row)
 
     # ---- total-time comparison vs old timing_4algo ----
     old = {}
