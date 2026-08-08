@@ -61,18 +61,26 @@ echo "StartTime   : $(date -Iseconds)"
 echo
 
 cd "${REPO}"
-# RUN_ALGOS lets you submit a single-algo run via the env, e.g.:
+# RUN_ALGOS lets you submit a subset via the env, e.g.:
 #   sbatch --export=ALL,RUN_ALGOS=ours scripts/submit_baselines.sbatch
+# For MORE THAN ONE algo use '+' as the separator:
+#   sbatch --export=ALL,RUN_ALGOS=ours+mc scripts/submit_baselines.sbatch
+# sbatch's --export list is itself comma-separated, so a comma inside a value
+# is eaten by its parser (RUN_ALGOS=ours,mc silently arrives as just 'ours'
+# plus a stray 'mc' entry) -- escaping does not help, the split happens after
+# the shell is done. '+' survives; translate it back here.
 # Default keeps all three algorithms (existing rfta/mes outputs are
 # idempotently skipped, so re-running with the default after baselines
 # are done only adds 'ours' work).
 RUN_ALGOS_ARG=()
 if [[ -n "${RUN_ALGOS:-}" ]]; then
+    RUN_ALGOS="${RUN_ALGOS//+/,}"
     RUN_ALGOS_ARG=(--algos "${RUN_ALGOS}")
     echo "RunAlgos    : ${RUN_ALGOS}"
 fi
 GRID_LENS_ARG=()
 if [[ -n "${GRID_LENS:-}" ]]; then
+    GRID_LENS="${GRID_LENS//+/,}"   # '+' separator, same reason as RUN_ALGOS
     GRID_LENS_ARG=(--grid-lens "${GRID_LENS}")
     echo "GridLens    : ${GRID_LENS}"
 fi
