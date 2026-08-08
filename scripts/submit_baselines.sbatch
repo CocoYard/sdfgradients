@@ -19,7 +19,10 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --time=24:00:00
+# Per-task runtime is ~14 min mean / ~29 min max on the solid-300 set, so 2h
+# is 4x headroom. Keep it tight: the backfill scheduler can only slot a job
+# into a gap it fits in, and a 24h request never fits.
+#SBATCH --time=2:00:00
 #SBATCH --output=/scratch/ycheng27/sdfgradients/baselines/logs/slurm_%A_%a.out
 #SBATCH --error=/scratch/ycheng27/sdfgradients/baselines/logs/slurm_%A_%a.err
 #SBATCH --requeue
