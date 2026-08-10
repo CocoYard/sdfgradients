@@ -726,12 +726,14 @@ static void dual_contour(
     auto sec_since = [](const clk::time_point& t) {
         return std::chrono::duration<double>(clk::now() - t).count();
     };
-    const int N  = nx * ny * nz;
+    const int N = nx * ny * nz;
     auto vidx = [&](int xi, int yi, int zi) {
         return xi + nx * (yi + ny * zi);
     };
 
     // ── 1. Find all sign-changing edges ──────────────────────────────
+    // Linear interpolation of the grid samples gives the *initial guess*
+    // for t; the true root on the interpolator is found in step 2.
     auto t_edge = clk::now();
     std::vector<EdgeIsect> edges;
     edges.reserve(N / 4);
@@ -772,26 +774,110 @@ static void dual_contour(
         return;
     }
 
-    // ── 2. Intersection positions + gradients (one batched predict) ──
-    auto t_grad = clk::now();
-    Eigen::MatrixXd EP(nedges, 3);
+    // Edge endpoints and directions, reused throughout.
+    Eigen::MatrixXd PA(nedges, 3), ED(nedges, 3);   // pa, (pb - pa)
     for (int e = 0; e < nedges; e++) {
         const auto& ei = edges[e];
-        Eigen::Vector3d pa = GV.row(vidx(ei.xi, ei.yi, ei.zi));
+        PA.row(e) = GV.row(vidx(ei.xi, ei.yi, ei.zi));
         int xi2 = ei.xi + (ei.axis == 0);
         int yi2 = ei.yi + (ei.axis == 1);
         int zi2 = ei.zi + (ei.axis == 2);
-        Eigen::Vector3d pb = GV.row(vidx(xi2, yi2, zi2));
-        EP.row(e) = pa + double(ei.t) * (pb - pa);
+        ED.row(e) = GV.row(vidx(xi2, yi2, zi2)).transpose() - PA.row(e).transpose();
     }
-    int saved = set_threads(thread_policy().predict);
-    Eigen::MatrixXd EN = interp.predict_gradients(EP, chunk_size);
-    restore_threads(saved);
+
+    // ── 2. Root-find each intersection on the interpolator ───────────
+    // Safeguarded Newton along the edge: keep a bracket [t_neg, t_pos]
+    // (f < iso at t_neg, f > iso at t_pos, known from the grid signs),
+    // take Newton steps t ← t − (f − iso)/(∇f·d), and fall back to
+    // bisection whenever the step leaves the bracket or ∇f·d ≈ 0.
+    // Each iteration is ONE fused batched predict over the still-active
+    // edges; converged edges drop out, so total cost ≈ 2–4 batched calls.
+    auto t_root = clk::now();
+
+    Eigen::MatrixXd EP(nedges, 3);                  // intersection positions
+    Eigen::MatrixXd EN(nedges, 3);                  // gradients at EP
+    EN.setZero();
+
+    std::vector<double> tcur(nedges), tneg(nedges), tpos(nedges);
+    for (int e = 0; e < nedges; e++) {
+        tcur[e] = double(edges[e].t);
+        tneg[e] = (edges[e].neg_end == 0) ? 0.0 : 1.0;
+        tpos[e] = (edges[e].neg_end == 0) ? 1.0 : 0.0;
+        EP.row(e) = PA.row(e) + tcur[e] * ED.row(e);
+    }
+
+    const int    max_newton = 12;     // Newton needs 2–4; bisection tail more
+    const double t_tol      = 1e-7;   // |dt| below this ⇒ position converged
+                                      // (relative to edge length, i.e. ~1e-7·h)
+    std::vector<int> active(nedges);
+    for (int e = 0; e < nedges; e++) active[e] = e;
+
+    int n_evals = 0;
+    {
+        int saved = set_threads(thread_policy().predict);
+        Eigen::MatrixXd EPa, Ga;
+        Eigen::VectorXd Fa;
+        for (int it = 0; it < max_newton && !active.empty(); it++) {
+            const int na = (int)active.size();
+            EPa.resize(na, 3);
+            for (int k = 0; k < na; k++) EPa.row(k) = EP.row(active[k]);
+
+            interp.predict_with_gradients(EPa, Fa, Ga, chunk_size);
+            n_evals++;
+
+            std::vector<int> next;
+            next.reserve(na);
+            for (int k = 0; k < na; k++) {
+                const int e = active[k];
+                const double f = Fa(k) - iso;
+
+                // Gradient at the point we just evaluated. If the edge
+                // converges this round, tcur moves by |dt| < t_tol, so this
+                // gradient is at the final position up to O(t_tol·h).
+                EN.row(e) = Ga.row(k);
+
+                // Shrink the bracket with the sign of f.
+                if (f < 0.0) tneg[e] = tcur[e];
+                else         tpos[e] = tcur[e];
+
+                // Newton step along the edge; bisect if invalid.
+                const double df = Ga.row(k).dot(ED.row(e));
+                double tn;
+                bool newton_ok = std::abs(df) > 1e-300;
+                if (newton_ok) {
+                    tn = tcur[e] - f / df;
+                    const double lo = std::min(tneg[e], tpos[e]);
+                    const double hi = std::max(tneg[e], tpos[e]);
+                    newton_ok = (tn > lo && tn < hi);
+                }
+                if (!newton_ok) tn = 0.5 * (tneg[e] + tpos[e]);
+
+                const double dt = tn - tcur[e];
+                tcur[e] = tn;
+                EP.row(e) = PA.row(e) + tcur[e] * ED.row(e);
+
+                if (std::abs(dt) > t_tol) next.push_back(e);
+            }
+            active.swap(next);
+        }
+        restore_threads(saved);
+    }
+
+    // Persist refined parameters (float storage, as before).
+    for (int e = 0; e < nedges; e++) edges[e].t = (float)tcur[e];
+
     for (int e = 0; e < nedges; e++) {
         double n = EN.row(e).norm();
         if (n > 1e-12) EN.row(e) /= n;
         else EN.row(e).setZero();
     }
+
+    if (interp.verbose()) {
+        std::printf("[dc] %d edges, root-finding: %d fused evals, "
+                    "%d unconverged, %.3fs\n",
+                    nedges, n_evals, (int)active.size(), sec_since(t_root));
+    }
+
     // ── 3. Per-cell QEF: min Σ (nᵢ·(v-pᵢ))², biased to centroid ─────
     auto t_qef = clk::now();
     const int Cx = nx - 1, Cy = ny - 1, Cz = nz - 1;
@@ -858,6 +944,7 @@ static void dual_contour(
         cell_vertex[cidx(ci, cj, ck)] = (int)verts.size();
         verts.push_back(v);
     }
+
     // ── 4. Emit triangles per sign-changing edge ─────────────────────
     // Cell ordering is CCW when viewed looking in +axis direction so that
     // triangle winding yields an outward normal aligned with +axis when the
