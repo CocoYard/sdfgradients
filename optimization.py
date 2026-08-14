@@ -435,7 +435,7 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
             # only use those whose visible arcs are not 2Pi
             for i in range(N):
                 # print(f"Point {i}: visible arcs = {visible_arcs[i]}")
-                if visible_arcs[i] is not None and visible_arcs[i][0][1] - visible_arcs[i][0][0] >= 2 * np.pi - 1e-3:
+                if visible_arcs[i] and visible_arcs[i][0][1] - visible_arcs[i][0][0] >= 2 * np.pi - 1e-3:
                     skip[i] = True
 
         for i in range(N):

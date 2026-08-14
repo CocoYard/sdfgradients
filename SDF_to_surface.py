@@ -2314,6 +2314,111 @@ def test_plot(n, iters, clamp_gradients=False, see_arcs=True, cmd='gt',
     plt.close()
     print(f'saved {fname}')
 
+def plot_rbf_weights(n, iters=1000, resolution=400, path_to_image='examples/eiffel.png'):
+    """
+    Run the INTERP_GLOBAL_OPT pipeline, then visualize the RBF coefficients of
+    the interpolator fitted in the last iteration. Every fitted point (input
+    samples + their surface projections) is colored by its coefficient; a point
+    shared by several PU patches uses the average of its per-patch coefficients.
+    """
+    print(f"Plotting RBF weights with n={n}, iters={iters}\n")
+    points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image=path_to_image)
+    interpolator = PUInterpolator(kernel='thin_plate')
+
+    visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
+    degenerate_arcs = va.get_short_arcs(visible_arcs, tol=1e-8)
+    colinear_neighbors = neighbors_on_gradient(sdf_points, sdf_values, tol=1e-5)
+    print(f"Number of colinear neighbors: {len(colinear_neighbors)}")
+
+    init_interpolator_with_degen_pts(sdf_points, sdf_values, interpolator, degenerate_arcs)
+    init_gradients = init_gradients_by_degen_pts(sdf_points, sdf_values, degenerate_arcs)
+
+    gradients, interpolator = opt.iterative_projection(
+        sdf_points, sdf_values, init_gradients, interpolator=interpolator,
+        visible_arcs=visible_arcs, short_arc_idx=degenerate_arcs, num_iter=iters,
+        gt=points, colinear_neighbors=colinear_neighbors)
+
+    gradients_gt, _ = estimate_gradients_oracle(sdf_points, sdf_values, points)
+    grad_diff = gradients_diff_norm(gradients, gradients_gt)
+    print(f"n={n} Mean L2 norm of gradient difference from ground truth: {grad_diff:.4f}")
+
+    # Per-point RBF coefficients of the last fit. The final fit stacked the
+    # input samples with their projections (sdf=0) before partitioning, so
+    # map each patch's local coefficients back to the global point set and
+    # average over the patches that share a point.
+    fitted_pts = interpolator._all_points
+    fitted_vals = interpolator._all_values
+    tree = cKDTree(fitted_pts)
+    coeff_sum = np.zeros(len(fitted_pts))
+    coeff_cnt = np.zeros(len(fitted_pts))
+    for _, _, local in interpolator.patches:
+        _, idx = tree.query(local.points)
+        np.add.at(coeff_sum, idx, local.alpha)
+        np.add.at(coeff_cnt, idx, 1)
+    coeffs = coeff_sum / np.maximum(coeff_cnt, 1)
+    print(f"RBF coefficients: {len(coeffs)} fitted points, range [{coeffs.min():.4g}, {coeffs.max():.4g}]")
+
+    fig, ax = plt.subplots(figsize=(8, 7))
+    # Robust symmetric range centered at 0 so a few extreme coefficients don't
+    # wash out the diverging colormap.
+    vmax = max(np.quantile(np.abs(coeffs), 0.98), 1e-12)
+    norm = plt.Normalize(vmin=-vmax, vmax=vmax)
+    cmap = plt.cm.RdBu_r
+
+    # Voronoi cells of the fitted points, filled by coefficient. Mirror the
+    # points across the four domain edges so every cell inside [0,1]^2 is
+    # finite and clipped to the domain.
+    from scipy.spatial import Voronoi
+    from matplotlib.collections import PolyCollection
+    mirrored = [fitted_pts]
+    for dim in (0, 1):
+        for edge in (0.0, 1.0):
+            m = fitted_pts.copy()
+            m[:, dim] = 2 * edge - m[:, dim]
+            mirrored.append(m)
+    vor = Voronoi(np.vstack(mirrored))
+    polys, poly_colors = [], []
+    for i in range(len(fitted_pts)):
+        region = vor.regions[vor.point_region[i]]
+        if len(region) == 0 or -1 in region:
+            continue
+        polys.append(vor.vertices[region])
+        poly_colors.append(cmap(norm(coeffs[i])))
+    ax.add_collection(PolyCollection(polys, facecolors=poly_colors,
+                                     edgecolors='white', linewidths=0.3))
+    fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, label='RBF coefficient')
+
+    proj_mask = fitted_vals == 0
+    ax.scatter(fitted_pts[~proj_mask, 0], fitted_pts[~proj_mask, 1],
+               c='#404040', s=4, marker='o', label='Input Sample Points')
+    ax.scatter(fitted_pts[proj_mask, 0], fitted_pts[proj_mask, 1],
+               c='#404040', s=8, marker='^', label='Projected Surface Points')
+    ax.plot(points[:, 0], points[:, 1], color='#A0A0A0', linewidth=2, label='Original Shape')
+
+    zero_contours = interpolator.extract_zero_level_set(bounds=((0, 1), (0, 1)), resolution=resolution)
+    for k, poly in enumerate(zero_contours):
+        poly = np.asarray(poly)
+        if len(poly) >= 2:
+            ax.plot(poly[:, 0], poly[:, 1], color='#06A77D', linewidth=1.4,
+                    label='Reconstructed Zero Level Set' if k == 0 else None)
+
+    ax.set_aspect('equal')
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.legend(loc='upper right')
+
+    # Click any point to print its index and coefficient to the console
+    def _on_click_print_idx(event):
+        if event.inaxes != ax:
+            return
+        click_pt = np.array([event.xdata, event.ydata])
+        idx = int(np.argmin(np.linalg.norm(fitted_pts - click_pt, axis=1)))
+        print(f"[click] idx={idx}  pos=({fitted_pts[idx, 0]:.4f}, {fitted_pts[idx, 1]:.4f})  "
+              f"sdf={fitted_vals[idx]:.4f}  coeff={coeffs[idx]:.6g}")
+    fig.canvas.mpl_connect('button_press_event', _on_click_print_idx)
+
+    plt.show()
+    return
 
 def plot_pure_sdf():
     n = 30
@@ -2347,9 +2452,11 @@ if __name__ == "__main__":
     # test_single_gradient(30)
     # test_subdividing(30)
     # plot_pure_sdf()
-    # test_gradient_estimation(n, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=1, see_arcs=True, clamp_gradients=False,
+    # test_gradient_estimation(20, NeighborEstimation.SPATIAL, GradientEstimation.INTERP_GLOBAL_OPT, iters=1, see_arcs=True, clamp_gradients=False,
     #                                     on_gradient_neighbors=False, resolution=400, path_to_image='examples/eiffel.png')
-    test_plot(n=18, iters=12, clamp_gradients=True, cmd='')                       # 标准用法
+
+    plot_rbf_weights(40, iters=20, path_to_image='examples/eiffel.png')    
+    # test_plot(n=18, iters=12, clamp_gradients=True, cmd='')                       # 标准用法
     # test_plot(n=30, iters=0)                                               # shortArcs 阶段（只看 init）
     # test_plot(n=30, iters=10, see_arcs=False)                              # 不画 pastel 圆
     # test_plot(n=30, iters=10, path_to_image='examples/horse.png')          # 换 mesh
