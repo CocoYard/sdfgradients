@@ -484,21 +484,27 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
     }
 
     // ── Riemannian BFGS on S² ───────────────────────────────────────
+    // Names follow Nocedal & Wright ch. 6 so this reads against the book:
+    // x_k is the iterate, p_k the search direction, α the step length,
+    // s_k = α·p_k and y_k = ∇f_{k+1} − ∇f_k the curvature pair, H_k the
+    // inverse-Hessian approximation. The book's p and s are spoken for, so the
+    // problem data is written z = points.row(i) and σ = sdf_values(i).
+    //
     // Per point we minimise, over the unit sphere,
-    //     f(g) = D̃(q) / s,        q = p − s·g
-    // (dividing by the signed distance s both orients the objective — the
+    //     f(x) = D̃(q) / σ,        q = z − σ·x
+    // (dividing by the signed distance σ both orients the objective — the
     // minimum is the direction whose projection lands deepest on the correct
     // side — and cancels the chain-rule factor, so ∇f = −∇D̃(q) exactly. Both
     // f and ∇f are then O(1) at every point and a plain H₀ = I is well scaled,
-    // where the raw Euclidean gradient would carry a per-point |s| factor.)
+    // where the raw Euclidean gradient would carry a per-point |σ| factor.)
     //
     // The sphere constraint is handled the usual manifold way:
-    //     retraction        R(g, v) = normalize(g + v)
-    //     vector transport  T(v)    = (I − g'g'ᵀ) v          (projection)
-    // The inverse Hessian H is kept as a 3×3 matrix per point, transported the
-    // same way and given the identity on the normal direction
-    // (H ← P H P + g'g'ᵀ) so it stays positive definite; search directions are
-    // re-projected onto the tangent plane regardless.
+    //     retraction        R(x, v) = normalize(x + v)
+    //     vector transport  T(v)    = (I − x'x'ᵀ) v          (projection)
+    // H_k is kept as a 3×3 matrix per point, transported the same way and given
+    // the identity on the normal direction (H ← P H P + x'x'ᵀ) so it stays
+    // positive definite; search directions are re-projected onto the tangent
+    // plane regardless.
     //
     // Cost is the reason for the loop shape. The RBF evaluation dominates, and
     // what it charges for is the *number* of batched calls (patch dispatch,
@@ -506,16 +512,21 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
     // predict_with_gradients() per iteration, the same call count as the plain
     // gradient descent it replaces, and folds the Armijo line search into the
     // outer loop instead of giving it its own evaluations:
-    //   · each iteration evaluates (f, ∇f) at one candidate per point;
-    //   · sufficient decrease accepted ⇒ that same ∇f closes the (s, y)
-    //     curvature pair, updates H and proposes the next candidate;
-    //   · rejected ⇒ the step is halved and re-proposed from the last accepted
-    //     iterate (the gradient at the rejected point is simply discarded).
+    //   · each round evaluates (f, ∇f) at one trial point x⁺ per point;
+    //   · sufficient decrease accepted ⇒ x⁺ becomes x_{k+1} and that same ∇f
+    //     closes the (s_k, y_k) pair, updates H and proposes the next x⁺;
+    //   · rejected ⇒ α is halved and x⁺ re-proposed from x_k, which has not
+    //     moved (the gradient at the rejected x⁺ is simply discarded).
+    // So the `step` counter below is *not* k: a rejected round leaves k where
+    // it was and only shrinks α. Per point the sequence of trial points is
+    // exactly what textbook BFGS with backtracking Armijo would visit; what is
+    // different is that the rounds of many points are interleaved, which is why
+    // every per-point line-search variable has to be stored N-wide.
     // Converged and retired points are compacted out, so the calls shrink as
     // the loop proceeds. `lr` is no longer a fixed step size — it only caps the
     // first (steepest descent) step; after that the line search sets the length.
-    // Convergence test on ‖γ‖. γ is the tangential part of −∇D̃(q) and the
-    // interpolant is near-Eikonal (‖∇D̃‖ ≈ 1), so ‖γ‖ ≈ sin∠(∇D̃(q), g): the
+    // Convergence test on ‖∇f‖. ∇f is the tangential part of −∇D̃(q) and the
+    // interpolant is near-Eikonal (‖∇D̃‖ ≈ 1), so ‖∇f‖ ≈ sin∠(∇D̃(q), x): the
     // tolerance reads directly as an angle, and 1e-4 ≈ 0.006°, an order of
     // magnitude below the accuracy the interpolant itself supports. Retiring
     // points at a *reachable* tolerance is what lets the batch shrink — with a
@@ -525,78 +536,80 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
     constexpr double kMaxStep  = 1.0;   // cap on ‖t·d‖ (≈45° of rotation)
     constexpr int    kMaxBT    = 8;     // backtracks before restarting/retiring
 
-    // Active set: points still being optimised. s == 0 means q = p whatever g
+    // Active set: points still being optimised. σ == 0 means q = z whatever x
     // is — the objective is constant there, so those keep their initial
     // direction and never enter the batch.
-    Eigen::VectorXd inv_s(N);
+    Eigen::VectorXd inv_sigma(N);
     std::vector<int> act;
     act.reserve(N);
     for (int i = 0; i < N; i++) {
-        double s = sdf_values(i);
-        inv_s(i) = (std::abs(s) > 1e-12) ? 1.0 / s : 0.0;
-        if (inv_s(i) != 0.0) act.push_back(i);
+        double sigma = sdf_values(i);
+        inv_sigma(i) = (std::abs(sigma) > 1e-12) ? 1.0 / sigma : 0.0;
+        if (inv_sigma(i) != 0.0) act.push_back(i);
     }
 
-    // `dirs` holds the last accepted iterate; `cand` the one being evaluated.
-    Eigen::MatrixXd cand = dirs;
-    Eigen::MatrixXd cproj(N, 3);   // p − s·cand, the query point for cand
-    Eigen::VectorXd fval(N);       // f at the accepted iterate
-    Eigen::MatrixXd gacc(N, 3);    // tangent gradient at the accepted iterate
-    Eigen::MatrixXd svec(N, 3);    // pending step t·d, one half of the BFGS pair
-    Eigen::MatrixXd dirn(N, 3);    // search direction d
-    Eigen::VectorXd dder(N);       // ⟨d, γ⟩, the Armijo directional derivative
-    Eigen::VectorXd tstep(N);      // current step length
-    std::vector<Eigen::Matrix3d> Hinv(N, Eigen::Matrix3d::Identity());
+    // One row per point, holding that point's own BFGS state.
+    Eigen::MatrixXd& xk = dirs;    // x_k, the last accepted iterate (also the
+                                   //      caller's output buffer)
+    Eigen::MatrixXd  xt = dirs;    // x⁺, the trial point being evaluated
+    Eigen::MatrixXd  qt(N, 3);     // q⁺ = z − σ·x⁺, the query point for x⁺
+    Eigen::VectorXd  fk(N);        // f_k
+    Eigen::MatrixXd  gk(N, 3);     // ∇f_k, the tangent gradient at x_k
+    Eigen::MatrixXd  sk(N, 3);     // s_k = α·p_k, pending until x⁺ is accepted
+    Eigen::MatrixXd  pk(N, 3);     // p_k, the search direction
+    Eigen::VectorXd  gTp(N);       // ∇f_kᵀp_k, the Armijo directional derivative
+    Eigen::VectorXd  alpha(N);     // α, the current step length
+    std::vector<Eigen::Matrix3d> H(N, Eigen::Matrix3d::Identity());   // H_k
     std::vector<char> scaled(N, 0);   // H ≠ I: a curvature pair has been applied
     std::vector<char> was_sd(N, 0);   // current direction is steepest descent
     std::vector<unsigned char> nbt(N, 0);   // backtracks on the current direction
     std::vector<char> keep(N, 0);
 
-    // Propose the candidate for the next evaluation: cand = R(g, t·d). Also
-    // records the step, which becomes the `s` of the BFGS pair if it is
-    // accepted. d ⟂ g and ‖t·d‖ ≤ 1, so ‖g + t·d‖ ≥ 1 — the retraction is safe.
+    // Propose the trial point for the next evaluation: x⁺ = R(x_k, α·p_k). Also
+    // records α·p_k, which becomes s_k if the trial is accepted. p_k ⟂ x_k and
+    // ‖α·p_k‖ ≤ 1, so ‖x_k + α·p_k‖ ≥ 1 — the retraction is safe.
     auto propose = [&](int i) {
-        svec.row(i) = tstep(i) * dirn.row(i);
-        Eigen::RowVector3d gt = dirs.row(i) + svec.row(i);
-        gt /= gt.norm();
-        cand.row(i)  = gt;
-        cproj.row(i) = points.row(i) - sdf_values(i) * gt;
+        sk.row(i) = alpha(i) * pk.row(i);
+        Eigen::RowVector3d x = xk.row(i) + sk.row(i);
+        x /= x.norm();
+        xt.row(i) = x;
+        qt.row(i) = points.row(i) - sdf_values(i) * x;
     };
 
-    // Search direction from the tangent gradient γ at the accepted iterate g.
+    // p_k = −H_k ∇f_k, given the iterate x and the tangent gradient ∇f there.
     // Falls back to steepest descent if H has stopped producing descent.
-    // Returns false when no usable direction exists (γ in the null space).
-    auto set_direction = [&](int i, const Eigen::Vector3d& g,
-                             const Eigen::Vector3d& gamma, double cap) {
+    // Returns false when no usable direction exists (∇f in the null space).
+    auto set_direction = [&](int i, const Eigen::Vector3d& x,
+                             const Eigen::Vector3d& grad, double cap) {
         bool sd = (scaled[i] == 0);
-        Eigen::Vector3d d = -(Hinv[i] * gamma);
-        d -= d.dot(g) * g;
-        if (!(d.dot(gamma) < 0.0)) {
-            Hinv[i].setIdentity();
+        Eigen::Vector3d p = -(H[i] * grad);
+        p -= p.dot(x) * x;
+        if (!(p.dot(grad) < 0.0)) {
+            H[i].setIdentity();
             scaled[i] = 0;
-            d = -gamma;
+            p = -grad;
             sd = true;
         }
-        double dn = d.norm();
-        if (!(dn > 0.0)) return false;
-        dirn.row(i) = d.transpose();
-        dder(i)     = d.dot(gamma);
-        tstep(i)    = std::min(1.0, cap / dn);
-        was_sd[i]   = sd ? 1 : 0;
-        nbt[i]      = 0;
+        double pn = p.norm();
+        if (!(pn > 0.0)) return false;
+        pk.row(i) = p.transpose();
+        gTp(i)    = p.dot(grad);
+        alpha(i)  = std::min(1.0, cap / pn);
+        was_sd[i] = sd ? 1 : 0;
+        nbt[i]    = 0;
         return true;
     };
 
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < N; i++)
-        cproj.row(i) = points.row(i) - sdf_values(i) * cand.row(i);
+        qt.row(i) = points.row(i) - sdf_values(i) * xt.row(i);
 
     for (int step = 0; step < optim_steps && !act.empty(); step++) {
         int M = (int)act.size();
 
         Eigen::MatrixXd Q(M, 3);
         #pragma omp parallel for schedule(static)
-        for (int k = 0; k < M; k++) Q.row(k) = cproj.row(act[k]);
+        for (int ai = 0; ai < M; ai++) Q.row(ai) = qt.row(act[ai]);
 
         auto _te = std::chrono::steady_clock::now();
         Eigen::VectorXd val;
@@ -605,30 +618,31 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
         g_rbf_eval_s += std::chrono::duration<double>(
             std::chrono::steady_clock::now() - _te).count();
 
-        // Accept/reject, BFGS update and next candidate — all per-point 3×3
+        // Accept/reject, BFGS update and next trial point — all per-point 3×3
         // work, so it runs parallel over the active set; the compaction of the
-        // retired points is done serially afterwards.
+        // retired points is done serially afterwards. `ai` indexes the active
+        // set; it is not the BFGS iteration index k.
         const double cap = (step == 0) ? lr : kMaxStep;
         #pragma omp parallel for schedule(static)
-        for (int k = 0; k < M; k++) {
-            int i = act[k];
+        for (int ai = 0; ai < M; ai++) {
+            int i = act[ai];
             keep[i] = 1;
-            double f_new = val(k) * inv_s(i);
+            double fk1 = val(ai) * inv_sigma(i);
 
-            // Iteration 0 evaluates the initial direction itself: there is
+            // Round 0 evaluates the initial direction itself: there is
             // nothing to compare against, so it is accepted by definition.
             if (step > 0 &&
-                !(f_new <= fval(i) + kArmijoC1 * tstep(i) * dder(i))) {
+                !(fk1 <= fk(i) + kArmijoC1 * alpha(i) * gTp(i))) {
                 if (++nbt[i] < kMaxBT) {
-                    tstep(i) *= 0.5;
+                    alpha(i) *= 0.5;
                 } else if (!was_sd[i]) {
                     // The quasi-Newton direction is not working here. Restart
-                    // from steepest descent — γ at the accepted iterate is
-                    // already known, so no extra evaluation is needed.
-                    Hinv[i].setIdentity();
+                    // from steepest descent — ∇f_k at x_k is already known, so
+                    // no extra evaluation is needed.
+                    H[i].setIdentity();
                     scaled[i] = 0;
-                    if (!set_direction(i, dirs.row(i).transpose(),
-                                       gacc.row(i).transpose(), cap)) {
+                    if (!set_direction(i, xk.row(i).transpose(),
+                                       gk.row(i).transpose(), cap)) {
                         keep[i] = 0;
                         continue;
                     }
@@ -642,41 +656,43 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
                 continue;
             }
 
-            Eigen::Vector3d g = cand.row(i).transpose();
-            Eigen::Vector3d gamma = -sdf_grad.row(k).transpose();
-            gamma -= gamma.dot(g) * g;             // project onto T_g S²
-            if (!gamma.allFinite()) { keep[i] = 0; continue; }
+            Eigen::Vector3d x = xt.row(i).transpose();      // x_{k+1}
+            Eigen::Vector3d gk1 = -sdf_grad.row(ai).transpose();
+            gk1 -= gk1.dot(x) * x;                 // project onto T_x S²
+            if (!gk1.allFinite()) { keep[i] = 0; continue; }
 
             if (step > 0) {
-                // Close the curvature pair spanning the accepted step.
+                // Close the curvature pair spanning the accepted step. s_k and
+                // ∇f_k both live in T_{x_k}, so they are transported to
+                // T_{x_{k+1}} before the book's formulas apply.
                 Eigen::Matrix3d P =
-                    Eigen::Matrix3d::Identity() - g * g.transpose();
-                Eigen::Vector3d sv = P * svec.row(i).transpose();
-                Eigen::Vector3d y  = gamma - P * gacc.row(i).transpose();
-                double sy = sv.dot(y);
-                Hinv[i] = P * Hinv[i] * P + g * g.transpose();
-                // Skip on failed curvature (sᵀy ≤ 0): the objective is not
+                    Eigen::Matrix3d::Identity() - x * x.transpose();
+                Eigen::Vector3d s = P * sk.row(i).transpose();
+                Eigen::Vector3d y = gk1 - P * gk.row(i).transpose();
+                double sTy = s.dot(y);
+                H[i] = P * H[i] * P + x * x.transpose();
+                // Skip on failed curvature (s_kᵀy_k ≤ 0): the objective is not
                 // convex on S², and Armijo alone does not guarantee it.
-                if (sy > 1e-14 * sv.norm() * y.norm()) {
+                if (sTy > 1e-14 * s.norm() * y.norm()) {
                     if (!scaled[i]) {
                         double yy = y.squaredNorm();
-                        if (yy > 0.0) Hinv[i] *= sy / yy;   // Nocedal (6.20)
+                        if (yy > 0.0) H[i] *= sTy / yy;     // Nocedal (6.20)
                         scaled[i] = 1;
                     }
-                    double rho = 1.0 / sy;
+                    double rho = 1.0 / sTy;
                     Eigen::Matrix3d V = Eigen::Matrix3d::Identity()
-                                      - rho * sv * y.transpose();
-                    Hinv[i] = V * Hinv[i] * V.transpose()
-                            + rho * sv * sv.transpose();
+                                      - rho * s * y.transpose();
+                    H[i] = V * H[i] * V.transpose()
+                         + rho * s * s.transpose();         // Nocedal (6.17)
                 }
             }
 
-            dirs.row(i) = cand.row(i);
-            fval(i)     = f_new;
-            gacc.row(i) = gamma.transpose();
+            xk.row(i) = xt.row(i);
+            fk(i)     = fk1;
+            gk.row(i) = gk1.transpose();
 
-            if (gamma.norm() <= kGradTol ||
-                !set_direction(i, g, gamma, cap)) {
+            if (gk1.norm() <= kGradTol ||
+                !set_direction(i, x, gk1, cap)) {
                 keep[i] = 0;             // converged
                 continue;
             }
@@ -685,8 +701,8 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
 
         std::vector<int> nxt;
         nxt.reserve(M);
-        for (int k = 0; k < M; k++)
-            if (keep[act[k]]) nxt.push_back(act[k]);
+        for (int ai = 0; ai < M; ai++)
+            if (keep[act[ai]]) nxt.push_back(act[ai]);
         act.swap(nxt);
     }
 
