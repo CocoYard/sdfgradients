@@ -9,8 +9,8 @@ direct read on whether the field is a clean, monotone distance function or has
 spurious pockets/floaters between layers.
 
 Usage:
-    python debug/sdf_contour_shells.py --source igr --name rings
-    python debug/sdf_contour_shells.py --source hotspot --name rings --axis x
+    python debug/sdf_contour_shells.py --source igr --name metratron
+    python debug/sdf_contour_shells.py --source hotspot --name metratron --axis x
 """
 import os
 import sys
@@ -41,7 +41,7 @@ def _field_fn(source, name):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--source', default='igr', choices=['igr', 'hotspot', 'gt', 'pointcloud'])
-    ap.add_argument('--name', default='rings')
+    ap.add_argument('--name', default='metratron')
     ap.add_argument('--res', type=int, default=256)
     ap.add_argument('--pad', type=float, default=0.1)
     ap.add_argument('--axis', default='y', choices=['x', 'y', 'z'], help='cut-plane normal')

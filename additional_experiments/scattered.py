@@ -11,7 +11,7 @@ same budget, so the table reads as "same number of samples, arranged two ways".
 import _common
 
 MESHES = ['bunny', 'horse', 'eiffel', 'rossignol', 'fandisk',
-          'chair', 'rings', 'armadillo', 'beetle-alt', 'holes']
+          'chair', 'metratron', 'armadillo', '32770', 'denker']
 
 # 10^3, 50^3 and 100^3 samples.
 GRID_LENS = [10, 50, 100]
