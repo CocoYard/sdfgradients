@@ -30,3 +30,7 @@ gallery/out/*
 external/IGR/data/
 external/IGR/code/reconstruction/setup_*.conf
 tmp.csv
+# Experiment reconstructions are large and regenerable; keep only the metrics.
+additional_experiments/results/**
+!additional_experiments/results/*/
+!additional_experiments/results/*/metrics.csv
