@@ -88,16 +88,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--rfta-force-cpu', action='store_true',
                    help='disable RFTA GPU path (for CPU-only timing benchmarks)')
     p.add_argument('--screening-weight', type=float, default=10.0)
-    # --- ours ablation knobs (defaults = the pinned main config) ---
-    p.add_argument('--ours-use-mes', type=int, default=-1,
+    # --- ours ablation knobs ---
+    # All default to None, meaning "leave it at the Options default". The main
+    # config lives in Options (SDF_to_surface_3D.py) and nowhere else; passing
+    # one of these selects an ablation cell off that baseline.
+    p.add_argument('--ours-use-mes', type=int, default=None,
                    choices=[-1, 0, 1],
                    help='use_MES setting for ours: -1=noMES, 0=default MES, '
                         '1=MESforce (paper timing variants)')
-    p.add_argument('--ours-clamp', type=int, default=1, choices=[0, 1])
-    p.add_argument('--ours-optimizer', default='bfgs',
+    p.add_argument('--ours-clamp', type=int, default=None, choices=[0, 1])
+    p.add_argument('--ours-optimizer', default=None,
                    choices=['bfgs', 'ascent', 'lbfgspp'])
-    p.add_argument('--ours-post', type=int, default=0, choices=[0, 1],
+    p.add_argument('--ours-post', type=int, default=None, choices=[0, 1],
                    help='post_processing (Lipschitz post-fix) for ours')
+    p.add_argument('--ours-max-iters', type=int, default=None,
+                   help='max_iters for ours (default: the Options default)')
     return p.parse_args()
 
 
@@ -122,6 +127,20 @@ def main() -> int:
 
     grid_lens = [int(g) for g in args.grid_lens.split(',') if g.strip()]
     algos = [a.strip() for a in args.algos.split(',') if a.strip()]
+
+    # Only the ablation flags actually passed on the command line become Options
+    # kwargs; everything else stays at the Options default, which is the single
+    # definition of the main config.
+    _ours_flags = {
+        'use_MES': args.ours_use_mes,
+        'clamp': None if args.ours_clamp is None else bool(args.ours_clamp),
+        'grad_optimizer': args.ours_optimizer,
+        'post_processing': None if args.ours_post is None else bool(args.ours_post),
+        'max_iters': args.ours_max_iters,
+    }
+    ours_overrides = {k: v for k, v in _ours_flags.items() if v is not None}
+    if ours_overrides:
+        print(f'ours overrides (off the Options default): {ours_overrides}', flush=True)
 
     out_root = Path(args.out_root).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
@@ -233,30 +252,15 @@ def main() -> int:
                 continue
 
             if algo == 'ours':
-                # "Main config" for our method; the four --ours-* flags select
-                # the ablation cell (defaults reproduce the pinned config).
-                # verbose=True so per-step prints land in the SLURM stdout.
-                opts = Options(name=mesh_basename, grid_len=gl,
-                               max_iters=15, cpp_dc=True,
-                               clamp=bool(args.ours_clamp),
-                               export_short_arcs=False,
-                               export_projections=False,
-                               turn_off_short_arcs=False,
-                               use_gt_gradients=False,
-                               interpolator_type='PU',
-                               interp_partition='sphere',
-                               overlap=0.2, reg=0, lr=0.2,
-                               use_MES=args.ours_use_mes,
-                               optim_steps=5,
-                               grad_optimizer=args.ours_optimizer,
-                               post_processing=bool(args.ours_post),
-                               iter_gradient_finding='optimize',
-                               verbose=True)
+                # The main config IS the Options default -- do not restate it
+                # here, or the two drift apart. Only the --ours-* flags that
+                # were actually passed are overridden, selecting an ablation
+                # cell. verbose=True so per-step prints land in the SLURM stdout.
+                opts = Options(name=mesh_basename, grid_len=gl, verbose=True,
+                               **ours_overrides)
             else:
-                opts = Options(name=mesh_basename, grid_len=gl,
-                               max_iters=5, clamp=False,
-                               export_short_arcs=False, export_projections=False,
-                               verbose=False)
+                # rfta/mes read only name/grid_len/path from Options.
+                opts = Options(name=mesh_basename, grid_len=gl, verbose=False)
             opts.path_to_obj = str(mesh_path)
             opts.path_to_sdf = str(sdf_cache)
 

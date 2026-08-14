@@ -49,7 +49,9 @@ label_of() { basename "$1" | sed 's/^new_solid_*//; s/^$/base/'; }
 INDEX=${INDEX:-/scratch/ycheng27/new_solid/index.csv}   # shared mesh list
 GT_ROOT=${GT_ROOT:-/scratch/ycheng27/thingi10k/preview_obj}
 GRIDS=${GRIDS:-6,10,20,30,40,50,60,80,100}
-OUT_ROOT="${RUN_DIR}/out"
+# Reconstructions normally live in <RUN_DIR>/out; override for side trees such
+# as the tangent-point experiment's out.AB (see run_experiment_AB.py).
+OUT_ROOT=${OUT_ROOT:-${RUN_DIR}/out}
 METRICS_CSV=${METRICS_CSV:-${RUN_DIR}/metrics.csv}
 RUN_TOPOLOGY=${RUN_TOPOLOGY:-0}
 

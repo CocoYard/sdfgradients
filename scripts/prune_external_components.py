@@ -11,9 +11,12 @@ For each processed mesh:
   - if anything is dropped, the ORIGINAL mesh is copied to the backup tree
     first, then overwritten with the pruned mesh.
 
-Only sPSR outputs are processed by default (A2B1_ours, A3B1_gt); the RBF /
+Only sPSR outputs are processed by default (tpours_psr, tpgt_psr); the RBF /
 dual-contouring combos are extracted inside the bbox and cannot have external
 components.
+
+Since construct_mesh's sPSR path prunes out-of-bbox components itself, this is
+only needed for meshes generated before that landed.
 
 Usage:
     python scripts/prune_external_components.py --limit 50 --workers 16
@@ -34,7 +37,7 @@ import trimesh
 
 DEFAULT_INDEX = '/scratch/ycheng27/new_solid/index.csv'
 DEFAULT_ROOT = '/scratch/ycheng27/new_solid'
-DEFAULT_COMBOS = ['A2B1_ours', 'A3B1_gt']
+DEFAULT_COMBOS = ['tpours_psr', 'tpgt_psr']
 DEFAULT_GRIDS = [10, 20, 40, 60, 80]
 
 

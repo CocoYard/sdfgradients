@@ -1,17 +1,24 @@
 """
-SLURM array worker for the A×B tangent-point / reconstruction experiment.
+SLURM array worker for the tangent-point × reconstruction experiment.
+
+Combos are named ``tp<source>_<reconstruction>``: which method supplied the
+tangent points, and which reconstruction turned them into a surface.
 
 For ONE mesh, across all requested grid_lens, produce the decoupled
-combinations that were NOT already covered by the baselines:
+combinations that the baselines do not already cover:
 
-    A1B2_rfta : RFTA tangent points  + RBF reconstruction
-    A1B2_mes  : MES  tangent points  + RBF reconstruction
-    A2B1_ours : OURS tangent points  + sPSR reconstruction
-    A3B1_gt   : GT   tangent points  + sPSR reconstruction
-    A3B2_gt   : GT   tangent points  + RBF reconstruction
+    tprfta_rbf : RFTA tangent points  + RBF reconstruction
+    tpmes_rbf  : MES  tangent points  + RBF reconstruction
+    tpours_psr : OURS tangent points  + sPSR reconstruction
+    tpours_rbf : OURS tangent points  + RBF reconstruction (our full method)
+    tpgt_psr   : GT   tangent points  + sPSR reconstruction
+    tpgt_rbf   : GT   tangent points  + RBF reconstruction
 
-(A1B1 = native rfta/mes sPSR and A2B2 = ours were produced by the
-baseline runner already.)
+tpours_rbf duplicates what run_baseline.py's 'ours' produces, but it is
+generated here rather than copied in: both ours cells then come out of one
+script under one config, so they stay comparable even if the baseline run
+used a different ablation cell. (tprfta_psr / tpmes_psr -- the native
+rfta/mes sPSR reconstructions -- do come from the baseline runner.)
 
 Outputs land at ``{out_root}/out/{file_id}/{combo}_{gl}.obj`` -- the same
 tree the baselines use, so compute_metrics.py picks them up unchanged.
@@ -36,17 +43,22 @@ import traceback
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_INDEX = '/scratch/ycheng27/new_solid/index.csv'
+# index_obj.csv, not index.csv: the latter still points at the thingi10k .stl
+# extraction dir, which has since been partially cleaned up (e.g. 32770.stl is
+# gone). index_obj.csv lists the same file_ids in the same order, pointing at
+# the .obj conversions under new_solid/preview_obj/, which are all present.
+DEFAULT_INDEX = '/scratch/ycheng27/new_solid/index_obj.csv'
 DEFAULT_OUT = '/scratch/ycheng27/new_solid'
 DEFAULT_GRIDS = [10, 20, 40, 60, 80]
 
 # (combo_name, tangent method, useRBF)
 COMBOS = [
-    ('A1B2_rfta', 'RFTA', True),
-    ('A1B2_mes',  'MES',  True),
-    ('A2B1_ours', 'OURS', False),
-    ('A3B1_gt',   'GT',   False),
-    ('A3B2_gt',   'GT',   True),
+    ('tprfta_rbf', 'RFTA', True),
+    ('tpmes_rbf',  'MES',  True),
+    ('tpours_psr', 'OURS', False),
+    ('tpours_rbf', 'OURS', True),
+    ('tpgt_psr',   'GT',   False),
+    ('tpgt_rbf',   'GT',   True),
 ]
 
 
@@ -63,7 +75,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--combos', default=','.join(c[0] for c in COMBOS),
                    help='comma-separated subset of combo names to run')
     p.add_argument('--screening-weight', type=float, default=10.0)
-    p.add_argument('--max-iters', type=int, default=15, help='OURS optimization iters')
+    p.add_argument('--max-iters', type=int, default=None,
+                   help='OURS optimization iters (default: the Options default)')
     return p.parse_args()
 
 
@@ -159,8 +172,11 @@ def main() -> int:
                 rows.append((name, gl, 'sdf_fail', 0.0, 0, err))
             continue
 
-        base_opts = dict(name=mesh_basename, grid_len=gl, max_iters=args.max_iters,
-                         verbose=False)
+        # Everything except the per-mesh identity stays at the Options default,
+        # so this experiment and run_baseline.py cannot drift apart.
+        base_opts = dict(name=mesh_basename, grid_len=gl, verbose=False)
+        if args.max_iters is not None:
+            base_opts['max_iters'] = args.max_iters
 
         # Compute each distinct tangent set once, reuse across its reconstructions.
         for tp_name in ['GT', 'OURS', 'RFTA', 'MES']:

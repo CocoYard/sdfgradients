@@ -126,6 +126,11 @@ if [[ -n "${OURS_POST:-}" ]]; then
     OURS_POST_ARG=(--ours-post "${OURS_POST}")
     echo "OursPost    : ${OURS_POST}"
 fi
+OURS_ITERS_ARG=()
+if [[ -n "${OURS_MAX_ITERS:-}" ]]; then
+    OURS_ITERS_ARG=(--ours-max-iters "${OURS_MAX_ITERS}")
+    echo "OursMaxIters: ${OURS_MAX_ITERS}"
+fi
 
 # Hard time limit: SLURM kills cleanly when time is up (no trap, no retry,
 # no resubmit). If a task didn't finish, just resubmit that array index
@@ -138,6 +143,7 @@ exec "${PYTHON}" scripts/run_baseline.py --task-id "${SLURM_ARRAY_TASK_ID}" \
     "${SCREENING_ARG[@]}" \
     "${RFTA_CPU_ARG[@]}" \
     "${OURS_USE_MES_ARG[@]}" \
+    "${OURS_ITERS_ARG[@]}" \
     "${OURS_CLAMP_ARG[@]}" \
     "${OURS_OPT_ARG[@]}" \
     "${OURS_POST_ARG[@]}"

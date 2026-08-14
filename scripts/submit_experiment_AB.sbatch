@@ -55,7 +55,13 @@ COMBOS_ARG=()
 if [[ -n "${COMBOS:-}" ]]; then
     COMBOS_ARG=(--combos "${COMBOS}")
 fi
+INDEX_ARG=()
+if [[ -n "${INDEX:-}" ]]; then
+    INDEX_ARG=(--index "${INDEX}")
+    echo "Index       : ${INDEX}"
+fi
 
 exec "${PYTHON}" scripts/run_experiment_AB.py --task-id "${SLURM_ARRAY_TASK_ID}" \
     "${GRID_LENS_ARG[@]}" \
-    "${COMBOS_ARG[@]}"
+    "${COMBOS_ARG[@]}" \
+    "${INDEX_ARG[@]}"
