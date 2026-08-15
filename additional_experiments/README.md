@@ -17,9 +17,9 @@ shared plumbing and is not meant to be run directly.
 
 | script | models | samples | swept parameter |
 | --- | --- | --- | --- |
-| `scattered.py` | 10 | 10³, 50³, 100³ | random positions vs. the regular-grid control |
+| `scattered.py` | 10 | 50³ | random positions vs. the regular-grid control |
 | `truncation.py` | rossignol | 50³ | band half-width 1.0 (control), 0.1, 0.05, 0.005, 0.002 |
-| `noise.py` | 10 | 50³ | Gaussian sigma 0 (control), 0.001, 0.005, 0.01, 0.02, 0.03 |
+| `noise.py` | 10 | 50³ | Gaussian sigma 0 (control), 0.001, 0.005, 0.01|
 
 Distances are in the units of the mesh after normalization to the unit cube,
 which is what `generate_test_mesh_data` does to every model.

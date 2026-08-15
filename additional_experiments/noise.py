@@ -16,9 +16,9 @@ MESHES = ['bunny', 'horse', 'eiffel', 'rossignol', 'fandisk',
 GRID_LEN = 50
 
 # 0.0 is the noise-free control.
-NOISE_LEVELS = [0.0, 0.001, 0.005, 0.01, 0.02, 0.03]
+NOISE_LEVELS = [0.001, 0.005, 0.01, 0]
 
-ALGOS_NOISY = ['ours', 'rfta', 'mes', 'mc']
+ALGOS_NOISY = ['ours']
 
 cells = []
 for sigma in NOISE_LEVELS:

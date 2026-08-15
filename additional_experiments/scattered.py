@@ -13,8 +13,7 @@ import _common
 MESHES = ['bunny', 'horse', 'eiffel', 'rossignol', 'fandisk',
           'chair', 'metratron', 'armadillo', '32770', 'denker']
 
-# 10^3, 50^3 and 100^3 samples.
-GRID_LENS = [10, 50, 100]
+GRID_LENS = [50]
 
 # Marching cubes needs a regular grid to run on at all, so it only appears in
 # the control. On scattered points every coordinate is unique, which would ask
