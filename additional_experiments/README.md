@@ -40,10 +40,29 @@ degradation knob.
 
 ```
 results/<experiment>/<param>_gl<N>/<mesh>/out/<mesh>/*.obj   reconstructions
-results/<experiment>/metrics.csv                            Hausdorff / Chamfer / F1
+results/<experiment>/metrics.csv                            one row per reconstruction
+results/<experiment>/summary.csv                            mean / std / median over meshes
 ```
 
-Only `metrics.csv` is committed; the reconstructions are large and regenerable.
+Only the two CSVs are committed; the reconstructions are large and regenerable.
+In `summary.csv` the std is the spread across models -- how much the model you
+picked matters at that setting -- not an uncertainty on any single number.
+
+To recompute both CSVs from whatever is already on disk, without re-running or
+regenerating anything:
+
+```bash
+python additional_experiments/collect.py          # every experiment
+python additional_experiments/collect.py noise    # just one
+```
+
+Cells are discovered from the directory tree, so a sweep run in several batches
+reports everything that finished so far. `sweep()` calls this at the end of a
+run, so the CSVs mean the same thing either way.
+
+Do not redirect a run's stdout into `metrics.csv` -- the shell holds that path
+open while the sweep writes its own CSV to it, and the two interleave. Redirect
+to a log file instead; the CSVs are written regardless.
 
 Every cell gets its own directory because the runners name their outputs
 relative to the working directory and do not always encode the degradation in

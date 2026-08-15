@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import sys
 import time
 import traceback
@@ -145,7 +146,7 @@ def gt_mesh(mesh):
     return _gt_cache[mesh]
 
 
-def evaluate(exp, param, mesh, grid_len, algos, **_):
+def evaluate(exp, param, mesh, grid_len, algos, verbose=True, **_):
     """Hausdorff / Chamfer / F1 of every reconstruction in one cell vs the GT."""
     import numpy as np
     import trimesh
@@ -167,30 +168,122 @@ def evaluate(exp, param, mesh, grid_len, algos, **_):
                          'hausdorff': round(haus, 6), 'chamfer': round(cham, 8),
                          'f1': round(f1, 4), 'faces': len(recon.faces),
                          'file': obj.name})
-            print(f'  {param:>12s} {mesh:<12s} {algo:<5s} '
-                  f'chamfer={cham:.6f} hausdorff={haus:.5f} f1={f1:.4f}', flush=True)
+            if verbose:
+                print(f'  {param:>12s} {mesh:<12s} {algo:<5s} '
+                      f'chamfer={cham:.6f} hausdorff={haus:.5f} f1={f1:.4f}', flush=True)
+    return rows
+
+
+def discover(exp):
+    """Find every cell that has already been reconstructed under results/<exp>.
+
+    Driven by what is on disk rather than by a script's cell list, so a sweep
+    run in several batches -- or interrupted half way -- still reports
+    everything that finished.
+    """
+    by_algo = {v: k for k, v in PREFIX.items()}
+    cells = {}
+    for obj in sorted((RESULTS / exp).glob('*/*/out/*/*.obj')):
+        param_gl, mesh = obj.parts[-5], obj.parts[-4]
+        m = re.match(r'(.+)_gl(\d+)$', param_gl)
+        algo = next((a for pre, a in by_algo.items()
+                     if obj.name.startswith(pre)), None)
+        if not m or algo is None:
+            continue
+        key = (m.group(1), mesh, int(m.group(2)))
+        cells.setdefault(key, set()).add(algo)
+    return [dict(param=p, mesh=m, grid_len=g, algos=sorted(a))
+            for (p, m, g), a in sorted(cells.items(), key=lambda kv: _order(kv[0]))]
+
+
+def _order(key):
+    """Sort params by the number in their name (noise0.005 before noise0.01)."""
+    param, mesh, grid_len = key
+    num = re.search(r'[\d.]+$', param)
+    return (grid_len, float(num.group()) if num else 0.0, param, mesh)
+
+
+def _write_csv(path, fieldnames, rows):
+    """Write atomically: a stdout redirect aimed at this same path keeps its
+    handle on the old inode instead of interleaving into the new file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    with open(tmp, 'w', newline='') as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+    os.replace(tmp, path)
+
+
+def summarize(rows):
+    """Mean / std / median of each metric across meshes, per (param, algo).
+
+    std is the spread over the models, i.e. how much the model you picked
+    matters at that setting -- not an uncertainty on any single number.
+    """
+    import numpy as np
+
+    groups = {}
+    for r in rows:
+        groups.setdefault((r['grid_len'], r['param'], r['algo']), []).append(r)
+
+    out = []
+    for key in sorted(groups, key=lambda k: _order((k[1], '', k[0])) + (k[2],)):
+        grid_len, param, algo = key
+        g = groups[key]
+        row = {'param': param, 'grid_len': grid_len, 'algo': algo, 'n_meshes': len(g)}
+        for metric in ('chamfer', 'hausdorff', 'f1'):
+            v = np.array([r[metric] for r in g], dtype=float)
+            row[f'{metric}_mean'] = float(np.round(v.mean(), 8))
+            row[f'{metric}_std'] = float(np.round(v.std(ddof=1), 8)) if len(v) > 1 else 0.0
+            row[f'{metric}_median'] = float(np.round(np.median(v), 8))
+        out.append(row)
+    return out
+
+
+def collect(exp, verbose=True):
+    """Recompute metrics for everything on disk and rewrite the two CSVs."""
+    load_sdf3d()
+    cells = discover(exp)
+    if not cells:
+        print(f'nothing reconstructed yet under {RESULTS / exp}')
+        return []
+
+    rows = []
+    for cell in cells:
+        rows += evaluate(exp=exp, verbose=verbose, **cell)
+
+    _write_csv(RESULTS / exp / 'metrics.csv',
+               ['experiment', 'param', 'mesh', 'grid_len', 'algo', 'hausdorff',
+                'chamfer', 'f1', 'faces', 'file'], rows)
+    summary = summarize(rows)
+    _write_csv(RESULTS / exp / 'summary.csv',
+               ['param', 'grid_len', 'algo', 'n_meshes'] +
+               [f'{m}_{s}' for m in ('chamfer', 'hausdorff', 'f1')
+                for s in ('mean', 'std', 'median')], summary)
+
+    print(f'\n=== {exp}: mean +/- std over meshes ===')
+    print(f'{"param":<12}{"gl":>5}{"algo":>7}{"n":>4}'
+          f'{"chamfer":>22}{"hausdorff":>20}{"f1":>16}')
+    last = None
+    for r in summary:
+        if last is not None and r['param'] != last:
+            print()
+        last = r['param']
+        print(f'{r["param"]:<12}{r["grid_len"]:>5}{r["algo"]:>7}{r["n_meshes"]:>4}'
+              f'{r["chamfer_mean"]:>13.6f} +/-{r["chamfer_std"]:<8.6f}'
+              f'{r["hausdorff_mean"]:>11.5f} +/-{r["hausdorff_std"]:<7.5f}'
+              f'{r["f1_mean"]:>8.4f} +/-{r["f1_std"]:<7.4f}')
+    print(f'\n{len(rows)} rows -> {RESULTS / exp / "metrics.csv"}')
+    print(f'{len(summary)} rows -> {RESULTS / exp / "summary.csv"}')
     return rows
 
 
 def sweep(exp, cells):
-    """Run every cell, then write results/<exp>/metrics.csv."""
+    """Run every cell, then recompute metrics over everything on disk."""
     load_sdf3d()
     t0 = time.perf_counter()
     for cell in cells:
         run_cell(exp=exp, **cell)
-
-    print(f'\n=== metrics: {exp} ===', flush=True)
-    rows = []
-    for cell in cells:
-        rows += evaluate(exp=exp, **cell)
-
-    csv_path = RESULTS / exp / 'metrics.csv'
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(csv_path, 'w', newline='') as f:
-        w = csv.DictWriter(f, fieldnames=['experiment', 'param', 'mesh', 'grid_len',
-                                          'algo', 'hausdorff', 'chamfer', 'f1',
-                                          'faces', 'file'])
-        w.writeheader()
-        w.writerows(rows)
-    print(f'\nWrote {len(rows)} rows to {csv_path}')
+    collect(exp)
     print(f'Total: {time.perf_counter() - t0:.1f} s')

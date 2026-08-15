@@ -34,3 +34,4 @@ tmp.csv
 additional_experiments/results/**
 !additional_experiments/results/*/
 !additional_experiments/results/*/metrics.csv
+!additional_experiments/results/*/summary.csv
