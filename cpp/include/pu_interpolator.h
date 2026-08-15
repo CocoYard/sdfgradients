@@ -104,7 +104,7 @@ private:
     bool trained_ = false;
     bool use_box_ = false;
     bool pair_local_ = true;   // augment each local solve with missing input/projection partners
-    double dist_threshold_ = 0.2;
+    double dist_threshold_ = 2;
 
     // For fallback nearest-patch lookup (tree cached after fit(), reused every predict())
     Eigen::MatrixXd patch_centers_;
