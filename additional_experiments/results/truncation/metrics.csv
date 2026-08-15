@@ -1,7 +1,7 @@
 experiment,param,mesh,grid_len,algo,hausdorff,chamfer,f1,faces,file
 truncation,bound0.002,rossignol,50,mc,0.074828,0.01437492,0.3127,1892,sample_points_50.obj
 truncation,bound0.002,rossignol,50,mes,2.093007,0.3215322,0.1199,14456,mes_50_bound0.002.obj
-truncation,bound0.002,rossignol,50,ours,0.053644,0.00266688,0.9759,184702,ours_50_10_shortArcs_noMES_PU_dc_bound0.002.obj
+truncation,bound0.002,rossignol,50,ours,0.053644,0.00266686,0.9759,184702,ours_50_10_shortArcs_noMES_PU_dc_bound0.002.obj
 truncation,bound0.002,rossignol,50,rfta,0.266889,0.03041025,0.5304,8420,rfta_50_bound0.002.obj
 truncation,bound0.005,rossignol,50,mc,0.051658,0.009368,0.6536,4692,sample_points_50.obj
 truncation,bound0.005,rossignol,50,mes,0.364904,0.0574475,0.3478,15268,mes_50_bound0.005.obj
@@ -9,13 +9,13 @@ truncation,bound0.005,rossignol,50,ours,0.024949,0.00093246,0.9991,183040,ours_5
 truncation,bound0.005,rossignol,50,rfta,0.13817,0.01667375,0.6143,25020,rfta_50_bound0.005.obj
 truncation,bound0.05,rossignol,50,mc,0.022965,0.00135019,0.9995,7020,sample_points_50.obj
 truncation,bound0.05,rossignol,50,mes,0.207988,0.03843532,0.4372,85646,mes_50_bound0.05.obj
-truncation,bound0.05,rossignol,50,ours,0.006803,0.00031147,1.0,147416,ours_50_10_shortArcs_noMES_PU_dc_bound0.05.obj
+truncation,bound0.05,rossignol,50,ours,0.006803,0.00031121,1.0,147416,ours_50_10_shortArcs_noMES_PU_dc_bound0.05.obj
 truncation,bound0.05,rossignol,50,rfta,0.406038,0.06951876,0.4005,95192,rfta_50_bound0.05.obj
 truncation,bound0.1,rossignol,50,mc,0.022965,0.0013502,0.9995,7020,sample_points_50.obj
 truncation,bound0.1,rossignol,50,mes,0.510444,0.10706457,0.2923,147432,mes_50_bound0.1.obj
-truncation,bound0.1,rossignol,50,ours,0.006821,0.0002888,1.0,123376,ours_50_10_shortArcs_noMES_PU_dc_bound0.1.obj
+truncation,bound0.1,rossignol,50,ours,0.006905,0.0002889,1.0,123356,ours_50_10_shortArcs_noMES_PU_dc_bound0.1.obj
 truncation,bound0.1,rossignol,50,rfta,0.490995,0.11446243,0.3027,168342,rfta_50_bound0.1.obj
 truncation,bound1.0,rossignol,50,mc,0.022965,0.00135019,0.9995,7020,sample_points_50.obj
 truncation,bound1.0,rossignol,50,mes,0.013463,0.0006175,1.0,204480,mes_50.obj
-truncation,bound1.0,rossignol,50,ours,0.0068,0.00027918,1.0,113508,ours_50_10_shortArcs_noMES_PU_clamp_dc_bfgs.obj
+truncation,bound1.0,rossignol,50,ours,0.006847,0.00027977,1.0,113428,ours_50_10_shortArcs_noMES_PU_clamp_dc_bfgs.obj
 truncation,bound1.0,rossignol,50,rfta,0.016988,0.00060173,0.9999,176790,rfta_50.obj

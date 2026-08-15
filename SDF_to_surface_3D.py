@@ -23,7 +23,7 @@ class Options:
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
                 use_MES=-1, post_processing=False, iter_gradient_finding='optimize', verbose=True,
                 pair_local=False, noise=0, bound=1, scatter=False, neural_sdf=None,
-                grad_optimizer='bfgs'):
+                grad_optimizer='bfgs', extract_padding=0.0):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -50,6 +50,7 @@ class Options:
         # 'lbfgspp' = one LBFGS++ solve per point
         # 'bfgs' = batched BFGS
         self.grad_optimizer = grad_optimizer
+        self.extract_padding = extract_padding  # the padding added to the bounding box when extracting the zero level set, to avoid cutting off the surface
 
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
@@ -714,8 +715,8 @@ def test_our_method(options : Options, save_gtmesh=False):
     timer = time.perf_counter()
     """ ========================= output post+dc ========================= """
     use_cpp = True
-    bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64)
-    bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64)
+    bbox_min = np.array([points[:, 0].min(), points[:, 1].min(), points[:, 2].min()], dtype=np.float64) - options.extract_padding
+    bbox_max = np.array([points[:, 0].max(), points[:, 1].max(), points[:, 2].max()], dtype=np.float64) + options.extract_padding
     resolution = _adaptive_resolution(points, options.grid_len)
     # resolution = 200
     print(f"Grid resolution for surface extraction: {resolution}")
@@ -976,8 +977,8 @@ def construct_mesh(tangent_pts, points, distances, useRBF : bool, options : Opti
         fit_pts = np.vstack([points, tp])
         fit_vals = np.concatenate([distances, np.zeros(len(tp))])
         interp.fit(fit_pts, fit_vals)
-        bbox_min = points.min(axis=0)
-        bbox_max = points.max(axis=0)
+        bbox_min = points.min(axis=0) - options.extract_padding
+        bbox_max = points.max(axis=0) + options.extract_padding
         verts, faces = interp.extract_surface(
             bbox_min=bbox_min, bbox_max=bbox_max,
             nx=resolution, ny=resolution, nz=resolution, iso=0.0, chunk_size=5000,
