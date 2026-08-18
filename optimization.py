@@ -414,20 +414,20 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
         # Mirrors `clamp_gradients_to_arcs` in cpp/src/optimization.cpp.
         # The 2D arc-clamp uses visible_arcs (no tunable tolerance) so we
         # call it once instead of the C++ retry-with-shrinking-tol loop.
-        if clamp:
+        if clamp and it == 6:
             va.clamp_gradients_to_arcs(
                 new_gradients, visible_arcs, short_arc_idx, values,
                 skip_degenerate=True)
 
         # \u2500\u2500 Step 3: Visibility checks on projections \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         proj_new = points - values[:, np.newaxis] * new_gradients
-        vis_new = are_points_visible(proj_new, points, values)
+        vis_new = are_points_visible(proj_new, points, values, epsilon=1e-8)
 
         if vis_cached is not None:
             vis_old = vis_cached
         else:
             proj_old = points - values[:, np.newaxis] * gradients
-            vis_old = are_points_visible(proj_old, points, values)
+            vis_old = are_points_visible(proj_old, points, values, epsilon=1e-8)
 
         # \u2500\u2500 Step 4: Reject updates that lose visibility or hit degen \u2500\u2500
         skip = vis_old & ~vis_new
@@ -467,7 +467,7 @@ def iterative_projection(points, values, init_gradients, interpolator : Interpol
         # \u2500\u2500 Step 5: Refit interpolant on the visible subset \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         fit_mask = vis_mask & ~np.isnan(gradients).any(axis=1)
         interpolator.fit(points, values, gradients, mask=fit_mask)
-
+    gradients = np.where(fit_mask[:, np.newaxis], gradients, np.nan)
     return gradients, interpolator
 
 def clamp_gradients_to_arcs(points, values, gradients, degenerate_pts, batch, ngbrs_list, interpolator : Interpolator, tolerance : Tolerance):

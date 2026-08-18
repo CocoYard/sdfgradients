@@ -1,9 +1,8 @@
 """Experiment 3 — noisy SDF samples.
 
-Perturb every sampled distance by Gaussian noise before reconstruction, so the
-input is no longer a consistent distance field. Sigma is in the units of the
-unit-cube-normalized mesh; at 50^3 the sample spacing is about 0.024, so the
-sweep goes from noise well below the spacing up to noise larger than it.
+Perturbs every sampled distance by Gaussian noise, so the input is no longer a
+consistent distance field. Sigma is in units of the unit-cube-normalized mesh,
+and the sweep runs from well below the sample spacing to above it.
 
     python additional_experiments/noise.py
 """
@@ -13,9 +12,9 @@ import _common
 MESHES = ['bunny', 'horse', 'eiffel', 'rossignol', 'fandisk',
           'chair', 'metratron', 'armadillo', '32770', 'denker']
 
-GRID_LEN = 50
+GRID_LEN = 50  # at 50^3 the sample spacing is about 0.024
 
-# 0.0 is the noise-free control.
+# 0 is the noise-free control.
 NOISE_LEVELS = [0.001, 0.005, 0.01, 0]
 
 ALGOS_NOISY = ['ours']

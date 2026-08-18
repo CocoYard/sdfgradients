@@ -1,9 +1,8 @@
 """Recompute metrics from the reconstructions already on disk.
 
-Reads whatever finished, without re-running or regenerating anything, and
-rewrites results/<experiment>/metrics.csv (one row per reconstruction) and
-results/<experiment>/summary.csv (mean / std / median across meshes). Use it
-when a sweep was run in several batches, or was interrupted.
+Rewrites each experiment's CSVs from whatever finished, re-running and
+regenerating nothing. Use it after a sweep that ran in several batches or was
+interrupted.
 
     python additional_experiments/collect.py            # every experiment
     python additional_experiments/collect.py noise      # just one
@@ -17,4 +16,10 @@ names = sys.argv[1:] or sorted(
     p.name for p in _common.RESULTS.iterdir() if p.is_dir())
 
 for name in names:
+    if name == 'convergence':
+        # Not driven by sweep(): its runs share one directory and its CSV has
+        # a shape of its own, so the recompute lives in its script.
+        import convergence
+        convergence.report()
+        continue
     _common.collect(name)

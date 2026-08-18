@@ -1,9 +1,8 @@
 """Experiment 1 — scattered SDF samples.
 
-Instead of sampling the SDF on a regular grid, draw the same number of samples
-uniformly at random inside the bounding box. Grid methods lose their grid; ours
-never used one. Every scattered cell is paired with a regular-grid cell at the
-same budget, so the table reads as "same number of samples, arranged two ways".
+Draws the same number of samples uniformly at random inside the bounding box
+instead of on a regular grid, pairing every scattered cell with a grid cell at
+the same budget. Grid methods lose their grid; ours never used one.
 
     python additional_experiments/scattered.py
 """

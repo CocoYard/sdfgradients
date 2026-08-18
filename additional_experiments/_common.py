@@ -1,21 +1,9 @@
 """Shared plumbing for the three degraded-input experiments.
 
-Each experiment script (scattered.py / truncation.py / noise.py) only declares
-*what* to run at the top of the file; everything mechanical lives here.
-
-Run any of them with no arguments from anywhere:
-
-    python additional_experiments/scattered.py
-
-Results land under ``additional_experiments/results/<experiment>/``:
-
-    results/<experiment>/<param>_gl<N>/<mesh>/out/<mesh>/*.obj   reconstructions
-    results/<experiment>/metrics.csv                             Hausdorff/Chamfer/F1
-
-Reruns are cheap: a cell whose .obj already exists is skipped, so a sweep that
-died half way (or that you extended with another parameter value) picks up
-where it left off. Metrics are always recomputed from the .obj files on disk,
-so the CSV is complete even when nothing was re-run.
+Each script (scattered, truncation, noise) declares only *what* to run; the
+mechanics live here. A cell whose .obj already exists is skipped, so an
+interrupted sweep resumes, and metrics are recomputed from disk either way.
+See README.md for the layout under results/.
 """
 
 from __future__ import annotations

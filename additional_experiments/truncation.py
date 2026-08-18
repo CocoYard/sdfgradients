@@ -1,10 +1,8 @@
 """Experiment 2 — truncated SDF samples.
 
-Keep only the samples whose |SDF| is within a shrinking band around the
-surface, the way a TSDF from range data carries no information far from the
-surface. The band goes from the full range down to +/-0.002 on a mesh
-normalized to the unit cube, so the last cells leave only a thin shell of
-samples near the surface.
+Keeps only the samples whose |SDF| falls inside a shrinking band around the
+surface, the way a TSDF from range data carries nothing far from it. The
+tightest band leaves a thin shell on a unit-cube-normalized mesh.
 
     python additional_experiments/truncation.py
 """
