@@ -34,6 +34,15 @@ difference in the method, not in its input. MC is absent from the scattered
 cells because it needs a grid to run on, and from the noisy cells because the
 experiment uses it as the clean-field reference.
 
+Truncation is the one place where MC does not get the identical array, because
+it cannot read one: it needs a dense grid, and the truncated *point set* leaves
+it without a sign for every cell that was dropped. It receives the same
+degradation as a clamped TSDF instead — `|d| > bound` saturated to `±bound`,
+grid intact, values inside the band untouched — which is how range-scan TSDFs
+actually store it. Clamping keeps every sign, so MC barely moves with the band
+while the methods reading the point set do. `_mc_samples` in `_common.py` is
+where this happens, and it is inert at `bound = 1.0`.
+
 The method configuration is not restated here: every run takes it from the
 defaults in `Options` (`SDF_to_surface_3D.py`), which are the single definition
 of the main config. The scripts pass only the model, the sample count and the

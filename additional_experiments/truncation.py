@@ -17,10 +17,11 @@ GRID_LEN = 50  # 50^3 samples before truncation
 # is further than that from the surface anyway.
 BOUNDS = [1.0, 0.1, 0.05, 0.005, 0.002]
 
-# Marching cubes still has its grid here -- truncation removes samples from it
-# rather than moving them -- but note test_mc fills every removed cell with +1,
-# i.e. "unknown means outside". That is the usual TSDF convention and it is what
-# makes MC hollow out the interior as the band tightens.
+# Marching cubes needs a dense grid, so it is the one method that receives the
+# truncation as a clamped TSDF rather than as missing samples: |d| > bound
+# saturates to +/-bound and the grid stays whole. See _mc_samples in _common.py
+# for why, and note that clamping keeps every sign, so MC is expected to be far
+# less sensitive to the band than the methods reading the point set.
 ALGOS = ['ours', 'rfta', 'mes', 'mc']
 
 cells = [dict(param=f'bound{bound}', mesh=MESH, grid_len=GRID_LEN,

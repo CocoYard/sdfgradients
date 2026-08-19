@@ -97,11 +97,43 @@ def run_cell(exp, param, mesh, grid_len, algos, noise=0.0, bound=1.0, scatter=Fa
                 noise=noise, bound=bound, scatter=scatter)
         if points is not None:
             print(f'SDF samples: {len(points)} points', flush=True)
+            mc_sdf = _mc_samples(points, distances, options, mesh, grid_len,
+                                 noise, bound, scatter) if 'mc' in todo else None
             for algo, fn in (('rfta', test_rfta), ('mes', test_mes), ('mc', test_mc)):
                 if algo in todo:
-                    _guard(algo, fn, options, sdf=(points, distances))
+                    _guard(algo, fn, options,
+                           sdf=mc_sdf if algo == 'mc' else (points, distances))
     finally:
         os.chdir(cwd)
+
+
+def _mc_samples(points, distances, options, mesh, grid_len, noise, bound, scatter):
+    """The samples marching cubes gets, which differ only under truncation.
+
+    MC is the one method here that needs a dense grid. Handing it the truncated
+    point set leaves it reconstructing on whatever sub-grid survived, with no
+    sign at all for the cells that went missing -- test_mc has to assume +1
+    ("unknown means outside") and hollows the model out as the band tightens.
+    So truncation reaches MC the way a TSDF from range data actually stores it:
+    every |d| > bound saturated to +/-bound, nothing missing. Inside the band
+    the values are untouched, so this is the same degradation, in the only form
+    a grid method can read it.
+
+    Regenerating the untruncated samples reproduces the ones the truncated set
+    was filtered out of, since generate_test_mesh_data draws from a generator
+    seeded with SEED.
+    """
+    import numpy as np
+    from SDF_to_surface_3D import generate_test_mesh_data
+
+    if bound >= 1.0:
+        return points, distances
+    _, full_points, full_distances, _ = generate_test_mesh_data(
+        options.path_to_obj, mesh, grid_len=grid_len,
+        noise=noise, bound=1.0, scatter=scatter)
+    print(f'  [mc] clamped to +/-{bound}: {len(full_points)} points, '
+          f'{int((np.abs(full_distances) > bound).sum())} saturated', flush=True)
+    return full_points, np.clip(full_distances, -bound, bound)
 
 
 def _guard(algo, fn, *args, **kwargs):
