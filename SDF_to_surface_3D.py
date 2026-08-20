@@ -170,6 +170,8 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noi
 
     if bound < 1.0:
         # Filter points based on SDF values to keep only those within the specified bound
+        # (marching cubes is the exception: it cannot read a point set with
+        # holes, so _common._mc_samples clamps to +/-bound for MC alone.)
         mask = np.abs(distances) <= bound
         points = points[mask]
         distances = distances[mask]
@@ -753,14 +755,18 @@ def test_our_method(options : Options, save_gtmesh=False):
     if not use_cpp:
         post_str = 'odc'
     # fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{clamp_str}_{mes_str}_{post_str}_{options.interpolator_type}_reg{options.reg}_lr{options.lr}.obj'
+    reg_str = ''
+    if options.reg != 0:
+        reg_str = f'_reg{options.reg}'
     if options.noise > 0:
-        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_noise{options.noise}_reg{options.reg}.obj'
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_noise{options.noise}_reg{options.reg}'
     elif options.bound < 1.0:
-        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_bound{options.bound}.obj'
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_bound{options.bound}'
     elif options.scatter:
-        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_scatter.obj'
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_scatter'
     else:
-        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{clamp_str}{pair_str}{post_str}_{options.grad_optimizer}.obj'
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{clamp_str}{pair_str}{post_str}_{options.grad_optimizer}'
+    fname += reg_str+'.obj'
     # if options.use_gt_gradients:
     #     fname = f'ours_{grid_len}_gtgrad_{post_str}_{options.interpolator_type}_{options.interp_partition}_ovlp{options.interp_overlap}_reg{options.reg}.obj'
     recon.export(f'{out_dir}/{fname}')
