@@ -26,6 +26,26 @@
 #SBATCH --output=/scratch/ycheng27/sdfgradients/baselines/logs/slurm_%A_%a.out
 #SBATCH --error=/scratch/ycheng27/sdfgradients/baselines/logs/slurm_%A_%a.err
 #SBATCH --requeue
+#
+# High-resolution runs (grid_len > 100) do not fit these defaults; override
+# partition/mem/time on the sbatch CLI, e.g.
+#   INDEX=... OUT_ROOT=... RUN_ALGOS=ours+mc GRID_LENS=300 \
+#     sbatch --export=ALL --array=0-49 \
+#            --partition=bigmem --qos=normal --mem=384G --time=24:00:00 \
+#            scripts/submit_baselines.sbatch
+#
+# Measured on the 50-mesh sharp subset (ours+mc, 100 tasks per row), so the
+# request is sized off real peaks rather than guesswork:
+#
+#   grid_len   MaxRSS mean   MaxRSS max   wall mean   wall max   request
+#   150            9.4 GB      27.9 GB      0.20 h     0.31 h    64G   / 6h
+#   200           21.5 GB      58.4 GB      0.63 h     1.48 h    128G  / 12h
+#   300           71.5 GB     204.9 GB      4.4 h     13.2 h     384G  / 24h
+#
+# Ask for the row's request, not more: a 1000G/bigmem job takes a whole node
+# and sits in PENDING for a day, while 384G covers the measured peak twice
+# over. gl=300 genuinely needs the 24h — the slowest mesh took 13.2 h, so the
+# 12h that the old orchestrator used would be killed and requeued mid-flight.
 
 set -uo pipefail
 
