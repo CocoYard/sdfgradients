@@ -104,6 +104,8 @@ private:
     bool trained_ = false;
     bool use_box_ = false;
     bool pair_local_ = true;   // augment each local solve with missing input/projection partners
+    /// This value is used to filter out far-away points when solving interpolation because far field 
+    /// effects are negligible for the 0-level-set. If no noise, this can be set to a small value like 0.2.
     double dist_threshold_ = 2;
 
     // For fallback nearest-patch lookup (tree cached after fit(), reused every predict())
