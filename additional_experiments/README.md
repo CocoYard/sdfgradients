@@ -1,15 +1,17 @@
 # Additional experiments
 
 Three experiments on how reconstruction behaves when the SDF samples are not a
-clean regular grid, plus one on how fast the iteration converges. Each is one
-script with every parameter written at the top of the file, so reproducing a
-table means running the script and nothing else:
+clean regular grid, one on how fast the iteration converges, and one on how
+sensitive the method is to its short-arc threshold. Each is one script with
+every parameter written at the top of the file, so reproducing a table means
+running the script and nothing else:
 
 ```bash
 python additional_experiments/scattered.py     # samples at random positions
 python additional_experiments/truncation.py    # samples only near the surface
 python additional_experiments/noise.py         # samples with noisy distances
 python additional_experiments/convergence.py   # iteration count 0..15
+python additional_experiments/degen_tol.py     # short-arc threshold 1e-4..1e-8
 ```
 
 Run them from anywhere; they locate the repo themselves. `_common.py` holds the
@@ -23,6 +25,7 @@ shared plumbing and is not meant to be run directly.
 | `truncation.py` | rossignol | 50³ | band half-width 1.0 (control), 0.1, 0.05, 0.005, 0.002 |
 | `noise.py` | 10 | 50³ | Gaussian sigma 0 (control), 0.001, 0.005, 0.01|
 | `convergence.py` | `MESHES` in the script, one resolution each | — | `max_iters` 0…15 with short arcs, plus `max_iters=0` without them |
+| `degen_tol.py` | eiffel | 20³ and 50³ | `degen_tol` 1e-4, 1e-5 (default), 1e-6, 1e-7, 1e-8 |
 
 Distances are in the units of the mesh after normalization to the unit cube,
 which is what `generate_test_mesh_data` does to every model.
@@ -85,6 +88,31 @@ results/convergence/metrics.csv    mesh, grid_len, algo, max_iters, short_arcs, 
 There is no `summary.csv` for it: with one mesh per resolution, every group
 `summarize()` could build would be a single mesh averaged with itself.
 
+`degen_tol` has a layout of its own for the same reason as the degraded-input
+experiments (the `.obj` name does not encode the threshold), plus a CSV that
+carries two kinds of measurement:
+
+```
+results/degen_tol/eps<tol>_gl<N>/eiffel/out/eiffel/ours_*.obj   reconstruction
+results/degen_tol/eps<tol>_gl<N>/eiffel/candidates.npz          short-arc candidates
+results/degen_tol/metrics.csv                                   one row per cell
+```
+
+`degen_tol` is the total exposed-arc length -- a length in mesh units, not an
+angle -- below which a sphere's exposed region is collapsed to a tangent point
+and the midpoint of its short arc becomes a surface candidate: a zero-valued
+point handed to the RBF fit. The CSV reports the candidates (how many the
+filter saw, how many it kept, and how far the kept ones lie from the true
+surface, as a mean and as the fraction within 1e-8 / 1e-7 / 1e-6 / 1e-5) next to the
+reconstruction the run produced from them, which is the point of the
+experiment: the candidate population moves with the threshold whether or not
+the output does.
+
+The candidates cannot be recovered from a reconstruction, so unlike every other
+experiment here this one writes something besides the `.obj`: `candidates.npz`
+holds them, and a cell counts as done only when both files are there. Running
+the script prints the LaTeX body rows for the table as well as the CSV.
+
 To recompute both CSVs from whatever is already on disk, without re-running or
 regenerating anything:
 
@@ -95,10 +123,10 @@ python additional_experiments/collect.py noise    # just one
 
 Cells are discovered from the directory tree, so a sweep run in several batches
 reports everything that finished so far. `sweep()` calls this at the end of a
-run, so the CSVs mean the same thing either way. `convergence` is not driven by
-`sweep()`, so `collect.py` recomputes it through `convergence.report()`
-instead; that walks the output tree too, and reports every mesh sitting there
-whether or not it is still in the script's `MESHES`.
+run, so the CSVs mean the same thing either way. `convergence` and `degen_tol`
+are not driven by `sweep()`, so `collect.py` recomputes them through their own
+`report()` instead; those walk the output tree too, and report every cell
+sitting there whether or not it is still in the script's lists.
 
 Do not redirect a run's stdout into `metrics.csv` -- the shell holds that path
 open while the sweep writes its own CSV to it, and the two interleave. Redirect

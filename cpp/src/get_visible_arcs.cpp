@@ -103,8 +103,9 @@ void get_visible_arcs(
         // tol args (in order): interval_eps, degen_tol, merge_tol.
         //   interval_eps = 1e-4  : skip_tol in intersect_intervals — angular
         //                          slack on interval bounds (unit: radians)
-        //   degen_tol    = 1e-5  : collapse exposed region to a tangent point
-        //                          when total arc length < this (unit: length)
+        //   degen_tol            : collapse exposed region to a tangent point
+        //                          when total arc length < this (unit: length),
+        //                          from options.degen_tol (default 1e-5)
         //   merge_tol    = 1e-12 : merge near-touching intervals (unit: radians)
         // The cap-dedup / parallel-cut / containment tolerances are file-scope
         // constants in existing_modules_adapter.cpp (DEDUP_COS, DEDUP_LEN_FRAC,
@@ -113,7 +114,7 @@ void get_visible_arcs(
         sphere_exposed_core::compute_exposed_batch(
             pts_rm.data(), radii.data(), N,
             options.ngbrs_list,
-            1e-4, 1e-5, 1e-12,
+            1e-4, options.degen_tol, 1e-12,
             options.batch);
         if (options.verbose)
             std::cout << "[get_visible_arcs] compute_exposed_batch: "

@@ -16,10 +16,11 @@ names = sys.argv[1:] or sorted(
     p.name for p in _common.RESULTS.iterdir() if p.is_dir())
 
 for name in names:
-    if name == 'convergence':
-        # Not driven by sweep(): its runs share one directory and its CSV has
-        # a shape of its own, so the recompute lives in its script.
-        import convergence
-        convergence.report()
+    if name in ('convergence', 'degen_tol'):
+        # Not driven by sweep(): each has a layout and a CSV shape of its own
+        # (convergence shares one directory, degen_tol also reports candidate
+        # quality), so the recompute lives in its own script.
+        module = __import__(name)
+        module.report()
         continue
     _common.collect(name)

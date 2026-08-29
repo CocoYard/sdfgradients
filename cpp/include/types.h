@@ -48,6 +48,13 @@ struct Options {
     double lr = 0.2;
     int optim_steps = 5;  // quasi-Newton steps per outer iteration in optimize_best_gradients
 
+    // Total exposed-arc length (unit: length, not radians) below which a
+    // sphere's exposed region is collapsed to a tangent point and its
+    // short-arc midpoints become surface candidates. Swept by
+    // additional_experiments/degen_tol.py; 1e-5 is the value the pipeline has
+    // always used, hard-coded in get_visible_arcs before it moved here.
+    double degen_tol = 1e-5;
+
     Tolerance tolerance;
     bool tolerance_initialized = false;
 

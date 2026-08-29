@@ -23,7 +23,7 @@ class Options:
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
                 use_MES=-1, post_processing=False, iter_gradient_finding='optimize', verbose=True,
                 pair_local=False, noise=0, bound=1, scatter=False, neural_sdf=None,
-                grad_optimizer='bfgs', extract_padding=0.0):
+                grad_optimizer='bfgs', extract_padding=0.0, degen_tol=1e-5):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -51,6 +51,10 @@ class Options:
         # 'bfgs' = batched BFGS
         self.grad_optimizer = grad_optimizer
         self.extract_padding = extract_padding  # the padding added to the bounding box when extracting the zero level set, to avoid cutting off the surface
+        # Total exposed-arc length (a length, not an angle) below which a sphere's
+        # exposed region collapses to a tangent point, making the short-arc
+        # midpoint a surface candidate. Swept by additional_experiments/degen_tol.py.
+        self.degen_tol = degen_tol
 
         self.gt_gradients = None  # set it manually if you want to use GT gradients for testing, e.g. from the intermediate output of generate_test_mesh_data
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
@@ -84,6 +88,7 @@ class Options:
               f" pair_local={self.pair_local}",
               f" use_MES={self.use_MES}",
               f" grad_optimizer={self.grad_optimizer}",
+              f" degen_tol={self.degen_tol}",
               f" lr={self.lr}")
 
 class Tolerance:
@@ -487,10 +492,10 @@ def find_all_neighbors_list(centers, radii):
     offsets, neighbors = sphere_intersect.find_intersections(centers, radii)
     return offsets, neighbors, [neighbors[offsets[i]:offsets[i+1]] for i in range(len(offsets)-1)]
 
-def get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8):
+def get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8, degen_tol=1e-5):
     nbr_offsets, nbr_indices, nbr_lists = find_all_neighbors_list(sdf_points, np.abs(sdf_values))
     # batch_res = compute_batch(sdf_points, np.abs(sdf_values), nbr_indices, nbr_offsets)
-    batch_res = sep.compute_exposed_batch(sdf_points, np.abs(sdf_values), nbr_indices, nbr_offsets, tol=1e-4)
+    batch_res = sep.compute_exposed_batch(sdf_points, np.abs(sdf_values), nbr_indices, nbr_offsets, tol=1e-4, degen_tol=degen_tol)
     n_arcs_arr  = batch_res['n_arcs']
     n_pts_arr   = batch_res['n_points']
     nbr_counts = np.array([len(v) for v in nbr_lists])
@@ -516,7 +521,8 @@ def main_algorithm(sdf_points, sdf_values, options : Options):
     gt_gradients, max_iters, gt_mesh = options.gt_gradients, options.max_iters, options.gt_mesh
     """ step 1: initial gradient estimation using degenerate points """
     # collect visible arcs for each point, which will be used to clamp the gradients later
-    batch, degenerate_pts, ngbrs_list = get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8)
+    batch, degenerate_pts, ngbrs_list = get_visible_arcs(sdf_points, sdf_values, epsilon=1e-8,
+                                                         degen_tol=options.degen_tol)
     if options.turn_off_short_arcs:
         degenerate_pts = {}
     interpolator = PUInterpolator('cubic', overlap=options.interp_overlap, partition=options.interp_partition)  # use PU for better extrapolation, which is important for the initial gradient estimation. We can switch to Duchon for faster fitting in the optimization loop since we only need to evaluate gradients at given points instead of sampling new points.
@@ -630,6 +636,7 @@ def _build_cpp_options(options : Options):
     cpp_opts.grad_optimizer = getattr(options, 'grad_optimizer', 'bfgs')
     cpp_opts.lr = options.lr
     cpp_opts.optim_steps = options.optim_steps
+    cpp_opts.degen_tol = options.degen_tol
     cpp_opts.verbose = options.verbose
     if options.use_gt_gradients:
         cpp_opts.gt_gradients = options.gt_gradients
@@ -637,6 +644,10 @@ def _build_cpp_options(options : Options):
         cpp_opts.tolerance.clamp_radius_ratio = options.tolerance.clamp_radius_ratio
         cpp_opts.tolerance.clamp_sdf_tol = options.tolerance.clamp_sdf_tol
         cpp_opts.tolerance.angle_tol = options.tolerance.angle_tol
+    # Keep the C++ Options reachable from the Python one: main_algorithm fills
+    # its degenerate_pts in place, so this is how a caller reads back which
+    # short-arc candidates survived the filter (degen_tol.py does).
+    options.cpp_options = cpp_opts
     return cpp_opts
 
 def _adaptive_resolution(points, grid_len):

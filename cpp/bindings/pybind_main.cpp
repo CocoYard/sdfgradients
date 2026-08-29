@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/eigen.h>
 #include <pybind11/stl.h>
+#include <algorithm>
 #include <optional>
 #include "main_algorithm.h"
 #include "duchon_interpolator.h"
@@ -43,7 +44,34 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def_readwrite("iter_gradient_finding", &sdf::Options::iter_gradient_finding)
         .def_readwrite("grad_optimizer", &sdf::Options::grad_optimizer)
         .def_readwrite("lr", &sdf::Options::lr)
-        .def_readwrite("optim_steps", &sdf::Options::optim_steps);
+        .def_readwrite("optim_steps", &sdf::Options::optim_steps)
+        .def_readwrite("degen_tol", &sdf::Options::degen_tol)
+        // The short-arc candidates that survived filter_degenerate_pts, i.e.
+        // exactly the zero-valued points the second RBF fit was given. Only
+        // populated after main_algorithm has run on this Options object.
+        .def_property_readonly("degenerate_points", [](const sdf::Options& o) {
+            std::vector<int> idx;
+            idx.reserve(o.degenerate_pts.size());
+            for (const auto& kv : o.degenerate_pts)
+                if (!kv.second.empty()) idx.push_back(kv.first);
+            std::sort(idx.begin(), idx.end());  // hash order is not reproducible
+            Eigen::VectorXi I((int)idx.size());
+            Eigen::MatrixXd P((int)idx.size(), 3);
+            for (int i = 0; i < (int)idx.size(); i++) {
+                I(i) = idx[i];
+                P.row(i) = o.degenerate_pts.at(idx[i])[0].transpose();
+            }
+            return py::make_tuple(I, P);
+        }, "(indices, positions) of the surviving short-arc candidates.")
+        // Every short-arc midpoint compute_exposed_batch produced, before
+        // filter_degenerate_pts ran: one row per candidate, a sphere may own
+        // several. Also only populated after main_algorithm.
+        .def_property_readonly("short_arc_candidates", [](const sdf::Options& o) {
+            const auto& si = o.batch.point_sphere_idx;
+            Eigen::VectorXi I((int)si.size());
+            for (int i = 0; i < (int)si.size(); i++) I(i) = si[i];
+            return py::make_tuple(I, o.batch.point_positions);
+        }, "(sphere_idx, positions) of every short-arc midpoint, pre-filter.");
 
     // ── MainResult ──────────────────────────────────────────────────
     py::class_<sdf::MainResult>(m, "MainResult")
