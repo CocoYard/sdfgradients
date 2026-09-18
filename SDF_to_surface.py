@@ -2437,6 +2437,110 @@ def plot_pure_sdf():
     ax.set_title(f'SDF heatmap')
     plt.show()
 
+def test_ours(n, clamp_gradients=False, iters=10, resolution=200, path_to_image='examples/eiffel.png'):
+    """
+    Our pipeline only: RBF_OPT gradient estimation with a PU interpolator.
+    Stripped-down version of `test_gradient_estimation` with
+    neighbor_estimation=SPATIAL, gradient_estimation=RBF_OPT,
+    on_gradient_neighbors=False, see_arcs=True.
+    """
+    print(f"Testing ours with n={n}, iters={iters}, clamp_gradients={clamp_gradients}\n")
+    # ------------------------------------------------------------------
+    # Computation
+    # ------------------------------------------------------------------
+    points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image=path_to_image)
+    interpolator = PUInterpolator(kernel='thin_plate')
+
+    visible_arcs = va.compute_visible_arcs(sdf_points, sdf_values)
+    degenerate_arcs = va.get_short_arcs(visible_arcs, tol=1e-8)
+    gradients_gt, _ = estimate_gradients_oracle(sdf_points, sdf_values, points)
+
+    init_interpolator_with_degen_pts(sdf_points, sdf_values, interpolator, degenerate_arcs)
+    init_gradients = init_gradients_by_degen_pts(sdf_points, sdf_values, degenerate_arcs)
+    gradients, _ = opt.iterative_projection(sdf_points, sdf_values, init_gradients, interpolator=interpolator,
+                                            visible_arcs=visible_arcs, short_arc_idx=degenerate_arcs, num_iter=iters, gt=points)
+    if clamp_gradients:
+        va.clamp_gradients_to_arcs(gradients, visible_arcs, degenerate_arcs, sdf_values)
+
+    points_on_surface = yongs_algorithm(sdf_points, sdf_values, gradients)
+    wrong_count = rate_gradient_estimation(sdf_points, points_on_surface, sdf_values, tol=1e-3)
+    mask = (wrong_count <= 0) & (~np.isnan(gradients).any(axis=1))
+    print(f"Number of points with correct projection: {np.sum(mask)} out of {len(sdf_points)}")
+    good_sdf_points = sdf_points[mask]
+    good_points_on_surface = points_on_surface[mask]
+    good_gradients = gradients[mask]
+
+    contour_segments = marching_cubes_2D(sdf_values)
+    print_shape_distances('MC', contour_segments, points)
+
+    V, E = gpy.point_cloud_to_mesh(good_points_on_surface, good_gradients,
+                                   method='PSR',
+                                   psr_screening_weight=10.0,
+                                   psr_outer_boundary_type="Neumann",
+                                   )
+    poisson_contour = obj_to_points(V, E)[0]
+    print_shape_distances('PSR', poisson_contour, points)
+
+    grid_x, grid_y = np.mgrid[0:1:resolution*1j, 0:1:resolution*1j]
+    grid_points = np.vstack([grid_x.ravel(), grid_y.ravel()]).T
+    grid_values = interpolator.predict(grid_points).reshape(resolution, resolution)
+    contour_segments_interpolation = marching_cubes_2D(grid_values.ravel())
+    print_shape_distances('Interp', contour_segments_interpolation, points)
+
+    grad_diff = gradients_diff_norm(gradients, gradients_gt)
+    print(f"ours n={n} Mean L2 norm of gradient difference from ground truth: {grad_diff:.4f}")
+
+    # ------------------------------------------------------------------
+    # Plotting
+    # ------------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(8, 7))
+
+    # background: interpolated SDF, diverging colormap centered at 0
+    # grid_values is indexed [x, y]; imshow wants [row=y, col=x]
+    vlim = np.nanmax(np.abs(grid_values))
+    heatmap = ax.imshow(grid_values.T, origin='lower', extent=(0, 1, 0, 1), cmap='RdBu_r',
+                        vmin=-vlim, vmax=vlim, interpolation='bilinear', zorder=-20)
+    cbar = fig.colorbar(heatmap, ax=ax, fraction=0.046, pad=0.02, label='Interpolated SDF')
+    # iso-lines every 0.02 (zero level is already drawn as the interpolated contour)
+    iso_step = 0.02
+    iso_levels = np.arange(-np.ceil(vlim / iso_step), np.ceil(vlim / iso_step) + 1) * iso_step
+    iso_levels = iso_levels[np.abs(iso_levels) > 1e-12]
+    iso = ax.contour(grid_x, grid_y, grid_values, levels=iso_levels, colors='k',
+                     linewidths=0.2, alpha=0.35, zorder=-10)
+    cbar.add_lines(iso)
+
+    plt.scatter(sdf_points[:, 0], sdf_points[:, 1], c='gray', s=1, label='Original Grid Points')
+    plt.scatter(good_points_on_surface[:, 0], good_points_on_surface[:, 1], c='#7DD3B5', s=4, edgecolors='#04714A', linewidths=0.3, label='Projected Surface Points', zorder=100)
+    # overlay the original shape
+    plt.plot(points[:, 0], points[:, 1], color='#A0A0A0', linewidth=1, label='Original Shape')
+    for k, seg in enumerate(contour_segments_interpolation):
+        plt.plot(seg[:, 0], seg[:, 1], color='#06A77D', linewidth=1.4, label='Interpolated Contour' if k == 0 else None)
+
+    # sample spheres: pink for inside (sdf<0), teal for outside
+    for i in range(len(sdf_points)):
+        color = '#FF6B9D' if sdf_values[i] < 0 else "#4ECDC5"
+        ax.add_patch(plt.Circle(sdf_points[i], np.abs(sdf_values[i]), color=color, fill=False, alpha=1, linewidth=.5))
+
+    # connect original points to projected points
+    plot_correspondence(good_sdf_points, good_points_on_surface, plt)
+    ax.set_aspect('equal')
+    ax.set_xlim(-0.01, 1.01)
+    ax.set_ylim(-0.01, 1.01)
+    ax.set_xticks([]); ax.set_yticks([])
+    for s in ax.spines.values():
+        s.set_visible(False)
+    plt.title(f'Gradient Estimation and Surface Point Projection ({n}^2 points, ours)')
+
+    # Click any point to print its index to the console
+    def _on_click_print_idx(event):
+        if event.inaxes != ax:
+            return
+        click_pt = np.array([event.xdata, event.ydata])
+        idx = int(np.argmin(np.linalg.norm(sdf_points - click_pt, axis=1)))
+        print(f"[click] idx={idx}  pos=({sdf_points[idx, 0]:.4f}, {sdf_points[idx, 1]:.4f})  sdf={sdf_values[idx]:.4f}")
+    fig.canvas.mpl_connect('button_press_event', _on_click_print_idx)
+
+    plt.show()
 
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
@@ -2450,8 +2554,9 @@ if __name__ == "__main__":
     # test_single_gradient(30)
     # test_subdividing(30)
     # plot_pure_sdf()
-    test_gradient_estimation(6, NeighborEstimation.SPATIAL, GradientEstimation.RBF_OPT, iters=10, see_arcs=True, clamp_gradients=False,
-                                        on_gradient_neighbors=False, resolution=200, path_to_image='examples/star.png')
+    test_ours(6, iters=10, clamp_gradients=False, resolution=200, path_to_image='examples/star.png')
+    # test_gradient_estimation(6, NeighborEstimation.SPATIAL, GradientEstimation.RBF_OPT, iters=10, see_arcs=True, clamp_gradients=False,
+    #                                     on_gradient_neighbors=False, resolution=200, path_to_image='examples/star.png')
 
     # plot_rbf_weights(40, iters=20, path_to_image='examples/eiffel.png')    
     # test_plot(n=18, iters=1, clamp_gradients=True, cmd='')                       # 标准用法
