@@ -143,9 +143,8 @@ PYBIND11_MODULE(sdf_cpp, m) {
         .def("is_trained", &sdf::DuchonInterpolator::is_trained);
 
     py::class_<sdf::PUInterpolator, sdf::Interpolator, std::shared_ptr<sdf::PUInterpolator>>(m, "PUInterpolator")
-           .def(py::init<const std::string&, double, int, int, double, const std::string&, bool, bool>(),
+           .def(py::init<const std::string&, double, double, const std::string&, bool, bool>(),
              py::arg("kernel") = "cubic", py::arg("overlap") = 0.25,
-             py::arg("min_points") = 10, py::arg("max_points") = 200,
                py::arg("reg") = 1e-5,
              py::arg("partition") = "box",
              py::arg("verbose") = true,

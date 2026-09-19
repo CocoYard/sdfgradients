@@ -18,11 +18,10 @@
 namespace sdf {
 
 PUInterpolator::PUInterpolator(const std::string& kernel, double overlap,
-                                 int min_points, int max_points,
                                  double reg, const std::string& partition,
                                  bool verbose, bool pair_local)
     : kernel_(kernel), partition_type_(partition), overlap_(overlap),
-      min_points_(min_points), max_points_(max_points), reg_(reg)
+      reg_(reg)
 {
     verbose_ = verbose;
     use_box_ = (partition == "box");
@@ -547,7 +546,9 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
                   << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";
     }
     int dim = (int)pts.cols();
-    int min_pts = std::max(min_points_, dim + 2);
+    // Fewest points a local solve can take: the linear polynomial block
+    // [x y z 1] needs dim+1, plus one for the RBF part.
+    int min_pts = dim + 2;
 
     using clock = std::chrono::high_resolution_clock;
     auto t0 = clock::now();

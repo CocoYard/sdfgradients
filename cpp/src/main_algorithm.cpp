@@ -327,7 +327,7 @@ MainResult main_algorithm(
             std::cout << "Using regularization " << options.reg << " for PUInterpolator\n";
         interpolator = std::make_shared<PUInterpolator>(
             "cubic", options.interp_overlap,
-            10, 200, options.reg, options.interp_partition,
+            options.reg, options.interp_partition,
             options.verbose, options.pair_local);
     }
     if (options.verbose)

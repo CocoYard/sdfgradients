@@ -18,8 +18,6 @@ class PUInterpolator : public Interpolator {
 public:
     PUInterpolator(const std::string& kernel = "cubic",
                    double overlap = 0.25,
-                   int min_points = 10,
-                   int max_points = 200,
                    double reg=1e-5,
                    const std::string& partition = "box",
                    bool verbose = true,
@@ -96,8 +94,8 @@ private:
     std::string kernel_;
     std::string partition_type_;
     double overlap_;
-    int min_points_;
-    int max_points_;
+    // Partition sizes: fixed here, deliberately not constructor arguments.
+    int max_points_ = 200;
     int max_ext_points_ = 675;
 
     std::vector<Patch> patches_;

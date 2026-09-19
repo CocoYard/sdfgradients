@@ -770,7 +770,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     if options.reg != 0:
         reg_str = f'_reg{options.reg}'
     if options.noise > 0:
-        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_noise{options.noise}_reg{options.reg}'
+        fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_noise{options.noise}'
     elif options.bound < 1.0:
         fname = f'ours_{grid_len}_{iters}_{short_arc_str}_{mes_str}_{options.interpolator_type}{pair_str}{post_str}_bound{options.bound}'
     elif options.scatter:
