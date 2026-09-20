@@ -8,14 +8,14 @@ What it writes to metrics.json:
                          (parsed from `accuracy_new.txt` log)
   _samples[model]     =  sorted list of N's that have at least one algo file
   _paths[model][algo][N]   =  "out/<model>/<filename>.obj"  (filesystem scan)
-  _interp_paths[model][N]  =  legacy alias of _paths[model]["interpolation"][N]
+  _interp_paths[model][N]  =  legacy alias of _paths[model]["ours"][N]
   _examples[model]    =  "examples/<model>.obj" (or first match found recursively)
 
 Models without a ground-truth obj under ../examples/ are dropped from
 `_samples` and `_paths` so the gallery dropdown only lists comparable models.
 
 Algo file-name conventions recognised (most-specific first):
-  interpolation:  ours_<N>.obj  |  interpolant_<N>_*.obj
+  ours:  ours_<N>*.obj
   mes:            mes_sw10_<N>.obj  |  mes_<N>.obj
   rfta:           rfta_sw10_<N>.obj  |  rfta_<N>.obj
   mc:             mc_<N>.obj  |  sample_points_<N>.obj
@@ -55,8 +55,7 @@ RE_METRIC = re.compile(
 # (regex, algo_key). Order matters — first match wins, so list the more
 # specific patterns before their bare-N siblings.
 ALGO_PATTERNS = [
-    (re.compile(r"^ours_(\d+)\.obj$"),          "interpolation"),
-    (re.compile(r"^interpolant_(\d+)_"),        "interpolation"),
+    (re.compile(r"^ours_(\d+).*\.obj$"),          "ours"),
     (re.compile(r"^mes_sw10_(\d+)\.obj$"),      "mes"),
     (re.compile(r"^mes_(\d+)\.obj$"),           "mes"),
     (re.compile(r"^rfta_sw10_(\d+)\.obj$"),     "rfta"),
@@ -168,7 +167,7 @@ def main() -> None:
     data["_paths"]        = paths
     data["_examples"]     = examples_map
     # Legacy alias kept so older gallery.html still works without touching it.
-    data["_interp_paths"] = {m: p.get("interpolation", {}) for m, p in paths.items()}
+    data["_interp_paths"] = {m: p.get("ours", {}) for m, p in paths.items()}
 
     with open(OUT, "w") as f:
         json.dump(data, f, indent=2, sort_keys=True)

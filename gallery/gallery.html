@@ -152,15 +152,24 @@
       45deg, #1b1013, #1b1013 8px, #221418 8px, #221418 16px);
   }
 
-  /* A single fixed canvas that covers the viewport; we render per-cell via scissor.
-     Put it ABOVE the header (z:10) and the GT panel (z:20) so WebGL rendering isn't
-     blurred by the panel's backdrop-filter. pointer-events:none lets clicks through. */
+  /* A single viewport-sized canvas; we render per-cell via scissor.
+     It is position:absolute (part of the scrolled content) and translated back to
+     the viewport every frame, so during compositor scrolling the last frame moves
+     together with the cells instead of lagging behind them (fixed canvas + JS
+     redraw always trails the scroll). Sits below the header (z:10) and the GT
+     panel (z:20), which has its own canvas. pointer-events:none lets clicks through. */
   #renderCanvas {
-    position: fixed;
+    position: absolute;
     top: 0; left: 0;
-    width: 100vw; height: 100vh;
     pointer-events: none;
-    z-index: 30;
+    z-index: 5;
+    will-change: transform;
+  }
+  #gtCell canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    display: block;
   }
 
   /* Floating ground-truth panel */
@@ -355,12 +364,13 @@ function rowRanges(model, n) {
 // names. New convention is preferred first in the fallback list (ours_<N>,
 // mc_<N>, mes_sw10_<N>, rfta_sw10_<N>); old convention covers prior dumps.
 const ALGOS = [
-  { key: 'interpolation', label: 'interpolation (ours)',
+  { key: 'ours', label: 'ours',
     path: (m,n) => {
-      const p = METRICS?._paths?.[m]?.interpolation?.[String(n)]
+      const p = METRICS?._paths?.[m]?.ours?.[String(n)]
              ?? METRICS?._interp_paths?.[m]?.[String(n)];
       return p ? [p] : [
         `out/${m}/ours_${n}.obj`,
+        `out/${m}/ours_${n}_10_shortArcs_noMES_PU_clamp_dc_bfgs.obj`,
         `out/${m}/interpolant_${n}_15_shortArcs_MES_nopost_dc_PU_reg0.obj`,
         `out/${m}/interpolant_${n}_15_shortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
         `out/${m}/interpolant_${n}_15_noShortArcs_noclamp_MES_nopost_dc_PU_reg0.obj`,
@@ -391,10 +401,17 @@ renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setScissorTest(true);
 renderer.setClearColor(0x000000, 0);  // transparent — cell background shows through
 
+// The GT panel is position:fixed, so it gets its own renderer/canvas living inside
+// the panel (the grid canvas scrolls with the page).
+const gtRenderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+gtRenderer.setPixelRatio(window.devicePixelRatio);
+gtRenderer.setClearColor(0x000000, 0);
+
 function resizeRenderer() {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  renderer.setSize(w, h, false);
+  // clientWidth/Height exclude scrollbars, so the canvas never causes overflow.
+  const w = document.documentElement.clientWidth;
+  const h = document.documentElement.clientHeight;
+  renderer.setSize(w, h, true);
 }
 resizeRenderer();
 window.addEventListener('resize', resizeRenderer);
@@ -408,7 +425,7 @@ function loadObj(urls) {
   const key = list.join('|');
   if (objCache.has(key)) return objCache.get(key);
   const tryNext = (i) => {
-    if (i >= list.length) return Promise.reject(new Error('construction failed because distances are all positive'));
+    if (i >= list.length) return Promise.reject(new Error('Try refreshing'));
     return new Promise((resolve, reject) => { loader.load(list[i], resolve, undefined, reject); })
       .catch(() => tryNext(i + 1));
   };
@@ -478,11 +495,8 @@ function makeCell(div, url) {
   }).catch(err => {
     const span = document.createElement('div');
     span.className = 'missing';
-    // 'construction failed because distances are all positive' is our sentinel for "no OBJ candidate exists" —
-    // show it bare; for any other failure (parse error, network, etc.) keep
-    // an 'err: ' prefix so it's clearly an exception rather than a label.
     const msg = (err && err.message ? err.message : String(err)).slice(0,80);
-    span.textContent = msg === 'construction failed because distances are all positive' ? msg : ('err: ' + msg);
+    span.textContent = msg === 'Try refreshing' ? msg : ('err: ' + msg);
     span.title = (Array.isArray(url) ? url.join('\n') : url) + '\n' + (err && err.stack ? err.stack : '');
     div.appendChild(span);
     console.warn('failed', url, err);
@@ -500,6 +514,7 @@ function buildTable(model) {
   // Rebuild GT cell
   const gtCellDiv = document.getElementById('gtCell');
   gtCellDiv.innerHTML = '';
+  gtCellDiv.appendChild(gtRenderer.domElement);
   document.getElementById('gtName').textContent = model;
   const gtPath = METRICS?._examples?.[model] || `examples/${model}.obj`;
   const gtCell = makeCell(gtCellDiv, gtPath);
@@ -549,54 +564,41 @@ function buildTable(model) {
 function animate() {
   requestAnimationFrame(animate);
 
+  // Pin the (absolutely positioned) canvas to the viewport. Done in the same frame
+  // as the render, so canvas position and cell rects always agree.
+  canvas.style.transform = `translate(${window.scrollX}px, ${window.scrollY}px)`;
+
   // three.js setViewport/setScissor operate in CSS pixels and apply pixelRatio internally.
   const canvasH = renderer.domElement.clientHeight;
   const canvasW = renderer.domElement.clientWidth;
 
-  const gtHidden = document.getElementById('gtPanel').classList.contains('hidden');
-  const headerH = document.querySelector('.header').offsetHeight;
-
-  // Render grid cells first, then GT last so the GT panel is never occluded by
-  // a grid cell that happens to overlap it on screen.
-  const order = cells.slice().sort((a, b) => (a.isGt ? 1 : 0) - (b.isGt ? 1 : 0));
-
-  let gtClearedAlready = false;
-  for (const c of order) {
-    if (c.isGt && gtHidden) continue;
-
-    // Before drawing the GT cell, clear the entire GT panel rect so grid-cell
-    // pixels (which may overlap) stop leaking onto the panel chrome.
-    if (c.isGt && !gtClearedAlready) {
-      const pr = document.getElementById('gtPanel').getBoundingClientRect();
-      renderer.setScissor(pr.left, canvasH - pr.bottom, pr.width, pr.height);
-      renderer.clear(true, true, false);
-      gtClearedAlready = true;
-    }
+  for (const c of cells) {
+    if (c.isGt) continue;
     const r = c.div.getBoundingClientRect();
     if (r.bottom < 0 || r.top > canvasH || r.right < 0 || r.left > canvasW) continue;
     if (r.width === 0 || r.height === 0) continue;
 
-    // Clip grid cells so they don't draw over the sticky header. GT panel sits below header.
-    const topClip = c.isGt ? r.top : Math.max(r.top, headerH);
-    if (r.bottom <= topClip) continue;
-
-    // Viewport: full cell rect (so camera aspect matches cell shape).
-    const vpLeft   = r.left;
-    const vpBottom = canvasH - r.bottom;
-    const vpWidth  = r.width;
-    const vpHeight = r.height;
-
-    // Scissor: clipped to the part actually visible (below the header).
-    const scBottom = canvasH - r.bottom;
-    const scHeight = r.bottom - topClip;
-
-    c.camera.aspect = vpWidth / vpHeight;
+    c.camera.aspect = r.width / r.height;
     c.camera.updateProjectionMatrix();
     c.controls.update();
 
-    renderer.setViewport(vpLeft, vpBottom, vpWidth, vpHeight);
-    renderer.setScissor(vpLeft, scBottom, vpWidth, scHeight);
+    // Viewport = scissor = full cell rect; the header / GT panel sit above the canvas.
+    renderer.setViewport(r.left, canvasH - r.bottom, r.width, r.height);
+    renderer.setScissor(r.left, canvasH - r.bottom, r.width, r.height);
     renderer.render(c.scene, c.camera);
+  }
+
+  const gt = cells.find(c => c.isGt);
+  if (gt && !document.getElementById('gtPanel').classList.contains('hidden')) {
+    const w = gt.div.clientWidth, h = gt.div.clientHeight;
+    if (w > 0 && h > 0) {
+      const cur = gtRenderer.getSize(new THREE.Vector2());
+      if (cur.x !== w || cur.y !== h) gtRenderer.setSize(w, h, false);
+      gt.camera.aspect = w / h;
+      gt.camera.updateProjectionMatrix();
+      gt.controls.update();
+      gtRenderer.render(gt.scene, gt.camera);
+    }
   }
 }
 animate();
