@@ -2542,6 +2542,153 @@ def test_ours(n, clamp_gradients=False, iters=10, resolution=200, path_to_image=
 
     plt.show()
 
+def test_MILP(n, objectives=('feasible', 'energy'), n_dirs=12, arc_step=None,
+              kernel='thin_plate',
+              max_candidates=2, tangency_tol=1e-3, seed=None, seed_window=1,
+              seed_mode='fix', refine_rounds=0, refine_step=0,
+              seed_iters=10, time_limit=20, resolution=200,
+              path_to_image='examples/eiffel.png', see_arcs=True):
+    """
+    Reconstruct the surface by solving the tangency-constrained program of milp_sdf:
+    samples interpolated exactly, circle points constrained by sign / 1-Lipschitz
+    bounds, and (for the MILP objectives) a binary per candidate direction forcing
+    each circle to touch the zero level set. One panel per objective.
+    """
+    import milp_sdf
+
+    points, sdf_points, sdf_values = generate_2D_mesh(n=n, path_to_image=path_to_image)
+
+    # `seed='ours'`: run the iterative-projection pipeline first and hand its gradients
+    # over as the presumed tangency directions. With seed_window=1 that leaves no
+    # binaries at all and the MILP collapses to a QP.
+    seed_dirs = None
+    if seed == 'ours':
+        interp = PUInterpolator(kernel='thin_plate')
+        arcs = va.compute_visible_arcs(sdf_points, sdf_values)
+        degen = va.get_short_arcs(arcs, tol=1e-8)
+        init_interpolator_with_degen_pts(sdf_points, sdf_values, interp, degen)
+        init_grads = init_gradients_by_degen_pts(sdf_points, sdf_values, degen)
+        grads, _ = opt.iterative_projection(sdf_points, sdf_values, init_grads,
+                                            interpolator=interp, visible_arcs=arcs,
+                                            short_arc_idx=degen, num_iter=seed_iters,
+                                            gt=points)
+        seed_dirs = -np.sign(sdf_values)[:, None] * grads
+        bad = ~np.isfinite(seed_dirs).all(axis=1)
+        seed_dirs[bad] = [1.0, 0.0]          # fall back for samples without a gradient
+        print(f"seeded with 'ours' directions ({np.sum(~bad)}/{len(sdf_points)} usable), "
+              f"seed_window={seed_window}\n")
+    grid_x, grid_y = np.mgrid[0:1:resolution*1j, 0:1:resolution*1j]
+    grid_points = np.vstack([grid_x.ravel(), grid_y.ravel()]).T
+
+    print(f"Testing MILP with n={n} ({len(sdf_points)} samples), "
+          f"{'arc_step=' + str(arc_step) if arc_step else 'n_dirs=' + str(n_dirs)}, "
+          f"kernel={kernel}, max_candidates={max_candidates}, "
+          f"tangency_tol={tangency_tol:g}\n")
+    print_shape_distances('MC', marching_cubes_2D(sdf_values), points)
+
+    results = []
+    for objective in objectives:
+        print(f"[{objective}]")
+        try:
+            sol = milp_sdf.solve(sdf_points, sdf_values, objective=objective, n_dirs=n_dirs,
+                                 arc_step=arc_step,
+                                 kernel=kernel, max_candidates=max_candidates,
+                                 tangency_tol=tangency_tol, seed_dirs=seed_dirs,
+                                 seed_window=seed_window, seed_mode=seed_mode,
+                                 refine_rounds=refine_rounds, refine_step=refine_step,
+                                 time_limit=time_limit)
+        except Exception as e:
+            print(f"  failed: {e}\n")
+            continue
+
+        # How well are the constraints actually met?
+        interp_err = np.max(np.abs(sol.predict(sdf_points) - sdf_values))
+        circle_pts = sol.info['circle_points']
+        owner, offsets = sol.info['owner'], sol.info['offsets']
+        signed = sol.predict(circle_pts) * np.sign(sdf_values)[owner]
+        touch_tol = tangency_tol + 1e-9 * max(1.0, tangency_tol)
+        per_circle_min = np.minimum.reduceat(signed, offsets[:-1])
+        touching = np.sum(per_circle_min <= touch_tol)
+        print(f"  interpolation error: {interp_err:.2e}   "
+              f"circle violation: {max(0.0, -signed.min()):.2e}   "
+              f"circle pts: {len(circle_pts)}   "
+              f"circles touching the surface: {touching}/{len(sdf_points)}")
+        # Are the points the MILP designated as tangent actually on the surface?
+        forced_idx = sol.info.get('forced_idx', np.zeros(0, dtype=int))
+        forced_pts = circle_pts[forced_idx]
+        forced_signed = sol.predict(forced_pts) * np.sign(sdf_values)[owner[forced_idx]]
+        if len(forced_idx):
+            n_bad = int(np.sum(forced_signed > touch_tol))
+            if n_bad:
+                print(f"  WARNING: {n_bad} assigned tangency points violate the constraint")
+            print(f"  assigned tangency points: {len(forced_idx)}, "
+                  f"max sign*f = {forced_signed.max():.2e} "
+                  f"(constraint: <= {tangency_tol:.0e}), "
+                  f"honoured: {np.sum(forced_signed <= touch_tol)}/{len(forced_idx)}")
+
+        grid_values = sol.predict(grid_points).reshape(resolution, resolution)
+        contours = marching_cubes_2D(grid_values.ravel())
+        metrics = shape_distances(contours, points)
+        print_shape_distances(objective, contours, points)
+        print()
+        results.append(dict(objective=objective, sol=sol, grid_values=grid_values,
+                            contours=contours, metrics=metrics, touching=touching,
+                            forced_pts=forced_pts, forced_signed=forced_signed))
+
+    if not results:
+        print("no objective produced a solution")
+        return
+
+    print(f"{'objective':<10} {'time':>7} {'Hausdorff':>10} {'H95':>8} {'Chamfer':>10} "
+          f"{'IoU':>6} {'touch':>7}")
+    for r in results:
+        m, info = r['metrics'], r['sol'].info
+        print(f"{r['objective']:<10} {info['runtime']:>6.1f}s {m['hausdorff']:>10.4f} "
+              f"{m['hausdorff_95']:>8.4f} {m['chamfer']:>10.6f} {m['iou']:>6.3f} "
+              f"{r['touching']:>4}/{len(sdf_points)}")
+
+    # ------------------------------------------------------------------
+    # Plotting: one panel per objective
+    # ------------------------------------------------------------------
+    fig, axes = plt.subplots(1, len(results), figsize=(6.2 * len(results), 6.4), squeeze=False)
+    vlim = max(np.nanmax(np.abs(r['grid_values'])) for r in results)
+    for ax, r in zip(axes[0], results):
+        heatmap = ax.imshow(r['grid_values'].T, origin='lower', extent=(0, 1, 0, 1),
+                            cmap='RdBu_r', vmin=-vlim, vmax=vlim,
+                            interpolation='bilinear', zorder=-20)
+        iso_step = 0.02
+        iso_levels = np.arange(-np.ceil(vlim / iso_step), np.ceil(vlim / iso_step) + 1) * iso_step
+        iso_levels = iso_levels[np.abs(iso_levels) > 1e-12]
+        ax.contour(grid_x, grid_y, r['grid_values'], levels=iso_levels, colors='k',
+                   linewidths=0.2, alpha=0.35, zorder=-10)
+
+        if see_arcs:
+            for i in range(len(sdf_points)):
+                color = '#FF6B9D' if sdf_values[i] < 0 else "#4ECDC5"
+                ax.add_patch(plt.Circle(sdf_points[i], np.abs(sdf_values[i]), color=color,
+                                        fill=False, alpha=1, linewidth=.5))
+        ax.scatter(sdf_points[:, 0], sdf_points[:, 1], c='gray', s=2, zorder=50)
+        # tangency points the solver activated
+        if len(r['forced_pts']):
+            ax.scatter(r['forced_pts'][:, 0], r['forced_pts'][:, 1], marker='x', s=22,
+                       color='#FF3EA5', linewidths=1.1, zorder=60)
+        ax.plot(points[:, 0], points[:, 1], color='#A0A0A0', linewidth=1)
+        for k, seg in enumerate(r['contours']):
+            ax.plot(seg[:, 0], seg[:, 1], color='#06A77D', linewidth=1.4)
+
+        m = r['metrics']
+        ax.set_title(f"{r['objective']}  ({r['sol'].info['runtime']:.1f}s)\n"
+                     f"H={m['hausdorff']:.4f}  C={m['chamfer']:.2e}  IoU={m['iou']:.3f}  "
+                     f"touch {r['touching']}/{len(sdf_points)}", fontsize=10)
+        ax.set_aspect('equal')
+        ax.set_xlim(-0.01, 1.01); ax.set_ylim(-0.01, 1.01)
+        ax.set_xticks([]); ax.set_yticks([])
+        for s in ax.spines.values():
+            s.set_visible(False)
+    fig.colorbar(heatmap, ax=axes[0].tolist(), fraction=0.025, pad=0.02, label='f')
+    plt.show()
+    return results
+
 if __name__ == "__main__":
     # test_visible_neighbors(30, show_all=True)  # show all neighbor connections
     # test_visible_neighbors(30)  # interactive neighbor inspection
