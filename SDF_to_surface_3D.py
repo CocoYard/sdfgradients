@@ -23,7 +23,8 @@ class Options:
                  use_gt_gradients=False, interpolator_type='PU', interp_partition='sphere', overlap=0.2, cpp_dc=True,
                 use_MES=-1, post_processing=False, iter_gradient_finding='optimize', verbose=True,
                 pair_local=False, noise=0, bound=1, scatter=False, neural_sdf=None,
-                grad_optimizer='bfgs', extract_padding=0.0, degen_tol=1e-5):
+                grad_optimizer='bfgs', extract_padding=0.0, degen_tol=1e-5,
+                export_thin_exposed=False):
         self.grid_len = grid_len
         self.max_iters = max_iters
         self.clamp = clamp
@@ -32,6 +33,12 @@ class Options:
         self.path_to_obj = f'{data_dir}/{name}.obj'
         self.export_short_arcs = export_short_arcs  # whether to export short arcs .glb for visualization
         self.export_projections = export_projections  # export gradients .glb for visualization
+        # rank the SDF spheres' exposed regions by thinness and write the thin ones
+        # (html/csv/glb, see debug/vis_thin_exposed.py) next to the recon.
+        # True = defaults; a dict is passed on as keyword arguments, e.g.
+        # dict(min_thin=10): the glb gets the arcs of every sphere with
+        # thinness >= 10 (max_spheres only caps the html detail slider)
+        self.export_thin_exposed = export_thin_exposed
         self.use_gt_gradients = use_gt_gradients
         self.interpolator_type = interpolator_type  # 'Duchon' or 'PU'
         self.interp_partition = interp_partition  # 'box' or 'fps' or 'sphere', only for PU interpolator
@@ -81,6 +88,7 @@ class Options:
               f" turn_off_short_arcs={self.turn_off_short_arcs},"
               f" export_short_arcs={self.export_short_arcs},"
               f" export_projections={self.export_projections},"
+              f" export_thin_exposed={self.export_thin_exposed},"
               f" use_gt_gradients={self.use_gt_gradients},"
               f" interpolator_type={self.interpolator_type},"
               f" interp_partition={self.interp_partition}",
@@ -786,7 +794,43 @@ def test_our_method(options : Options, save_gtmesh=False):
     # when loading cached SDF (e.g. run_baseline) there is no GT mesh in scope.
     if path_to_sdf is None:
         mesh_distances(recon, mesh, verbose=True)
+    if options.export_thin_exposed:
+        export_thin_exposed(options, points, distances, out_dir)
     return points, distances
+
+
+def export_thin_exposed(options, points, distances, out_dir):
+    """Write the thin-exposed-region visualization for these SDF samples.
+
+    Only the samples and degen_tol decide the exposed regions, so the tag names
+    the data (not the optimizer settings) and runs on the same samples share
+    one set of files. A failure here is reported and swallowed: the recon has
+    already been exported and the caller still gets its return value.
+    """
+    import sys, traceback
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug'))
+    base = (options.path_to_sdf or options.path_to_obj).split('/')[-1].split('.')[0]
+    tag = f'{base}_{options.grid_len}'
+    if options.path_to_sdf is None:
+        if options.neural_sdf is not None:
+            tag += f'_neural{options.neural_sdf}'
+        if options.noise > 0:
+            tag += f'_noise{options.noise}'
+        if options.bound < 1.0:
+            tag += f'_bound{options.bound}'
+        if options.scatter:
+            tag += '_scatter'
+    timer = time.perf_counter()
+    try:
+        from vis_thin_exposed import export_thin_exposed as _export
+        # gt_mesh is unset when the samples came from an npz; drawn without it
+        kwargs = dict(options.export_thin_exposed) if isinstance(options.export_thin_exposed, dict) else {}
+        kwargs.setdefault('degen_tol', options.degen_tol)
+        _export(options.gt_mesh, points, distances, out_dir, tag, **kwargs)
+    except Exception:
+        print('[thin_exposed] export failed:')
+        traceback.print_exc()
+    print(f"  ⏱  {'Thin exposed regions':<30} {time.perf_counter() - timer:>7.2f} s")
 
 def check_mesh_error(dir_to_meshes, path_to_gt, edge_chamfer=False):
     """ Compute the mesh distance (Hausdorff and Chamfer) between meshes in dir_to_meshes and the ground truth mesh at path_to_gt. """
@@ -1057,7 +1101,9 @@ if __name__ == "__main__":
     else:
         for length in [30]:
             # for optimizer in [ 'lbfgspp', 'bfgs', 'ascent']:
-                options = Options(name='eiffel', grid_len=length, use_MES=-1, clamp=True, optim_steps=5)
+                options = Options(name='fandisk', grid_len=length, use_MES=-1, clamp=True, optim_steps=5, max_iters=0,
+                                # scatter=True,
+                                export_thin_exposed=dict(min_thin=10, max_area=.001))
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)

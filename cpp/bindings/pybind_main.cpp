@@ -176,6 +176,87 @@ PYBIND11_MODULE(sdf_cpp, m) {
           "Run the full SDF gradient optimization pipeline.\n"
           "Returns MainResult with projections and visibility_mask.");
 
+    // ── Exposed-region arcs (debug / visualization) ──────────────────
+    // Runs step 1 of the pipeline only — power-diagram neighbors plus
+    // compute_exposed_batch — and hands the raw arc/cap geometry to Python.
+    // The bench module (bench/sphere_exposed_pybind) can compute the same
+    // thing, but only from the spatial-hash neighbor list, which is NOT the
+    // power-cell facet set the carve needs; use this instead.
+    m.def("exposed_arcs",
+          [](const Eigen::MatrixXd& sdf_points, const Eigen::VectorXd& sdf_values,
+             double degen_tol, bool verbose) {
+              sdf::Options o;
+              o.degen_tol = degen_tol;
+              o.verbose = verbose;
+              o.clamp = true;                  // keep the arc extraction path
+              o.turn_off_short_arcs = false;
+              sdf::get_visible_arcs(sdf_points, sdf_values, o);
+
+              const auto& b = o.batch;
+              const int n_caps_total = (int)b.cap_sphere_idx.size();
+
+              // Caps are appended sphere by sphere in remap (compacted id)
+              // order, so the id within each sphere's group is just its
+              // running position — recovered here so Python can resolve
+              // arc_cap_idx without assuming the layout.
+              Eigen::VectorXi cap_id(n_caps_total);
+              {
+                  int run = 0, prev = -1;
+                  for (int k = 0; k < n_caps_total; k++) {
+                      int s = b.cap_sphere_idx[k];
+                      run = (s == prev) ? run + 1 : 0;
+                      prev = s;
+                      cap_id(k) = run;
+                  }
+              }
+
+              auto to_veci = [](const std::vector<int>& v) {
+                  Eigen::VectorXi e((int)v.size());
+                  for (int k = 0; k < (int)v.size(); k++) e(k) = v[k];
+                  return e;
+              };
+              auto to_vecd = [](const std::vector<double>& v) {
+                  Eigen::VectorXd e((int)v.size());
+                  for (int k = 0; k < (int)v.size(); k++) e(k) = v[k];
+                  return e;
+              };
+
+              Eigen::VectorXi n_caps((int)o.ngbrs_list.size());
+              Eigen::VectorXi n_nbrs((int)o.ngbrs_list.size());
+              n_caps.setZero();
+              for (int k = 0; k < n_caps_total; k++) n_caps(b.cap_sphere_idx[k])++;
+              for (int i = 0; i < (int)o.ngbrs_list.size(); i++)
+                  n_nbrs(i) = (int)o.ngbrs_list[i].size();
+
+              using namespace pybind11::literals;
+              return py::dict(
+                  "n_arcs"_a           = to_veci(b.n_arcs),
+                  "n_points"_a         = to_veci(b.n_points),
+                  "n_caps"_a           = n_caps,
+                  "n_neighbors"_a      = n_nbrs,
+                  "arc_sphere_idx"_a   = to_veci(b.arc_sphere_idx),
+                  "arc_cap_idx"_a      = to_veci(b.arc_cap_idx),
+                  "arc_start"_a        = to_vecd(b.arc_start),
+                  "arc_end"_a          = to_vecd(b.arc_end),
+                  "cap_sphere_idx"_a   = to_veci(b.cap_sphere_idx),
+                  "cap_id"_a           = cap_id,
+                  "cap_normals"_a      = b.cap_normals,
+                  "cap_d"_a            = b.cap_d,
+                  "cap_centers"_a      = b.cap_centers,
+                  "cap_radii"_a        = b.cap_radii,
+                  "cap_u"_a            = b.cap_u,
+                  "cap_v"_a            = b.cap_v,
+                  "point_sphere_idx"_a = to_veci(b.point_sphere_idx),
+                  "point_positions"_a  = b.point_positions,
+                  "fully_covered"_a    = o.fully_covered,
+                  "hidden_points"_a    = o.hidden_points);
+          },
+          py::arg("sdf_points"), py::arg("sdf_values"),
+          py::arg("degen_tol") = 1e-5, py::arg("verbose") = false,
+          "Exposed-region arcs/caps/degenerate points for every SDF sphere,\n"
+          "using the same power-diagram neighbors as the pipeline.\n"
+          "Returns a dict of flat arrays (see BatchData in cpp/include/types.h).");
+
     // ── MES contact points / empty spheres ───────────────────────────
     m.def("contact_points_from_sdf",
           [](const Eigen::MatrixXd& points, const Eigen::VectorXd& sdf_values,
