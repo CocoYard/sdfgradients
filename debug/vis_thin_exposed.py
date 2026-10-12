@@ -128,10 +128,24 @@ def arc_frames(batch, n_spheres, sdf_points, radii, check=True):
     def tangent(t):
         return np.sin(t)[:, None] * cu - np.cos(t)[:, None] * cv
 
+    # exact axis-aligned extent of each arc: the endpoints, plus the extrema of
+    # x_a(t) = cc_a + rho*|(u_a, v_a)|*cos(t - phi_a), at t = phi_a + k*pi
+    lo = np.minimum(pos(t0), pos(t1))
+    hi = np.maximum(pos(t0), pos(t1))
+    phi = np.arctan2(cv, cu)                       # (n_arcs, 3), one per axis
+    first = phi + np.pi * np.ceil((t0[:, None] - phi) / np.pi)
+    amp = rho[:, None] * np.hypot(cu, cv)
+    for k in range(3):                             # dt <= 2*pi holds at most 3 extrema
+        tc = first + k * np.pi
+        inside = tc <= t1[:, None]
+        x = cc + amp * np.cos(tc - phi)
+        lo = np.where(inside, np.minimum(lo, x), lo)
+        hi = np.where(inside, np.maximum(hi, x), hi)
+
     return dict(sphere=si, R=R, center=ctr, rho=rho, h=h, dt=dt,
                 arclen=rho * dt, kappa=(h / R) * dt,
                 head=pos(t1), tail=pos(t0), mid=pos(0.5 * (t0 + t1)),
-                T_head=tangent(t1), T_tail=tangent(t0))
+                T_head=tangent(t1), T_tail=tangent(t0), lo=lo, hi=hi)
 
 
 def chain_loops(arcs, tol_rel=1e-9, min_dt=1e-9, k=4):
@@ -734,12 +748,14 @@ def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
                         max_spheres=24, max_overview=400, max_glb=None,
                         arc_samples=64,
                         region_samples=0, glb=True, csv=False, html=False,
-                        embed_js=False):
+                        embed_js=False, bbox=None):
     """Measure every sphere's exposed region and write the thin ones out.
 
     `mesh` is the GT mesh in the same (normalized) frame as the samples, or
     None when there is none (e.g. SDF loaded from an npz); the pages are then
-    drawn without it. Writes <out_dir>/thin_exposed_<tag>.glb, plus the
+    drawn without it. `bbox` = (min_corner, max_corner): only regions whose
+    arcs all lie inside it are drawn; None = the samples' bbox, False = no
+    bbox filter. Writes <out_dir>/thin_exposed_<tag>.glb, plus the
     ranking .csv (csv=True) and the _overview/_detail .html pages (html=True),
     and returns the list of paths written.
     """
@@ -800,6 +816,20 @@ def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
     rkeep = (rlive & (reg['thin'] >= min_thin)
              & (reg['area'] <= (np.inf if max_area is None else max_area))
              & (reg['perim'] / rR >= min_perim_rad))
+    if bbox is not False:
+        # and every arc of the region lies inside the bbox
+        bmin, bmax = ((sdf_points.min(axis=0), sdf_points.max(axis=0)) if bbox is None
+                      else (np.asarray(bbox[0], float), np.asarray(bbox[1], float)))
+        eps = 1e-9 * (bmax - bmin).max()
+        arcs_ = m['arcs']
+        arc_out = ~(np.all(arcs_['lo'] >= bmin - eps, axis=1)
+                    & np.all(arcs_['hi'] <= bmax + eps, axis=1))
+        has = arcs_['region'] >= 0
+        reg_out = np.bincount(arcs_['region'][has], weights=arc_out[has],
+                              minlength=len(rkeep))[:len(rkeep)] > 0
+        print(f'bbox {np.round(bmin, 4)} .. {np.round(bmax, 4)}: '
+              f'{int((rkeep & reg_out).sum())} otherwise-drawn regions poke out, dropped')
+        rkeep &= ~reg_out
     rsel = np.flatnonzero(rkeep)
     key = {'thin': -reg['thin'], 'width': reg['width'] / rR,
            'area': reg['frac'], 'perim': -reg['perim'] / rR}[sort]

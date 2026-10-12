@@ -703,7 +703,11 @@ def test_our_method(options : Options, save_gtmesh=False):
         mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise, bound=options.bound, scatter=options.scatter)  # Generate new data with 4096 points
         options.gt_gradients = gt_gradients
         options.gt_mesh = mesh
-
+    if options.export_thin_exposed:
+        # Export meshes to out/
+        out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
+        export_thin_exposed(options, points, distances, out_dir+'/bbox/thin5')
+        return points, distances
     # Create and fit the interpolator
     timer = time.perf_counter()
     use_cpp = True
@@ -794,8 +798,6 @@ def test_our_method(options : Options, save_gtmesh=False):
     # when loading cached SDF (e.g. run_baseline) there is no GT mesh in scope.
     if path_to_sdf is None:
         mesh_distances(recon, mesh, verbose=True)
-    if options.export_thin_exposed:
-        export_thin_exposed(options, points, distances, out_dir)
     return points, distances
 
 
