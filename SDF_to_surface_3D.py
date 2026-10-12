@@ -919,6 +919,92 @@ def test_mc(options : Options, save_gtmesh=False, sdf=None):
     # mesh_distances(recon, mesh, verbose=True)
     return plt
 
+def test_dcsdd(options : Options, save_gtmesh=False, sdf=None, method='ours', dcsdd_opts=None,
+               dcsdd_root=None):
+    """
+    Run Dual Contouring of Signed Distance Data (Carrera et al. 2026, repo ../dcsd) on the
+    grid SDF samples. method: 'ours' (their method), 'dc' or 'mc' (their DC / MC baselines).
+    dcsdd_opts: dict overriding their ContouringOptions (outer_iters, mu, dc_weight, ...).
+    Needs the samples to lie on a regular grid (not scatter); samples dropped by
+    bound < 1 are filled with +bound (outside), like test_mc.
+    """
+    grid_len = options.grid_len
+    path_to_obj = options.path_to_obj
+    path_to_sdf = options.path_to_sdf
+    mesh = None
+    if path_to_sdf is not None:
+        data = np.load(path_to_sdf)
+        points = data['points']
+        distances = data['sdf_values']
+    elif sdf is not None:
+        points, distances = sdf
+        mesh = options.gt_mesh
+    elif options.neural_sdf is not None:
+        from neural_sdf import generate_neural_sdf_data
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, _ = generate_neural_sdf_data(
+            path_to_obj, base_name, grid_len=grid_len, mode=options.neural_sdf,
+            bound=options.bound, scatter=options.scatter,
+            retrain=options.neural_retrain, verbose=options.verbose)
+        options.gt_mesh = mesh
+    else:
+        base_name = path_to_obj.split('/')[-1].split('.')[0]
+        mesh, points, distances, gt_gradients = generate_test_mesh_data(path_to_obj, base_name, grid_len=grid_len, save=save_gtmesh, noise=options.noise, bound=options.bound)
+        options.gt_gradients = gt_gradients
+        options.gt_mesh = mesh
+    if options.scatter:
+        raise ValueError("test_dcsdd needs grid samples; scatter=True is not supported")
+
+    import sys
+    if dcsdd_root is None:
+        dcsdd_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dcsd')
+    sys.path.insert(0, os.path.join(dcsdd_root, 'src', 'python'))
+    import contouring
+    Method = contouring._contouring_cpp_module.ContouringMethod
+
+    # Rebuild the dense grid from the sample coordinates (missing samples = outside).
+    xs = np.unique(np.round(points[:, 0], 8))
+    ys = np.unique(np.round(points[:, 1], 8))
+    zs = np.unique(np.round(points[:, 2], 8))
+    nx, ny, nz = len(xs), len(ys), len(zs)
+    ix = np.searchsorted(xs, np.round(points[:, 0], 8))
+    iy = np.searchsorted(ys, np.round(points[:, 1], 8))
+    iz = np.searchsorted(zs, np.round(points[:, 2], 8))
+    # their grid (igl::grid) is x fastest, then y, then z: flat index = ix + nx*(iy + ny*iz)
+    S = np.full(nx * ny * nz, float(options.bound))
+    S[ix + nx * (iy + ny * iz)] = distances
+    GX, GY, GZ = np.meshgrid(xs, ys, zs, indexing='ij')
+    U = np.stack([GX.ravel(order='F'), GY.ravel(order='F'), GZ.ravel(order='F')], axis=1)
+
+    opts = {"method": {'ours': Method.Ours, 'dc': Method.DualContouring, 'mc': Method.MarchingCubes}[method]}
+    if method == 'ours':
+        # defaults from their scripts/run_ours.py
+        opts.update({"outer_iters": 100, "inner_iters": 100, "hermite_update": True,
+                     "new_hermite_pos_weight": 0.2, "new_face_pos_weight": 0.2,
+                     "new_hermite_normal_weight": 0.2, "mu": 0.1, "dc_weight": 0.02,
+                     "verbose": options.verbose, "batch_size": 200000})
+    if dcsdd_opts:
+        opts.update(dcsdd_opts)
+
+    timer = time.perf_counter()
+    verts, faces = contouring.py_contouring(S, U, nx, ny, nz, 0.0, opts, None, None)
+    print(f"  ⏱  {'DCSDD ' + method + ' reconstruction':<30} {time.perf_counter() - timer:>7.2f} s")
+
+    out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
+    os.makedirs(out_dir, exist_ok=True)
+    fname = f'dcsdd_{method}_{grid_len}'
+    if options.noise > 0:
+        fname += f'_noise{options.noise}'
+    elif options.bound < 1.0:
+        fname += f'_bound{options.bound}'
+    fname += '.obj'
+    recon = trimesh.Trimesh(vertices=verts, faces=faces)
+    recon.export(f'{out_dir}/{fname}')
+    print(f"Exported: {out_dir}/{fname}")
+    if mesh is not None:
+        mesh_distances(recon, mesh, verbose=True)
+    return recon
+
 from enum import Enum
 class TangentPoints(Enum):
     GT = 'gt'
@@ -1120,6 +1206,7 @@ if __name__ == "__main__":
                 # test_rfta(options, screening_weight=10, parallel=True, sdf=(points, distances))
                 # test_mc(options, save_gtmesh=False, sdf=(points, distances))
                 # test_mes(options, save_gtmesh=False, screening_weight=10, sdf=(points, distances))
+                # test_dcsdd(options, method='ours')
         # check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=True)
 
     elapsed = time.perf_counter() - t0
