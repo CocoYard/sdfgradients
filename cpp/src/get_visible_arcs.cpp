@@ -80,15 +80,19 @@ void get_visible_arcs(
         // Eigen default is column-major; C functions expect row-major (centers[i*3+k])
         Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor> pts_rm = sdf_points;
         auto t = clk::now();
-        sphere_intersect_core::find_intersections_by_power_diagram(
-            pts_rm.data(), radii.data(), N, options.ngbrs_list,
-            &options.hidden_points);
-        if (false) {
-            std::ofstream hf("logs/degen_stats.txt", std::ios::app);
-            hf << options.grid_len << " " << options.hidden_points << "\n";
+        // use regular triangulation neighbors
+        if (true) {
+            sphere_intersect_core::find_intersections_by_power_diagram(
+                pts_rm.data(), radii.data(), N, options.ngbrs_list,
+                &options.hidden_points);
+            if (false) {
+                std::ofstream hf("logs/degen_stats.txt", std::ios::app);
+                hf << options.grid_len << " " << options.hidden_points << "\n";
+            }
+        } else { // use truncated intersecting neighbors
+            sphere_intersect_core::find_intersections(
+                pts_rm.data(), radii.data(), N, options.ngbrs_list);
         }
-        // sphere_intersect_core::find_intersections(
-        //     pts_rm.data(), radii.data(), N, options.ngbrs_list);
         // print the distribution of neighbor counts
         std::cout << "Neighbor count distribution (capped at 20):\n";
         for (size_t i = 0; i < 20; i++) {
