@@ -745,8 +745,8 @@ def export_arcs_glb(path, mesh, arc_mask, batch, sdf_points, tube_radius,
 def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
                         degen_tol=1e-5, neighbors='rt', min_thin=4.0,
                         max_area=None, min_perim_rad=0.05, sort='thin',
-                        max_spheres=24, max_overview=400, max_glb=None,
-                        arc_samples=64,
+                        max_spheres=5, max_overview=400, max_glb=None,
+                        max_total_angle=None, arc_samples=64,
                         region_samples=0, glb=True, csv=False, html=False,
                         embed_js=False, bbox=None):
     """Measure every sphere's exposed region and write the thin ones out.
@@ -792,6 +792,11 @@ def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
         print('no measurable exposed region')
         return written
     rR = radii[reg['sphere']]
+    # total central angle of each region's boundary: sum of arc_end - arc_start
+    # over its arcs (zero-length arcs own no region and add nothing)
+    ar = m['arcs']['region']
+    reg_angle = np.bincount(ar[ar >= 0], weights=m['arcs']['dt'][ar >= 0],
+                            minlength=len(reg['area']))
     print(f'{int(rlive.sum())} connected exposed regions on '
           f'{len(np.unique(reg["sphere"][rlive]))} spheres '
           f'({int((reg["merged"] & rlive).sum())} merged per sphere: several '
@@ -807,7 +812,8 @@ def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
         for lbl, v in (('thinness', reg['thin'][fin]),
                        ('area', reg['area'][fin]),
                        ('perimeter / r', reg['perim'][fin] / rR[fin]),
-                       ('width / r', reg['width'][fin] / rR[fin])):
+                       ('width / r', reg['width'][fin] / rR[fin]),
+                       ('total angle', reg_angle[fin])):
             print(f'  {lbl:<15} ' + ', '.join(f'{x:.4g}'
                                               for x in np.percentile(v, pq)))
 
@@ -816,6 +822,9 @@ def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
     rkeep = (rlive & (reg['thin'] >= min_thin)
              & (reg['area'] <= (np.inf if max_area is None else max_area))
              & (reg['perim'] / rR >= min_perim_rad))
+    if max_total_angle is not None:
+        # and the central angles of all its boundary arcs sum to less than this
+        rkeep &= reg_angle < max_total_angle
     if bbox is not False:
         # and every arc of the region lies inside the bbox
         bmin, bmax = ((sdf_points.min(axis=0), sdf_points.max(axis=0)) if bbox is None
@@ -838,7 +847,9 @@ def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
     cand = reg['sphere'][rsel]
     cand = cand[np.sort(np.unique(cand, return_index=True)[1])]
     print(f'{rsel.size} regions on {cand.size} spheres pass thinness>={min_thin} '
-          f'and area<={max_area} (P/r>={min_perim_rad})')
+          f'and area<={max_area} (P/r>={min_perim_rad})'
+          + ('' if max_total_angle is None
+             else f' and total angle<{max_total_angle:.4g}'))
 
     os.makedirs(out_dir, exist_ok=True)
     if csv:
@@ -847,14 +858,14 @@ def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
         order = order[np.argsort(key[order], kind='stable')]
         with open(csv_path, 'w') as f:
             f.write('sphere,region,r,area,perimeter,thinness,width,area_frac,'
-                    'n_loops,merged,drawn\n')
+                    'n_loops,merged,total_angle,drawn\n')
             for k in order:
                 i = reg['sphere'][k]
                 f.write(f'{i},{k},{radii[i]:.9g},{reg["area"][k]:.9g},'
                         f'{reg["perim"][k]:.9g},{reg["thin"][k]:.9g},'
                         f'{reg["width"][k]:.9g},{reg["frac"][k]:.9g},'
                         f'{reg["n_loops"][k]},{int(reg["merged"][k])},'
-                        f'{int(rkeep[k])}\n')
+                        f'{reg_angle[k]:.9g},{int(rkeep[k])}\n')
         print(f'wrote {csv_path} ({len(order)} regions, ranked by {sort})')
         written.append(csv_path)
 
@@ -969,6 +980,10 @@ def main():
                     help='spheres drawn in the overview page')
     ap.add_argument('--max-glb', type=int, default=None,
                     help='cap the regions in the glb (default: all that pass)')
+    ap.add_argument('--max-total-angle', type=float, default=None,
+                    help='draw only regions whose boundary arcs\' central '
+                         'angles (arc_end - arc_start, each on its own cap '
+                         'circle) sum to less than this (radians, e.g. 3.14159)')
     ap.add_argument('--arc-samples', type=int, default=64)
     ap.add_argument('--region-samples', type=int, default=0,
                     help='also sample the exposed region itself as points in '
@@ -1003,6 +1018,7 @@ def main():
         max_area=args.max_area, min_perim_rad=args.min_perim_rad,
         sort=args.sort, max_spheres=args.max_spheres,
         max_overview=args.max_overview, max_glb=args.max_glb,
+        max_total_angle=args.max_total_angle,
         arc_samples=args.arc_samples,
         region_samples=args.region_samples, glb=not args.no_glb,
         csv=args.csv, html=args.html,

@@ -1254,11 +1254,9 @@ if __name__ == "__main__":
             # for optimizer in [ 'lbfgspp', 'bfgs', 'ascent']:
                 options = Options(name='fandisk', grid_len=length, use_MES=-1, clamp=True, optim_steps=5, max_iters=10,
                                 # scatter=True,
-                                export_thin_exposed=dict(min_thin=5, max_area=1))
-
-                options = Options(name='fandisk', grid_len=length)
+                                export_thin_exposed=dict(min_thin=10, max_total_angle=np.pi))
                 # edge_samples.extract_sharp_edges()   # once: writes examples/fandisk_sharp_edges.npz
-                test_edge_densify(options, spacing=0.0015, on_edge=True, save_vis=True)
+                # test_edge_densify(options, spacing=0.0015, on_edge=True, save_vis=True)
 
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
@@ -1270,7 +1268,7 @@ if __name__ == "__main__":
                 # options.grad_optimizer = optimizer
 
                 # export_mes_spheres(options, radius_threshold=0.001)
-                # points, distances = test_our_method(options, save_gtmesh=False)
+                points, distances = test_our_method(options, save_gtmesh=False)
                 # test_rfta(options, screening_weight=10, parallel=True, sdf=(points, distances))
                 # test_mc(options, save_gtmesh=False, sdf=(points, distances))
                 # test_mes(options, save_gtmesh=False, screening_weight=10, sdf=(points, distances))
