@@ -12,6 +12,11 @@ namespace sdf {
 ///   [ P' 0 ] [  p,q  ] = [   0    ]
 ///
 /// predict(x) = sum_j alpha_j * kernel(||x - x_j||) + x . p + q
+///
+/// Hermite RBF (set_normals, cubic kernel, 3D only): points with a normal n_k
+/// also take the constraint grad f(c_k) = n_k, and the interpolant gains the
+/// derivative basis functions -grad phi(x - c_k) . beta_k:
+///   f(x) = sum_j alpha_j phi(x - c_j) - sum_k 3 |x - c_k| beta_k . (x - c_k) + x . p + q
 class DuchonInterpolator : public Interpolator {
 public:
     explicit DuchonInterpolator(const std::string& kernel = "cubic", double reg = 1e-5);
@@ -41,6 +46,16 @@ public:
     /// Duchon instances to avoid redundant work.
     void set_dedup(bool enabled) { dedup_ = enabled; }
 
+    /// Normal constraints for the next fit(): one row per fit() point, a
+    /// finite row n_k adds grad f(c_k) = n_k, a NaN row keeps the point
+    /// value-only. Empty N clears.
+    void set_normals(const Eigen::MatrixXd& N) { normals_in_ = N; }
+
+    /// Restrict the linear polynomial to the affine hull of the fit points.
+    /// For lifted (VSK) points, whose last coordinate is often affine in the
+    /// others, the full [X 1] block would be rank deficient.
+    void set_reduced_poly(bool on) { reduced_poly_ = on; }
+
 private:
     double kernel_eval(double r) const;
 
@@ -53,11 +68,21 @@ private:
                                       Eigen::MatrixXd& grad_out) const;
 
     void compute_coefficients(const Eigen::MatrixXd& pts,
-                              const Eigen::VectorXd& vals);
+                              const Eigen::VectorXd& vals,
+                              const Eigen::MatrixXd& normals);
+
+    /// Adds the Hermite terms (value and/or gradient) at x_new; no-op without normals.
+    void add_hermite_terms(const Eigen::MatrixXd& x_new,
+                           Eigen::VectorXd* value,
+                           Eigen::MatrixXd* grad) const;
 
     std::string kernel_type_;
     Eigen::MatrixXd points_;    // (N, 3)
     Eigen::VectorXd alpha_;     // (N,)
+    Eigen::MatrixXd normals_in_;  // (N, 3) set_normals() input for the next fit
+    Eigen::MatrixXd herm_pts_;  // (K, 3) points with a normal constraint
+    Eigen::MatrixXd beta_;      // (K, 3) their derivative coefficients
+    bool reduced_poly_ = false;
     Eigen::VectorXd p_;         // (3,)
     double q_ = 0.0;
     bool trained_ = false;

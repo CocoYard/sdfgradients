@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from interpolation import Interpolator, PUInterpolator, DuchonInterpolator
 import time
-from util import mesh_distances
+from util import mesh_distances, normalize_mesh
 
 # Seed for all randomness in generate_test_mesh_data (scatter sampling, noise).
 # __main__ overrides this; importers can set it via `sdf3d.seed = ...` like data_dir.
@@ -129,12 +129,7 @@ def generate_test_mesh_data( path_to_mesh, outbase, grid_len=10, save=False, noi
     rng = np.random.default_rng(seed)
 
     # Load the mesh
-    mesh = trimesh.load(path_to_mesh)
-    # Normalize the mesh to fit within a unit cube
-    min = np.min( mesh.vertices, axis=0 )
-    max = np.max( mesh.vertices, axis=0 )
-    mesh.vertices -= (min + max) / 2
-    mesh.vertices /= np.max( max - min )
+    mesh = normalize_mesh(trimesh.load(path_to_mesh))
 
     # # Generate random points in 3D space
     # radius = 2*np.max( np.linalg.norm( mesh.vertices, axis=1 ) )
@@ -1160,6 +1155,74 @@ def construct_mesh(tangent_pts, points, distances, useRBF : bool, options : Opti
             recon = trimesh.util.concatenate(kept)
         return recon
 
+def test_edge_densify(options : Options, spacing, on_edge=False, save_vis=False,
+                      methods=('base', 'hermite', 'vsk')):
+    """ Function 2: reconstruct from the SDF samples plus dense samples around the GT sharp edges.
+
+        Inputs: the SDF samples, their GT projections onto the mesh, and the dense edge
+        samples of edge_samples.sample_edge_points(spacing, on_edge, save_vis).
+        'base':    RBF interpolation; SDF samples keep their SDF values, projections and
+                   dense samples get value 0.
+        'hermite': Hermite RBF, as 'base' plus a normal constraint at every projection and
+                   dense sample (dense samples exactly on an edge have no normal and stay
+                   value-only).
+        'vsk':     variably scaled kernel; the points are lifted to (x, psi(x)) with psi the
+                   RBF interpolant of the SDF samples, then interpolated as 'base'.
+        Writes out/<name>/<grid_len>_densiGap<spacing>_<edge|face>_<method>.obj and prints its errors.
+    """
+    import sys
+    import edgeChamfer
+    from edge_samples import sample_edge_points
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
+    import sdf_cpp
+    tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT)
+    gt_mesh = options.gt_mesh
+    dense_pts, dense_nrm = sample_edge_points(spacing, on_edge, save_vis)
+
+    # projection normals from the samples: x = t + s n
+    valid = np.isfinite(tangent_pts).all(axis=1) & (np.abs(distances) > 1e-8)
+    proj = tangent_pts[valid]
+    proj_nrm = (points[valid] - proj) / distances[valid, None]
+    proj_nrm /= np.linalg.norm(proj_nrm, axis=1, keepdims=True)
+
+    X = np.vstack([points, proj, dense_pts])
+    values = np.concatenate([distances, np.zeros(len(proj) + len(dense_pts))])
+    normals = np.vstack([np.full(points.shape, np.nan), proj_nrm, dense_nrm])
+
+    def make_pu(cls=sdf_cpp.PUInterpolator, *args):
+        return cls(*args, kernel='cubic', overlap=options.interp_overlap, reg=options.reg,
+                   partition=options.interp_partition, verbose=False, pair_local=options.pair_local)
+
+    resolution = _adaptive_resolution(points, options.grid_len)*4
+    bbox_min = points.min(axis=0) - options.extract_padding
+    bbox_max = points.max(axis=0) + options.extract_padding
+    out_dir = f'out/{options.name}'
+    os.makedirs(out_dir, exist_ok=True)
+    for method in methods:
+        timer = time.perf_counter()
+        if method == 'base':
+            interp = make_pu()
+        elif method == 'hermite':
+            interp = make_pu()
+            interp.set_normals(normals)
+        elif method == 'vsk':
+            psi = make_pu()
+            psi.fit(points, distances)
+            interp = make_pu(sdf_cpp.VSKInterpolator, psi)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+        interp.fit(X, values)
+        verts, faces = interp.extract_surface(
+            bbox_min=bbox_min, bbox_max=bbox_max, nx=resolution, ny=resolution, nz=resolution,
+            iso=0.0, chunk_size=5000, lipschitz_postfix=False, use_dual_contouring=True)
+        recon = trimesh.Trimesh(vertices=verts, faces=faces)
+        fname = f"{options.grid_len}_densiGap{spacing:g}_{'edge' if on_edge else 'face'}_{method}"
+        recon.export(f'{out_dir}/{fname}.obj')
+        haus, chamfer, f1 = mesh_distances(recon, gt_mesh)
+        ecd, ef1 = edgeChamfer.compute_ecd(recon, gt_mesh, sample_num=1000_000)
+        print(f"{fname:<30} {time.perf_counter() - timer:7.2f} s  Hausdorff: {haus:.5f}  "
+              f"Chamfer: {chamfer:.7f}  F1: {f1:.4f}  EdgeChamfer: {ecd:.6f}  EdgeF1: {ef1:.4f}")
+
 if __name__ == "__main__":
     t0 = time.perf_counter()
     seed = 1
@@ -1187,11 +1250,16 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [30]:
+        for length in [50]:
             # for optimizer in [ 'lbfgspp', 'bfgs', 'ascent']:
-                options = Options(name='fandisk', grid_len=length, use_MES=-1, clamp=True, optim_steps=5, max_iters=0,
+                options = Options(name='fandisk', grid_len=length, use_MES=-1, clamp=True, optim_steps=5, max_iters=10,
                                 # scatter=True,
-                                export_thin_exposed=dict(min_thin=10, max_area=.001))
+                                export_thin_exposed=dict(min_thin=5, max_area=1))
+
+                options = Options(name='fandisk', grid_len=length)
+                # edge_samples.extract_sharp_edges()   # once: writes examples/fandisk_sharp_edges.npz
+                test_edge_densify(options, spacing=0.0015, on_edge=True, save_vis=True)
+
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
                 # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
                 # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
@@ -1202,7 +1270,7 @@ if __name__ == "__main__":
                 # options.grad_optimizer = optimizer
 
                 # export_mes_spheres(options, radius_threshold=0.001)
-                points, distances = test_our_method(options, save_gtmesh=False)
+                # points, distances = test_our_method(options, save_gtmesh=False)
                 # test_rfta(options, screening_weight=10, parallel=True, sdf=(points, distances))
                 # test_mc(options, save_gtmesh=False, sdf=(points, distances))
                 # test_mes(options, save_gtmesh=False, screening_weight=10, sdf=(points, distances))

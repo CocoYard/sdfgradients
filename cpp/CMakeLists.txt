@@ -338,6 +338,7 @@ add_library(sdf_core STATIC
     src/optimize_lbfgspp.cpp
     src/duchon_interpolator.cpp
     src/pu_interpolator.cpp
+    src/vsk_interpolator.cpp
     src/visibility.cpp
     src/clamp.cpp
     src/optimization.cpp

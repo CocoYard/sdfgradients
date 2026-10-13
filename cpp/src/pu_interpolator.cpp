@@ -11,6 +11,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <chrono>
+#include <stdexcept>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -97,12 +98,22 @@ inline double box_weight_grad(const Eigen::Vector3d& pt,
     return w;
 }
 
+// Row r of a local gradient (w.r.t. the lifted coordinates) as a gradient in
+// x: d/dx F(x, psi(x)) = F_x + F_psi grad psi, with J.row(i) = grad psi(x_i).
+inline Eigen::RowVector3d spatial_grad(const Eigen::MatrixXd& g, int r,
+                                       const Eigen::MatrixXd& J, int i) {
+    Eigen::RowVector3d out = g.row(r).head<3>();
+    if (g.cols() > 3) out += g(r, 3) * J.row(i);
+    return out;
+}
+
 }  // namespace
 
 // ── Deduplication ───────────────────────────────────────────────────
 
 void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values,
-                                  double tol, std::vector<int>* partner) const {
+                                  double tol, std::vector<int>* partner,
+                                  Eigen::MatrixXd* rows) const {
     int n = (int)points.rows();
     if (n == 0) return;
 
@@ -127,6 +138,11 @@ void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& value
             new_partner[i] = (p >= 0) ? old_to_new[p] : -1;
         }
         *partner = std::move(new_partner);
+    }
+    if (rows) {
+        Eigen::MatrixXd new_rows(kept.size(), rows->cols());
+        for (int i = 0; i < (int)kept.size(); i++) new_rows.row(i) = rows->row(kept[i]);
+        *rows = std::move(new_rows);
     }
 
     if (verbose_)
@@ -464,6 +480,15 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     sample_points_ = points;
     sample_values_ = values;
 
+    const bool hermite = normals_in_.rows() > 0;
+    if (hermite) {
+        if (normals_in_.rows() != points.rows() || normals_in_.cols() != 3)
+            throw std::invalid_argument("PUInterpolator: normals must be (N, 3), one row per point");
+        if (gradients)
+            throw std::invalid_argument("PUInterpolator: normals and gradients are exclusive");
+    }
+    Eigen::MatrixXd nrm = normals_in_;   // follows pts through filtering and dedup
+
     Eigen::MatrixXd pts;
     Eigen::VectorXd vals;
 
@@ -528,24 +553,32 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
         std::vector<int> old_to_new(vals.size(), -1);
         for (int i = 0; i < (int)keep.size(); i++) old_to_new[keep[i]] = i;
         std::vector<int> pf_partner(keep.size());
+        Eigen::MatrixXd nf(hermite ? (int)keep.size() : 0, 3);
         for (int i = 0; i < (int)keep.size(); i++) {
             pf.row(i) = pts.row(keep[i]);
             vf(i) = vals(keep[i]);
             int p = partner[keep[i]];
             pf_partner[i] = (p >= 0) ? old_to_new[p] : -1;
+            if (hermite) nf.row(i) = nrm.row(keep[i]);
         }
         pts = pf;
         vals = vf;
+        nrm = nf;
         partner = std::move(pf_partner);
     }
 
     // Deduplicate
-    deduplicate(pts, vals, 5e-4, &partner);
+    deduplicate(pts, vals, 5e-4, &partner, hermite ? &nrm : nullptr);
     if (vals.size() > 5000 && verbose_) {
         std::cout << "  [PU fit] Warning: too many points, only keeping " << pts.rows()
                   << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";
     }
     int dim = (int)pts.cols();
+    // Local solves run on the lifted points; plain PU leaves them as they are.
+    const Eigen::MatrixXd X = lift(pts, nullptr);
+    const bool lifted = X.cols() > dim;
+    if (lifted && hermite)
+        throw std::invalid_argument("PUInterpolator: normals are not supported with a lift");
     // Fewest points a local solve can take: the linear polynomial block
     // [x y z 1] needs dim+1, plus one for the RBF part.
     int min_pts = dim + 2;
@@ -610,17 +643,21 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
         if (rank_status == 1) n_repaired++;
         else if (rank_status == 2) n_unrepaired++;
 
-        Eigen::MatrixXd local_pts(local_idx.size(), dim);
+        Eigen::MatrixXd local_pts(local_idx.size(), X.cols());
         Eigen::VectorXd local_vals(local_idx.size());
+        Eigen::MatrixXd local_nrm(hermite ? (int)local_idx.size() : 0, 3);
         for (int i = 0; i < (int)local_idx.size(); i++) {
-            local_pts.row(i) = pts.row(local_idx[i]);
+            local_pts.row(i) = X.row(local_idx[i]);
             local_vals(i) = vals(local_idx[i]);
+            if (hermite) local_nrm.row(i) = nrm.row(local_idx[i]);
         }
         tmp_sizes[p] = (int)local_idx.size();
 
         auto tf0 = clock::now();
         auto interp = std::make_unique<DuchonInterpolator>(kernel_, reg_);
         interp->set_dedup(false);   // PU already deduped globally; avoid redundant per-patch dedup
+        interp->set_reduced_poly(lifted);
+        interp->set_normals(local_nrm);
         interp->fit(local_pts, local_vals);
         t_local_fit += std::chrono::duration<double>(clock::now() - tf0).count();
 
@@ -832,6 +869,7 @@ Eigen::VectorXd PUInterpolator::predict(const Eigen::MatrixXd& x_new, int /*chun
     Eigen::VectorXd result = Eigen::VectorXd::Zero(M);
     Eigen::VectorXd weight_sum = Eigen::VectorXd::Zero(M);
     if (M == 0) return result;
+    const Eigen::MatrixXd X = lift(x_new, nullptr);
 
     // Pass 1 (parallel): for each query point, find containing patches via BVH
     // and invert into patch → list of query indices.
@@ -876,9 +914,9 @@ Eigen::VectorXd PUInterpolator::predict(const Eigen::MatrixXd& x_new, int /*chun
         const auto& patch = patches_[p];
         const int m = (int)idx.size();
 
-        Eigen::MatrixXd pts(m, 3);
+        Eigen::MatrixXd pts(m, X.cols());
         for (int i = 0; i < m; i++)
-            pts.row(i) = x_new.row(idx[i]);
+            pts.row(i) = X.row(idx[i]);
 
         Eigen::VectorXd v = patch.interp->predict(pts);
         const long long base = off[p];
@@ -930,7 +968,7 @@ Eigen::VectorXd PUInterpolator::predict(const Eigen::MatrixXd& x_new, int /*chun
         if (weight_sum(i) <= 0) {
             Eigen::Vector3d pt = x_new.row(i);
             auto [dist_sq, nearest] = patch_tree_->query_nearest(pt);
-            Eigen::MatrixXd qpt = x_new.middleRows(i, 1);
+            Eigen::MatrixXd qpt = X.middleRows(i, 1);
             result(i) = patches_[nearest].interp->predict(qpt)(0);
         }
     }
@@ -954,6 +992,8 @@ void PUInterpolator::predict_with_gradients(const Eigen::MatrixXd& x_new,
 }
 
 void PUInterpolator::eval_gradients_pointwise(const Eigen::MatrixXd& x_new,
+                                              const Eigen::MatrixXd& X,
+                                              const Eigen::MatrixXd& J,
                                               Eigen::VectorXd* values_out,
                                               Eigen::MatrixXd& result) const {
     const int M = (int)x_new.rows();
@@ -961,7 +1001,7 @@ void PUInterpolator::eval_gradients_pointwise(const Eigen::MatrixXd& x_new,
     #pragma omp parallel if(!omp_in_parallel())
     {
         std::vector<int> hits;
-        Eigen::MatrixXd qpt(1, 3);
+        Eigen::MatrixXd qpt(1, X.cols());
         Eigen::VectorXd fp;
         Eigen::MatrixXd g;
 
@@ -978,7 +1018,7 @@ void PUInterpolator::eval_gradients_pointwise(const Eigen::MatrixXd& x_new,
             Eigen::Vector3d Gi = Eigen::Vector3d::Zero();
             Eigen::Vector3d Ai = Eigen::Vector3d::Zero();
             Eigen::Vector3d Bi = Eigen::Vector3d::Zero();
-            qpt.row(0) = x_new.row(i);
+            qpt.row(0) = X.row(i);
 
             for (int p : hits) {
                 const auto& patch = patches_[p];
@@ -989,7 +1029,7 @@ void PUInterpolator::eval_gradients_pointwise(const Eigen::MatrixXd& x_new,
                     : wendland_weight_grad(pt, patch.center, patch.half_ext(0), dw);
                 Wi  += w;
                 Vwi += w * fp(0);
-                Gi  += w * g.row(0).transpose();
+                Gi  += w * spatial_grad(g, 0, J, i).transpose();
                 Ai  += fp(0) * dw;
                 Bi  += dw;
             }
@@ -1003,7 +1043,7 @@ void PUInterpolator::eval_gradients_pointwise(const Eigen::MatrixXd& x_new,
                 // all patches, so the nearest patch's raw values are correct.
                 auto [dist_sq, nearest] = patch_tree_->query_nearest(pt);
                 patches_[nearest].interp->predict_with_gradients(qpt, fp, g);
-                result.row(i) = g.row(0);
+                result.row(i) = spatial_grad(g, 0, J, i);
                 if (values_out) (*values_out)(i) = fp(0);
             }
         }
@@ -1017,13 +1057,15 @@ void PUInterpolator::eval_gradients(const Eigen::MatrixXd& x_new,
     result = Eigen::MatrixXd::Zero(M, 3);
     if (values_out) *values_out = Eigen::VectorXd::Zero(M);
     if (M == 0) return;
+    Eigen::MatrixXd J;
+    const Eigen::MatrixXd X = lift(x_new, &J);
 
     // Batching only pays once patches hold several points each. Below that the
     // patch → points table is mostly empty and its O(#patches) construction
     // dominates: a 1-row call would build (and merge, per thread) a table of
     // thousands of empty lists to serve one point.
     if ((long long)M * 8 <= (long long)patches_.size()) {
-        eval_gradients_pointwise(x_new, values_out, result);
+        eval_gradients_pointwise(x_new, X, J, values_out, result);
         return;
     }
 
@@ -1083,9 +1125,9 @@ void PUInterpolator::eval_gradients(const Eigen::MatrixXd& x_new,
         const auto& patch = patches_[p];
         const int m = (int)idx.size();
 
-        Eigen::MatrixXd pts(m, 3);
+        Eigen::MatrixXd pts(m, X.cols());
         for (int i = 0; i < m; i++)
-            pts.row(i) = x_new.row(idx[i]);
+            pts.row(i) = X.row(idx[i]);
 
         // Both the local value f_p and gradient ∇f_p are needed — the fused
         // call shares one squared-distance matrix instead of building it twice.
@@ -1103,7 +1145,7 @@ void PUInterpolator::eval_gradients(const Eigen::MatrixXd& x_new,
             const long long s = base + i;
             sW(s)      = w;
             sf(s)      = fp(i);
-            sg.row(s)  = g.row(i);
+            sg.row(s)  = spatial_grad(g, i, J, idx[i]);
             sdw.row(s) = dw.transpose();
         }
     }
@@ -1161,15 +1203,15 @@ void PUInterpolator::eval_gradients(const Eigen::MatrixXd& x_new,
         if (W(i) <= 0) {
             Eigen::Vector3d pt = x_new.row(i);
             auto [dist_sq, nearest] = patch_tree_->query_nearest(pt);
-            Eigen::MatrixXd qpt = x_new.middleRows(i, 1);
+            Eigen::MatrixXd qpt = X.middleRows(i, 1);
             if (values_out) {
                 Eigen::VectorXd v;
                 Eigen::MatrixXd g;
                 patches_[nearest].interp->predict_with_gradients(qpt, v, g);
-                result.row(i) = g.row(0);
+                result.row(i) = spatial_grad(g, 0, J, i);
                 (*values_out)(i) = v(0);
             } else {
-                result.row(i) = patches_[nearest].interp->predict_gradients(qpt).row(0);
+                result.row(i) = spatial_grad(patches_[nearest].interp->predict_gradients(qpt), 0, J, i);
             }
         }
     }

@@ -6,6 +6,7 @@
 #include "main_algorithm.h"
 #include "duchon_interpolator.h"
 #include "pu_interpolator.h"
+#include "vsk_interpolator.h"
 #include "visibility.h"
 #include "mes_contact_core.h"
 
@@ -140,6 +141,8 @@ PYBIND11_MODULE(sdf_cpp, m) {
              py::arg("x_new"), py::arg("chunk_size") = 500)
         .def("predict_gradients", &sdf::DuchonInterpolator::predict_gradients,
              py::arg("x_new"), py::arg("chunk_size") = 500)
+        .def("set_normals", &sdf::DuchonInterpolator::set_normals, py::arg("N"),
+             "Normals for the next fit(), one row per point; NaN rows are value-only.")
         .def("is_trained", &sdf::DuchonInterpolator::is_trained);
 
     py::class_<sdf::PUInterpolator, sdf::Interpolator, std::shared_ptr<sdf::PUInterpolator>>(m, "PUInterpolator")
@@ -161,7 +164,18 @@ PYBIND11_MODULE(sdf_cpp, m) {
              py::arg("x_new"), py::arg("chunk_size") = 5000)
         .def("predict_gradients", &sdf::PUInterpolator::predict_gradients,
              py::arg("x_new"), py::arg("chunk_size") = 5000)
+        .def("set_normals", &sdf::PUInterpolator::set_normals, py::arg("N"),
+             "Normals for the next fit(), one row per point; NaN rows are value-only.")
         .def("is_trained", &sdf::PUInterpolator::is_trained);
+
+    py::class_<sdf::VSKInterpolator, sdf::PUInterpolator, std::shared_ptr<sdf::VSKInterpolator>>(m, "VSKInterpolator")
+        .def(py::init<std::shared_ptr<sdf::Interpolator>, const std::string&, double, double,
+                      const std::string&, bool, bool>(),
+             py::arg("psi"), py::arg("kernel") = "cubic", py::arg("overlap") = 0.25,
+             py::arg("reg") = 1e-5, py::arg("partition") = "box",
+             py::arg("verbose") = true, py::arg("pair_local") = true,
+             "PU interpolator whose local solves run on the lifted points (x, psi(x)); "
+             "psi is any fitted interpolator.");
 
     // ── Functions ───────────────────────────────────────────────────
     m.def("are_points_visible",

@@ -28,6 +28,11 @@ public:
              const Eigen::MatrixXd* gradients = nullptr,
              const Eigen::VectorXi* mask = nullptr) override;
 
+    /// Hermite RBF for the next fit(): N has one row per fit() point, a finite
+    /// row n adds grad f = n at that point to every local solve containing it,
+    /// a NaN row keeps the point value-only. Empty N clears.
+    void set_normals(const Eigen::MatrixXd& N) { normals_in_ = N; }
+
     Eigen::VectorXd predict(const Eigen::MatrixXd& x_new, int chunk_size = 5000) const override;
 
     Eigen::MatrixXd predict_gradients(const Eigen::MatrixXd& x_new, int chunk_size = 5000) const override;
@@ -56,12 +61,25 @@ private:
     /// This path skips it: per point, walk the patches containing it and blend
     /// on the spot. Chosen by eval_gradients when the query set is small
     /// relative to the patch count.
+    /// X, J: lift(x_new) and its psi gradient, computed once by eval_gradients.
     void eval_gradients_pointwise(const Eigen::MatrixXd& x_new,
+                                  const Eigen::MatrixXd& X,
+                                  const Eigen::MatrixXd& J,
                                   Eigen::VectorXd* values_out,
                                   Eigen::MatrixXd& grads) const;
 
 public:
     bool is_trained() const override { return trained_; }
+
+protected:
+    /// Coordinates the local RBF solves run in, one row per row of x. PU solves
+    /// in x itself; VSKInterpolator appends psi(x) and, if `grad_psi` is
+    /// non-null, writes grad psi (M, 3) there for the chain rule. The patch
+    /// partition and the blend weights always stay in x.
+    virtual Eigen::MatrixXd lift(const Eigen::MatrixXd& x, Eigen::MatrixXd* grad_psi) const {
+        (void)grad_psi;
+        return x;
+    }
 
 private:
     struct Patch {
@@ -80,8 +98,10 @@ private:
     // (partner[i] = row index of i's paired point, or -1) and remapped in
     // lockstep with the surviving points; pairs whose partner is dropped
     // become -1.
+    // `rows` (optional, one row per point) is reordered in lockstep.
     void deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& values,
-                     double tol = 1e-8, std::vector<int>* partner = nullptr) const;
+                     double tol = 1e-8, std::vector<int>* partner = nullptr,
+                     Eigen::MatrixXd* rows = nullptr) const;
 
     struct PatchInfo {
         Eigen::Vector3d center;
@@ -123,6 +143,7 @@ private:
     std::vector<int> patch_bvh_leaves_;
     std::vector<double> patch_aabb_lo_, patch_aabb_hi_;  // flat 3*np
     double reg_ = 0;
+    Eigen::MatrixXd normals_in_;   // (N, 3) set_normals() input for the next fit
 
     void build_patch_bvh();
     void query_patches_containing(

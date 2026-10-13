@@ -3,6 +3,8 @@
 #include <cmath>
 #include <chrono>
 #include <iostream>
+#include <stdexcept>
+#include <Eigen/SVD>
 #ifdef USE_OPENMP
 #include <omp.h>
 #endif
@@ -27,6 +29,18 @@ void DuchonInterpolator::fit(const Eigen::MatrixXd& points,
                               const Eigen::VectorXi* mask) {
     sample_points_ = points;
     sample_values_ = values;
+
+    const bool hermite = normals_in_.rows() > 0;
+    if (hermite) {
+        if (normals_in_.rows() != points.rows() || normals_in_.cols() != 3 || points.cols() != 3)
+            throw std::invalid_argument("DuchonInterpolator: normals must be (N, 3) for (N, 3) points");
+        if (gradients)
+            throw std::invalid_argument("DuchonInterpolator: normals and gradients are exclusive");
+        if (kernel_type_ != "cubic" || reduced_poly_)
+            throw std::invalid_argument("DuchonInterpolator: normals need the cubic kernel and the full polynomial");
+    }
+    // src[i] = fit() row of training point i, so the normals follow dedup/filtering
+    std::vector<int> src;
 
     Eigen::MatrixXd pts;
     Eigen::VectorXd vals;
@@ -58,6 +72,8 @@ void DuchonInterpolator::fit(const Eigen::MatrixXd& points,
         pts = points;
         vals = values;
     }
+    src.resize(pts.rows());
+    for (int i = 0; i < (int)src.size(); i++) src[i] = i;
 
     // Deduplicate near-coincident training points (e.g. short-arc degenerate
     // projections that collapse onto the same point). With reg=0 duplicate rows
@@ -71,10 +87,13 @@ void DuchonInterpolator::fit(const Eigen::MatrixXd& points,
                           << " points\n";
             Eigen::MatrixXd dp((int)kept.size(), pts.cols());
             Eigen::VectorXd dv((int)kept.size());
+            std::vector<int> ds((int)kept.size());
             for (int i = 0; i < (int)kept.size(); i++) {
                 dp.row(i) = pts.row(kept[i]);
                 dv(i)     = vals(kept[i]);
+                ds[i]     = src[kept[i]];
             }
+            src = std::move(ds);
             pts = std::move(dp);
             vals = std::move(dv);
         }
@@ -89,32 +108,65 @@ void DuchonInterpolator::fit(const Eigen::MatrixXd& points,
         }
         Eigen::MatrixXd pts_filtered(keep.size(), pts.cols());
         Eigen::VectorXd vals_filtered(keep.size());
+        std::vector<int> src_filtered(keep.size());
         for (int i = 0; i < (int)keep.size(); i++) {
             pts_filtered.row(i) = pts.row(keep[i]);
             vals_filtered(i) = vals(keep[i]);
+            src_filtered[i] = src[keep[i]];
         }
+        src = std::move(src_filtered);
         std::cout << "Warning: too many points, only keeping " << keep.size()
                   << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";
         pts = pts_filtered;
         vals = vals_filtered;
     }
 
+    Eigen::MatrixXd nrm;
+    if (hermite) {
+        nrm.resize(pts.rows(), 3);
+        for (int i = 0; i < (int)src.size(); i++) nrm.row(i) = normals_in_.row(src[i]);
+    }
+
     points_ = pts;
-    compute_coefficients(pts, vals);
+    compute_coefficients(pts, vals, nrm);
     trained_ = true;
 }
 
 // ── compute_coefficients ────────────────────────────────────────────
 
 void DuchonInterpolator::compute_coefficients(const Eigen::MatrixXd& pts,
-                                               const Eigen::VectorXd& vals) {
+                                               const Eigen::VectorXd& vals,
+                                               const Eigen::MatrixXd& normals) {
     int n = (int)pts.rows();
     int d = (int)pts.cols();
-    int size = n + d + 1;
 
-    auto t0 = std::chrono::high_resolution_clock::now();
+    // Points with a finite normal take the three extra rows grad f(c_k) = n_k.
+    std::vector<int> herm;
+    for (int i = 0; i < (int)normals.rows(); i++)
+        if (normals.row(i).allFinite()) herm.push_back(i);
+    const int m = (int)herm.size();
+    herm_pts_.resize(m, 3);
+    for (int k = 0; k < m; k++) herm_pts_.row(k) = pts.row(herm[k]);
 
-    // Compute pairwise distance matrix (vectorized)
+    // Polynomial basis: [X 1], or with reduced_poly_ the coordinates along the
+    // directions the points actually span, [(X - mu) B 1]. An affine function
+    // on the hull is still one on R^d, so it maps back to p, q below.
+    Eigen::RowVectorXd mu = Eigen::RowVectorXd::Zero(d);
+    Eigen::MatrixXd B = Eigen::MatrixXd::Identity(d, d);
+    if (reduced_poly_) {
+        mu = pts.colwise().mean();
+        Eigen::JacobiSVD<Eigen::MatrixXd> svd(pts.rowwise() - mu, Eigen::ComputeThinV);
+        const Eigen::VectorXd& sv = svd.singularValues();
+        int r = 0;
+        while (r < (int)sv.size() && sv(r) > 1e-3 * sv(0)) r++;
+        B = svd.matrixV().leftCols(r);
+    }
+    const int r = (int)B.cols();
+    const int pc = n + 3 * m;          // first polynomial row/column
+    const int size = pc + r + 1;
+
+    // Rows/columns: [0, n) values -> alpha, [n, pc) gradients (3 per Hermite
+    // point) -> beta, [pc, size) polynomial -> p, q.
     Eigen::MatrixXd K = Eigen::MatrixXd::Zero(size, size);
     {
         Eigen::VectorXd sq = pts.rowwise().squaredNorm();                  // (n,)
@@ -132,32 +184,86 @@ void DuchonInterpolator::compute_coefficients(const Eigen::MatrixXd& pts,
         }
     }
 
-    // P = [points | 1]  shape: (n, d+1)
-    // K[:n, n:] = P;  K[n:, :n] = P.T
-    K.block(0, n, n, d) = pts;
-    K.block(n, 0, d, n) = pts.transpose();
-    K.block(0, n + d, n, 1).setOnes();
-    K.block(n + d, 0, 1, n).setOnes();
+    // Hermite blocks for phi = r^3, with grad phi(x) = 3 |x| x and
+    // Hessian 3 (|x| I + x x^T / |x|) (0 at x = 0):
+    //   value-gradient    K(i, (k,a))     = -3 |c_i - e_k| (c_i - e_k)_a
+    //   gradient-gradient K((k,a), (l,b)) = -3 (r d_ab + x_a x_b / r),  x = e_k - e_l
+    for (int k = 0; k < m; k++) {
+        const Eigen::RowVector3d e = herm_pts_.row(k);
+        for (int i = 0; i < n; i++) {
+            const Eigen::RowVector3d x = pts.row(i) - e;
+            const double rx = x.norm();
+            for (int a = 0; a < 3; a++) {
+                const double v = -3.0 * rx * x(a);
+                K(i, n + 3 * k + a) = v;
+                K(n + 3 * k + a, i) = v;
+            }
+        }
+        for (int l = 0; l < m; l++) {
+            const Eigen::RowVector3d x = e - herm_pts_.row(l);
+            const double rx = x.norm();
+            if (rx < 1e-14) continue;
+            for (int a = 0; a < 3; a++)
+                for (int b = 0; b < 3; b++)
+                    K(n + 3 * k + a, n + 3 * l + b) =
+                        -3.0 * ((a == b ? rx : 0.0) + x(a) * x(b) / rx);
+        }
+    }
+
+    // Polynomial: value rows hold [(X - mu) B, 1], gradient rows its derivative B^T e_a.
+    const Eigen::MatrixXd P = (pts.rowwise() - mu) * B;
+    K.block(0, pc, n, r) = P;
+    K.block(pc, 0, r, n) = P.transpose();
+    K.block(0, pc + r, n, 1).setOnes();
+    K.block(pc + r, 0, 1, n).setOnes();
+    for (int k = 0; k < m; k++)
+        for (int a = 0; a < 3; a++) {
+            K.block(n + 3 * k + a, pc, 1, r) = B.row(a);
+            K.block(pc, n + 3 * k + a, r, 1) = B.row(a).transpose();
+        }
     K.topLeftCorner(n, n).diagonal().array() += reg_;
 
-    auto t1 = std::chrono::high_resolution_clock::now();
-
-    // RHS
     Eigen::VectorXd y = Eigen::VectorXd::Zero(size);
     y.head(n) = vals;
+    for (int k = 0; k < m; k++)
+        y.segment(n + 3 * k, 3) = normals.row(herm[k]).transpose();
 
-    // Solve system via PartialPivLU decomposition
     Eigen::VectorXd coeffs = K.partialPivLu().solve(y);
 
-    auto t2 = std::chrono::high_resolution_clock::now();
-    double build_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    double solve_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
-    // std::cout << "[Duchon] n=" << n << "  build K: " << build_ms
-    //           << "ms  solve: " << solve_ms << "ms\n";
-
     alpha_ = coeffs.head(n);
-    p_ = coeffs.segment(n, d);
-    q_ = coeffs(n + d);
+    beta_.resize(m, 3);
+    for (int k = 0; k < m; k++) beta_.row(k) = coeffs.segment(n + 3 * k, 3).transpose();
+    p_ = B * coeffs.segment(pc, r);
+    q_ = coeffs(pc + r) - mu.dot(p_);
+}
+
+// ── Hermite terms ───────────────────────────────────────────────────
+//
+// Each Hermite point adds g_k(x) = -3 r s with r = |x - e_k|, s = beta_k . (x - e_k),
+// whose gradient is -3 (s/r (x - e_k) + r beta_k).
+
+void DuchonInterpolator::add_hermite_terms(const Eigen::MatrixXd& x_new,
+                                           Eigen::VectorXd* value,
+                                           Eigen::MatrixXd* grad) const {
+    const int m = (int)herm_pts_.rows();
+    if (m == 0) return;
+    const int M = (int)x_new.rows();
+
+    Eigen::MatrixXd R = x_new.rowwise().squaredNorm().replicate(1, m)
+                        + herm_pts_.rowwise().squaredNorm().transpose().replicate(M, 1)
+                        - 2.0 * x_new * herm_pts_.transpose();               // (M, m)
+    R = R.cwiseMax(0.0).cwiseSqrt();
+    const Eigen::VectorXd eb = herm_pts_.cwiseProduct(beta_).rowwise().sum(); // e_k . beta_k
+    Eigen::MatrixXd S = x_new * beta_.transpose();                           // (M, m)
+    S.rowwise() -= eb.transpose();
+
+    if (value) *value -= 3.0 * R.cwiseProduct(S).rowwise().sum();
+    if (grad) {
+        Eigen::MatrixXd W = (R.array() > 1e-14).select(S.array() / R.array(), 0.0).matrix();
+        Eigen::MatrixXd g = x_new.array().colwise() * W.rowwise().sum().array();
+        g += R * beta_ - W * herm_pts_;
+        *grad -= 3.0 * g;
+    }
 }
 
 // ── chunking helper ─────────────────────────────────────────────────
@@ -236,6 +342,7 @@ Eigen::VectorXd DuchonInterpolator::predict_block(const Eigen::MatrixXd& x_new) 
 
     // result = K * alpha + x_new * p + q  (dist2 now holds K)
     Eigen::VectorXd result = dist2 * alpha_ + x_new * p_ + Eigen::VectorXd::Constant(M, q_);
+    add_hermite_terms(x_new, &result, nullptr);
 
     return result;
 }
@@ -245,12 +352,12 @@ Eigen::VectorXd DuchonInterpolator::predict_block(const Eigen::MatrixXd& x_new) 
 Eigen::MatrixXd DuchonInterpolator::predict_gradients(const Eigen::MatrixXd& x_new,
                                                        int chunk_size) const {
     const int M = (int)x_new.rows();
-    if (M == 0) return Eigen::MatrixXd(0, 3);
+    if (M == 0) return Eigen::MatrixXd(0, points_.cols());
 
     const int block = duchon_block_rows(M, chunk_size);
     const int nblocks = (M + block - 1) / block;
 
-    Eigen::MatrixXd result(M, 3);
+    Eigen::MatrixXd result(M, points_.cols());
     #pragma omp parallel for schedule(dynamic, 1) if(!omp_in_parallel())
     for (int b = 0; b < nblocks; b++) {
         const int s = b * block;
@@ -296,6 +403,7 @@ Eigen::MatrixXd DuchonInterpolator::predict_gradients_block(const Eigen::MatrixX
     Eigen::MatrixXd scaled_x = (x_new.array().colwise() * W_rowsum.array()).matrix();
     Eigen::MatrixXd grads = scaled_x - dist2 * points_;
     grads.rowwise() += p_.transpose();
+    add_hermite_terms(x_new, nullptr, &grads);
 
     return grads;
 }
@@ -308,7 +416,7 @@ void DuchonInterpolator::predict_with_gradients(const Eigen::MatrixXd& x_new,
                                                  int chunk_size) const {
     const int M = (int)x_new.rows();
     values.resize(M);
-    grads.resize(M, 3);
+    grads.resize(M, points_.cols());
     if (M == 0) return;
 
     const int block = duchon_block_rows(M, chunk_size);
@@ -365,6 +473,7 @@ void DuchonInterpolator::predict_with_gradients_block(const Eigen::MatrixXd& x_n
     Eigen::MatrixXd scaled_x = (x_new.array().colwise() * W_rowsum.array()).matrix();
     grad_out = scaled_x - dist2 * points_;
     grad_out.rowwise() += p_.transpose();
+    add_hermite_terms(x_new, &value_out, &grad_out);
 }
 
 }  // namespace sdf

@@ -76,6 +76,14 @@ def are_points_visible(points, sdf_points, sdf_values, epsilon=1e-8):
     
     return result
 
+def normalize_mesh(mesh : trimesh.Trimesh):
+    """ Center the mesh and scale its longest bbox side to 1, in place (the frame of the SDF samples). """
+    lo = np.min(mesh.vertices, axis=0)
+    hi = np.max(mesh.vertices, axis=0)
+    mesh.vertices -= (lo + hi) / 2
+    mesh.vertices /= np.max(hi - lo)
+    return mesh
+
 def mesh_distances(recon : trimesh.Trimesh, gt_mesh : trimesh.Trimesh, verbose=False,
                    n_samples: int = 100_000, f1_tau: float = 0.01):
     """
