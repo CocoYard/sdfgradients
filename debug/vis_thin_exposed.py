@@ -674,7 +674,7 @@ def export_detail(path, mesh, picks, arcs_by_sphere, sdf_points, radii, st,
 
 
 def export_arcs_glb(path, mesh, arc_mask, batch, sdf_points, tube_radius,
-                    arc_samples=32, sections=6):
+                    arc_samples=32, sections=6, max_step=0.15):
     """The arcs selected by `arc_mask` as tubes, nothing else (plus the GT mesh).
 
     Built in one vectorized pass and written as a single mesh with per-vertex
@@ -683,6 +683,12 @@ def export_arcs_glb(path, mesh, arc_mask, batch, sdf_points, tube_radius,
     and the in-plane radial direction, both exactly perpendicular to the arc.
     `arc_mask` runs over the batch's arcs, in batch order. Returns
     (path, arcs drawn).
+
+    Samples per arc adapt to its central angle: consecutive samples are at
+    most `max_step` radians apart (chord sag rho*(1 - cos(max_step/2)), 0.3%
+    of the cap radius at 0.15), with 2 to `arc_samples` samples. Most thin
+    regions' arcs are tiny, so this is what keeps the file small: fandisk@50
+    went from a fixed 32 samples per arc and 1.18 GB to this.
     """
     import trimesh
     from trimesh.visual.material import PBRMaterial
@@ -700,31 +706,35 @@ def export_arcs_glb(path, mesh, arc_mask, batch, sdf_points, tube_radius,
     cv = np.asarray(batch['cap_v'])[rows]
     cn = np.asarray(batch['cap_normals'])[rows]
 
-    M, S, K = len(rows), arc_samples, sections
-    t = t0[:, None] + (t1 - t0)[:, None] * np.linspace(0.0, 1.0, S)[None, :]
-    radial = (np.cos(t)[..., None] * cu[:, None, :]
-              + np.sin(t)[..., None] * cv[:, None, :])               # (M,S,3)
-    center = cc[:, None, :] + rho[:, None, None] * radial
+    M, K = len(rows), sections
+    ns = np.clip(np.ceil((t1 - t0) / max_step).astype(np.int64) + 1, 2, arc_samples)
+    arc = np.repeat(np.arange(M), ns)                        # arc of every sample
+    first = np.concatenate([[0], np.cumsum(ns)[:-1]])        # first sample of each arc
+    k = np.arange(len(arc)) - first[arc]                     # index within its arc
+    t = t0[arc] + (t1 - t0)[arc] * k / (ns[arc] - 1)
+    radial = np.cos(t)[:, None] * cu[arc] + np.sin(t)[:, None] * cv[arc]
+    center = cc[arc] + rho[arc][:, None] * radial
     a = np.linspace(0.0, 2.0 * np.pi, K, endpoint=False)
-    ring = (np.cos(a)[None, None, :, None] * radial[:, :, None, :]
-            + np.sin(a)[None, None, :, None] * cn[:, None, None, :])  # (M,S,K,3)
-    verts = (center[:, :, None, :] + tube_radius * ring).reshape(-1, 3)
+    ring = (np.cos(a)[None, :, None] * radial[:, None, :]
+            + np.sin(a)[None, :, None] * cn[arc][:, None, :])  # (samples,K,3)
+    verts = (center[:, None, :] + tube_radius * ring).reshape(-1, 3)
 
-    i, j = np.meshgrid(np.arange(S - 1), np.arange(K), indexing='ij')
-    q0 = i * K + j
-    q1 = i * K + (j + 1) % K
-    q2 = (i + 1) * K + (j + 1) % K
-    q3 = (i + 1) * K + j
-    quad = np.concatenate([np.stack([q0, q1, q2], -1).reshape(-1, 3),
-                           np.stack([q0, q2, q3], -1).reshape(-1, 3)])
-    faces = (quad[None, :, :] + (np.arange(M) * S * K)[:, None, None]).reshape(-1, 3)
+    # one ring of quads between every sample and the next one on the same arc
+    s0 = np.flatnonzero(k < ns[arc] - 1)
+    j = np.arange(K)
+    q0 = s0[:, None] * K + j
+    q1 = s0[:, None] * K + (j + 1) % K
+    q2 = (s0[:, None] + 1) * K + (j + 1) % K
+    q3 = (s0[:, None] + 1) * K + j
+    faces = np.concatenate([np.stack([q0, q1, q2], -1).reshape(-1, 3),
+                            np.stack([q0, q2, q3], -1).reshape(-1, 3)])
 
     palette = np.array([(228, 26, 28), (55, 126, 184), (77, 175, 74),
                         (152, 78, 163), (255, 127, 0), (166, 86, 40),
                         (247, 129, 191), (0, 191, 191)], np.uint8)
     rank = np.searchsorted(np.unique(si), si)          # neighbors differ in color
     col = palette[rank % len(palette)]
-    vcol = np.repeat(np.hstack([col, np.full((M, 1), 255, np.uint8)]), S * K, axis=0)
+    vcol = np.repeat(np.hstack([col, np.full((M, 1), 255, np.uint8)])[arc], K, axis=0)
 
     scene = trimesh.Scene()
     if mesh is not None:
@@ -742,9 +752,53 @@ def export_arcs_glb(path, mesh, arc_mask, batch, sdf_points, tube_radius,
 
 # ── driver ───────────────────────────────────────────────────────────
 
+def region_angles(m):
+    """Total central angle of each region's boundary: the sum of
+    arc_end - arc_start over its arcs (zero-length arcs own no region)."""
+    ar = m['arcs']['region']
+    return np.bincount(ar[ar >= 0], weights=m['arcs']['dt'][ar >= 0],
+                       minlength=len(m['regions']['area']))
+
+
+def select_regions(m, sdf_points, radii, min_thin=4.0, max_area=None,
+                   min_perim_rad=0.0, max_total_angle=None, bbox=None,
+                   verbose=True):
+    """Which regions pass: thin enough AND small enough, plus the optional
+    total-angle and bbox tests. Returns a bool mask over m['regions'].
+
+    area is absolute, in the normalized mesh frame (unit-cube scale). `bbox` =
+    (min_corner, max_corner): every arc of the region must lie inside it;
+    None = the samples' bbox, False = no bbox test.
+    """
+    reg = m['regions']
+    rR = radii[reg['sphere']]
+    rkeep = (reg['valid'] & ~np.isnan(reg['thin']) & (reg['thin'] >= min_thin)
+             & (reg['area'] <= (np.inf if max_area is None else max_area))
+             & (reg['perim'] / rR >= min_perim_rad))
+    if max_total_angle is not None:
+        # and the central angles of all its boundary arcs sum to less than this
+        rkeep &= region_angles(m) < max_total_angle
+    if bbox is not False:
+        # and every arc of the region lies inside the bbox
+        bmin, bmax = ((sdf_points.min(axis=0), sdf_points.max(axis=0)) if bbox is None
+                      else (np.asarray(bbox[0], float), np.asarray(bbox[1], float)))
+        eps = 1e-9 * (bmax - bmin).max()
+        arcs_ = m['arcs']
+        arc_out = ~(np.all(arcs_['lo'] >= bmin - eps, axis=1)
+                    & np.all(arcs_['hi'] <= bmax + eps, axis=1))
+        has = arcs_['region'] >= 0
+        reg_out = np.bincount(arcs_['region'][has], weights=arc_out[has],
+                              minlength=len(rkeep))[:len(rkeep)] > 0
+        if verbose:
+            print(f'bbox {np.round(bmin, 4)} .. {np.round(bmax, 4)}: '
+                  f'{int((rkeep & reg_out).sum())} otherwise-drawn regions poke out, dropped')
+        rkeep &= ~reg_out
+    return rkeep
+
+
 def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
                         degen_tol=1e-5, neighbors='rt', min_thin=4.0,
-                        max_area=None, min_perim_rad=0.05, sort='thin',
+                        max_area=None, min_perim_rad=0.0, sort='thin',
                         max_spheres=5, max_overview=400, max_glb=None,
                         max_total_angle=None, arc_samples=64,
                         region_samples=0, glb=True, csv=False, html=False,
@@ -792,11 +846,7 @@ def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
         print('no measurable exposed region')
         return written
     rR = radii[reg['sphere']]
-    # total central angle of each region's boundary: sum of arc_end - arc_start
-    # over its arcs (zero-length arcs own no region and add nothing)
-    ar = m['arcs']['region']
-    reg_angle = np.bincount(ar[ar >= 0], weights=m['arcs']['dt'][ar >= 0],
-                            minlength=len(reg['area']))
+    reg_angle = region_angles(m)
     print(f'{int(rlive.sum())} connected exposed regions on '
           f'{len(np.unique(reg["sphere"][rlive]))} spheres '
           f'({int((reg["merged"] & rlive).sum())} merged per sphere: several '
@@ -817,28 +867,9 @@ def export_thin_exposed(mesh, sdf_points, sdf_values, out_dir, tag,
             print(f'  {lbl:<15} ' + ', '.join(f'{x:.4g}'
                                               for x in np.percentile(v, pq)))
 
-    # a region is drawn only if it is thin enough AND small enough
-    # area is absolute, in the normalized mesh frame (unit-cube scale)
-    rkeep = (rlive & (reg['thin'] >= min_thin)
-             & (reg['area'] <= (np.inf if max_area is None else max_area))
-             & (reg['perim'] / rR >= min_perim_rad))
-    if max_total_angle is not None:
-        # and the central angles of all its boundary arcs sum to less than this
-        rkeep &= reg_angle < max_total_angle
-    if bbox is not False:
-        # and every arc of the region lies inside the bbox
-        bmin, bmax = ((sdf_points.min(axis=0), sdf_points.max(axis=0)) if bbox is None
-                      else (np.asarray(bbox[0], float), np.asarray(bbox[1], float)))
-        eps = 1e-9 * (bmax - bmin).max()
-        arcs_ = m['arcs']
-        arc_out = ~(np.all(arcs_['lo'] >= bmin - eps, axis=1)
-                    & np.all(arcs_['hi'] <= bmax + eps, axis=1))
-        has = arcs_['region'] >= 0
-        reg_out = np.bincount(arcs_['region'][has], weights=arc_out[has],
-                              minlength=len(rkeep))[:len(rkeep)] > 0
-        print(f'bbox {np.round(bmin, 4)} .. {np.round(bmax, 4)}: '
-              f'{int((rkeep & reg_out).sum())} otherwise-drawn regions poke out, dropped')
-        rkeep &= ~reg_out
+    rkeep = select_regions(m, sdf_points, radii, min_thin=min_thin,
+                           max_area=max_area, min_perim_rad=min_perim_rad,
+                           max_total_angle=max_total_angle, bbox=bbox)
     rsel = np.flatnonzero(rkeep)
     key = {'thin': -reg['thin'], 'width': reg['width'] / rR,
            'area': reg['frac'], 'perim': -reg['perim'] / rR}[sort]
@@ -969,9 +1000,10 @@ def main():
     ap.add_argument('--max-area', type=float, default=None,
                     help='and whose area is at most this (absolute, normalized '
                          'mesh units); both must hold for a region to be drawn')
-    ap.add_argument('--min-perim-rad', type=float, default=0.05,
-                    help='keep spheres with perimeter/radius above this, which '
-                         'drops numerical dust near the degeneracy threshold')
+    ap.add_argument('--min-perim-rad', type=float, default=0.0,
+                    help='draw only regions with perimeter/radius above this '
+                         '(default 0 = off: on fandisk@50 the short regions it '
+                         'would drop are 98%% on GT sharp edges)')
     ap.add_argument('--sort', choices=['thin', 'width', 'area', 'perim'],
                     default='thin', help='ranking used for the picks')
     ap.add_argument('--max-spheres', type=int, default=24,
