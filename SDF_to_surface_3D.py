@@ -67,6 +67,7 @@ class Options:
         self.gt_mesh = gt_mesh  # set it manually if you want to compute distances to GT mesh at the end, e.g. from the intermediate output of generate_test_mesh_data
 
         self.tolerance = None  # set it manually if you want to adjust the tolerance for clamping, e.g. based on the mean spacing of the input points
+        self.tangent_method = None  # TangentPoints the last get_tangent_points call used; names construct_mesh's output file
         self.degenerate_pts = None  # set it after get_visible_arcs, which is a dictionary: point index -> list of degenerate points (the angle points for short arcs)
         self.batch = None
         self.ngbrs_list = None
@@ -707,7 +708,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     timer = time.perf_counter()
     use_cpp = True
     if use_cpp:
-        import sys, os
+        import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
         import sdf_cpp
         cpp_opts = _build_cpp_options(options)
@@ -829,7 +830,7 @@ def export_thin_exposed(options, points, distances, out_dir):
         traceback.print_exc()
     print(f"  ⏱  {'Thin exposed regions':<30} {time.perf_counter() - timer:>7.2f} s")
 
-def check_mesh_error(dir_to_meshes, path_to_gt, edge_chamfer=False):
+def check_mesh_error(dir_to_meshes, path_to_gt, edge_chamfer=False, edge_one_sided=False):
     """ Compute the mesh distance (Hausdorff and Chamfer) between meshes in dir_to_meshes and the ground truth mesh at path_to_gt. """
     import trimesh, os
     gt_mesh = trimesh.load(path_to_gt, force='mesh')
@@ -848,7 +849,8 @@ def check_mesh_error(dir_to_meshes, path_to_gt, edge_chamfer=False):
             mesh = trimesh.load(os.path.join(dir_to_meshes, mesh_file), force='mesh')
             haus, chamfer, f1 = mesh_distances(mesh, gt_mesh)
             if edge_chamfer:
-                ecd, ef1 = edgeChamfer.compute_ecd(mesh, gt_mesh, sample_num=1000_000)
+                ecd, ef1 = edgeChamfer.compute_ecd(gt_mesh, mesh, sample_num=1000_000,
+                                                   one_sided=edge_one_sided)
             print(f"{mesh_file:<50} against ground truth...", end='')
             if edge_chamfer:
                 print(f"  Hausdorff: {haus:.5f}  Chamfer: {chamfer:.7f}  F1: {f1:.4f}  EdgeChamfer: {ecd:.5f}  EdgeF1: {ef1:.4f}")
@@ -1051,7 +1053,7 @@ def get_tangent_points(options : Options, method, save_gtmesh=False, screening_w
     elif method == TangentPoints.RFTA:
         # Reach for the Arcs: use the reconstructed point cloud as tangent points.
         # NOTE: this point cloud is NOT 1:1 with the input samples (one sphere can
-        # contribute several or zero points), so only the useRBF=True reconstruction
+        # contribute several or zero points), so only the ReconMethod.RBF reconstruction
         # path (zero-level constraints) is valid for it.
         _, _, P, _ = gpy.reach_for_the_arcs(
             points, distances, return_point_cloud=True,
@@ -1061,7 +1063,7 @@ def get_tangent_points(options : Options, method, save_gtmesh=False, screening_w
         # Maximal Empty Spheres: use the reconstructed oriented point cloud as tangent points.
         # MES does NOT emit one contact point per input sample (fully-covered / interior
         # samples produce none), so the count differs from len(points) and there is no 1:1
-        # correspondence -- again only the useRBF=True path is valid for it.
+        # correspondence -- again only the ReconMethod.RBF path is valid for it.
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build', '_deps', 'mes_fork-src'))
         from cgal.EmptySpheresReconstruction import MESReconstruction
@@ -1082,13 +1084,21 @@ def get_tangent_points(options : Options, method, save_gtmesh=False, screening_w
         tangent_pts = np.asarray(closest, dtype=np.float64)
     else:
         raise ValueError(f"Unknown method: {method}")
+    options.tangent_method = method
     n_valid = int(np.isfinite(tangent_pts).all(axis=1).sum())
     print(f"  [{method.value}] tangent points: {n_valid} valid / {len(tangent_pts)} total  (from {len(points)} SDF samples)")
     return tangent_pts, points, distances
 
-def construct_mesh(tangent_pts, points, distances, useRBF : bool, options : Options, screening_weight=10):
+class ReconMethod(Enum):
+    RBF = 'rbf'      # RBF interpolation: SDF samples + tangent points as zero-level constraints
+    PSR = 'psr'      # screened Poisson on the tangent points
+    POWER = 'power'  # power contour of the SDF balls + zero-radius tangent points
+
+def construct_mesh(tangent_pts, points, distances, method : ReconMethod, options : Options, screening_weight=10,
+                   save=True):
     """
-        If useRBF is True, construct mesh using RBF interpolation, otherwise use sPSR on the input points.
+        Construct a mesh from the tangent points with the given ReconMethod:
+        RBF interpolation, sPSR on the tangent points, or the power contour.
         tangent_pts: (N, 3) array of tangent points corresponding to the input points. These
             can be used to compute normals for the sPSR method, or treated as 0 value constraints for RBF interpolation.
         points: (N, 3) array of point coordinates.
@@ -1097,19 +1107,22 @@ def construct_mesh(tangent_pts, points, distances, useRBF : bool, options : Opti
             and grid_len (for the adaptive extraction resolution) are read from here so B2
             mirrors test_our_method's proposed RBF -- in particular reg must be passed through
             (the C++ ctor defaults to reg=1e-5, but Options.reg defaults to 0).
-        screening_weight: PSR screening weight for the sPSR (useRBF=False) path.
+        screening_weight: PSR screening weight for the sPSR (PSR) path.
+        save: also write out/<name>/<grid_len>_tp<tangent method>_<method>.obj (grid_len
+            first so a name sort groups by it), the tangent method being
+            options.tangent_method (set by get_tangent_points).
         Returns a trimesh.Trimesh of the reconstructed surface.
     """
     # Invalid tangent points are flagged NaN by get_tangent_points (non-visible projections);
     # drop them before reconstruction.
     valid = np.isfinite(tangent_pts).all(axis=1)
-    if useRBF:
+    if method == ReconMethod.RBF:
         # Fit the C++ RBF (PU) interpolator to the SDF samples (value constraints) plus the
         # valid tangent points (zero-level constraints), then extract the surface with the
         # C++ dual-contouring path. Plain value RBF -- no gradient/Hermite constraints; the
         # tangent points carry the surface information. No 1:1 correspondence between
         # tangent_pts and points is required here.
-        import sys, os
+        import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
         import sdf_cpp
         resolution = _adaptive_resolution(points, options.grid_len)
@@ -1127,8 +1140,23 @@ def construct_mesh(tangent_pts, points, distances, useRBF : bool, options : Opti
             bbox_min=bbox_min, bbox_max=bbox_max,
             nx=resolution, ny=resolution, nz=resolution, iso=0.0, chunk_size=5000,
             lipschitz_postfix=False, use_dual_contouring=True)
-        return trimesh.Trimesh(vertices=verts, faces=faces)
-    else:
+        recon = trimesh.Trimesh(vertices=verts, faces=faces)
+    elif method == ReconMethod.POWER:
+        # Power diagram of the SDF balls (radius |s|, sign of s) and the tangent points as
+        # zero-radius balls labeled with the opposite sign of their sample; the result is
+        # the power-diagram faces between a positive and a negative cell. Requires
+        # tangent_pts 1:1 with points (OURS/GT); invalid (NaN) tangent points are skipped.
+        if len(tangent_pts) != len(points):
+            raise ValueError("power contour needs tangent_pts 1:1 with points (OURS/GT tangent points).")
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cpp', 'build'))
+        import sdf_cpp
+        V, F, _ = sdf_cpp.power_contour(points, distances, tangent_pts, clip_to_bbox=True,
+                                        verbose=options.verbose)
+        recon = trimesh.Trimesh(vertices=V, faces=F)  # merges coincident power centers
+        recon.update_faces(recon.nondegenerate_faces())
+        recon.remove_unreferenced_vertices()
+    elif method == ReconMethod.PSR:
         # Screened Poisson on the tangent points. Normals are derived from the SDF samples:
         # (point - tangent) points away from the surface for outside samples; flipping by the
         # sign of the distance orients every normal outward. Requires tangent_pts 1:1 with
@@ -1153,7 +1181,14 @@ def construct_mesh(tangent_pts, points, distances, useRBF : bool, options : Opti
             if not kept:  # never emit an empty mesh
                 kept = [max(comps, key=lambda m: len(m.faces))]
             recon = trimesh.util.concatenate(kept)
-        return recon
+    else:
+        raise ValueError(f"Unknown reconstruction method: {method}")
+    if save:
+        tp_tag = f'_tp{options.tangent_method.value}' if options.tangent_method is not None else ''
+        out_dir = f'out/{options.name}'
+        os.makedirs(out_dir, exist_ok=True)
+        recon.export(f'{out_dir}/{options.grid_len}{tp_tag}_{method.value}.obj')
+    return recon
 
 def test_edge_densify(options : Options, spacing, on_edge=False, save_vis=False,
                       methods=('base', 'hermite', 'vsk')):
@@ -1219,7 +1254,7 @@ def test_edge_densify(options : Options, spacing, on_edge=False, save_vis=False,
         fname = f"{options.grid_len}_densiGap{spacing:g}_{'edge' if on_edge else 'face'}_{method}"
         recon.export(f'{out_dir}/{fname}.obj')
         haus, chamfer, f1 = mesh_distances(recon, gt_mesh)
-        ecd, ef1 = edgeChamfer.compute_ecd(recon, gt_mesh, sample_num=1000_000)
+        ecd, ef1 = edgeChamfer.compute_ecd(gt_mesh, recon, sample_num=1000_000)
         print(f"{fname:<30} {time.perf_counter() - timer:7.2f} s  Hausdorff: {haus:.5f}  "
               f"Chamfer: {chamfer:.7f}  F1: {f1:.4f}  EdgeChamfer: {ecd:.6f}  EdgeF1: {ef1:.4f}")
 
@@ -1252,16 +1287,19 @@ if __name__ == "__main__":
     else:
         for length in [30]:
             # for optimizer in [ 'lbfgspp', 'bfgs', 'ascent']:
-                options = Options(name='fandisk', grid_len=length, use_MES=-1, clamp=True, optim_steps=5, max_iters=10,
+                options = Options(name='horse', grid_len=length, use_MES=-1, clamp=True, optim_steps=5, max_iters=10,
                                 # scatter=True,
-                                export_thin_exposed=dict(min_thin=10, max_total_angle=np.pi))
+                                export_thin_exposed=dict(min_thin=10, max_total_angle=np.pi),verbose=False)
+
+                
                 # edge_samples.extract_sharp_edges()   # once: writes examples/fandisk_sharp_edges.npz
                 # test_edge_densify(options, spacing=0.0015, on_edge=True, save_vis=True)
 
                 # options.path_to_sdf = 'out/bunny_neural_sdf_8000.npz'
-                # tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
-                # recon = construct_mesh(tangent_pts, points, distances, useRBF=True, options=options)
-                # recon.export(f'out/{options.name}/ours_{length}_gtgrad.obj')
+                tangent_pts, points, distances = get_tangent_points(options, TangentPoints.GT, save_gtmesh=False)
+                construct_mesh(tangent_pts, points, distances, method=ReconMethod.RBF, options=options)
+                construct_mesh(tangent_pts, points, distances, method=ReconMethod.PSR, options=options)
+                construct_mesh(tangent_pts, points, distances, method=ReconMethod.POWER, options=options)
                 # options.grad_optimizer = "lbfgspp"  # 每点独立跑 LBFGS++
                 # options.grad_optimizer = "bfgs"
                 # options.grad_optimizer = "ascent"    # 固定步长投影梯度上升(原方法)
@@ -1273,7 +1311,7 @@ if __name__ == "__main__":
                 # test_mc(options, save_gtmesh=False, sdf=(points, distances))
                 # test_mes(options, save_gtmesh=False, screening_weight=10, sdf=(points, distances))
                 # test_dcsdd(options, method='ours')
-        # check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=True)
+        check_mesh_error(f'out/{options.name}', f'{data_dir}/{options.name}.obj', edge_chamfer=False, edge_one_sided=True)
 
     elapsed = time.perf_counter() - t0
     print(f"  ⏱  {'Total execution time':<30} {elapsed:>7.2f} s")

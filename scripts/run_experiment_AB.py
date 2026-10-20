@@ -51,14 +51,14 @@ DEFAULT_INDEX = '/scratch/ycheng27/new_solid/index_obj.csv'
 DEFAULT_OUT = '/scratch/ycheng27/new_solid'
 DEFAULT_GRIDS = [10, 20, 40, 60, 80]
 
-# (combo_name, tangent method, useRBF)
+# (combo_name, tangent method, ReconMethod value)
 COMBOS = [
-    ('tprfta_rbf', 'RFTA', True),
-    ('tpmes_rbf',  'MES',  True),
-    ('tpours_psr', 'OURS', False),
-    ('tpours_rbf', 'OURS', True),
-    ('tpgt_psr',   'GT',   False),
-    ('tpgt_rbf',   'GT',   True),
+    ('tprfta_rbf', 'RFTA', 'rbf'),
+    ('tpmes_rbf',  'MES',  'rbf'),
+    ('tpours_psr', 'OURS', 'psr'),
+    ('tpours_rbf', 'OURS', 'rbf'),
+    ('tpgt_psr',   'GT',   'psr'),
+    ('tpgt_rbf',   'GT',   'rbf'),
 ]
 
 
@@ -117,7 +117,7 @@ def main() -> int:
     sdf3d.data_dir = str(REPO / 'examples')  # fallback; path_to_obj is overridden
     from SDF_to_surface_3D import (                                    # noqa: E402
         Options, TangentPoints, generate_test_mesh_data,
-        get_tangent_points, construct_mesh,
+        get_tangent_points, construct_mesh, ReconMethod,
     )
     tp_enum = {m.name: m for m in TangentPoints}
 
@@ -200,13 +200,14 @@ def main() -> int:
                 continue
             dt_tp = time.perf_counter() - t_tp
 
-            for name, _, useRBF in sub:
+            for name, _, recon_method in sub:
                 t0 = time.perf_counter()
                 err = ''
                 try:
-                    recon = construct_mesh(tangent_pts, pts, dst, useRBF=useRBF,
+                    recon = construct_mesh(tangent_pts, pts, dst, method=ReconMethod(recon_method),
                                            options=opts,
-                                           screening_weight=args.screening_weight)
+                                           screening_weight=args.screening_weight,
+                                           save=False)
                     recon.export(str(outs[name]))
                 except Exception:
                     err = traceback.format_exc().strip().splitlines()[-1]

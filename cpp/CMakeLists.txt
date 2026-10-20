@@ -348,6 +348,7 @@ add_library(sdf_core STATIC
     src/sphere_bvh.cpp
     src/existing_modules_adapter.cpp
     src/mes_contact_core.cpp
+    src/power_contour.cpp
 )
 
 target_include_directories(sdf_core PUBLIC

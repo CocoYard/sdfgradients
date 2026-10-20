@@ -213,6 +213,7 @@ def compute_ecd(
     return_ef1=True,
     export_prefix=None,
     seed=0,
+    one_sided=False,
 ):
     """
     Compute Edge Chamfer Distance (and, optionally, Edge F1) between two meshes.
@@ -233,6 +234,10 @@ def compute_ecd(
         normalize=True.
     seed : int | None
         Seed for the surface sampling (reproducibility).
+    one_sided : bool
+        If True, measure only gt -> pred: ECD is the mean squared distance from
+        each GT edge point to its nearest pred edge point, and EF1 is the recall
+        (fraction of GT edge points within ef1_threshold of a pred edge point).
 
     Returns
     -------
@@ -241,6 +246,7 @@ def compute_ecd(
 
     ECD is the symmetric sum of mean SQUARED nearest-neighbor distances between
     the two edge-point sets (matching the NMC script). Smaller is better.
+    With one_sided=True only the gt -> pred term is kept (see above).
     """
     gt_mesh = _as_trimesh(gt_mesh)
     pred_mesh = _as_trimesh(pred_mesh)
@@ -275,6 +281,8 @@ def compute_ecd(
     d_gp, _ = tree.query(gt_edge, k=1, workers=-1)
     recall = float(np.mean(d_gp < ef1_threshold))
     gt2pred_mean_ecd = float(np.mean(np.square(d_gp)))
+    if one_sided:
+        return (gt2pred_mean_ecd, recall) if return_ef1 else gt2pred_mean_ecd
 
     # pred -> gt
     tree = cKDTree(gt_edge)

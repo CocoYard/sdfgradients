@@ -646,7 +646,7 @@ def _dc_compare(result, gt, lines, bmin, bmax, res, options, out_dir, name,
         paths[key] = os.path.join(out_dir, f'{tag}_{name}_{grid_len}{suffix}.obj')
         mesh.export(paths[key])
         haus, cham, f1 = mesh_distances(mesh, gt)
-        ecd, ef1 = edgeChamfer.compute_ecd(mesh, gt, sample_num=1_000_000)
+        ecd, ef1 = edgeChamfer.compute_ecd(gt, mesh, sample_num=1_000_000)
         print(f'[dc] res {res:<4} {tag:<12} Hausdorff {haus:.5f}  Chamfer {cham:.7f}  F1 {f1:.4f}  '
               f'EdgeChamfer {ecd:.5f}  EdgeF1 {ef1:.4f}   -> {paths[key]}')
     return paths

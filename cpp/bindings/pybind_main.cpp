@@ -9,6 +9,7 @@
 #include "vsk_interpolator.h"
 #include "visibility.h"
 #include "mes_contact_core.h"
+#include "power_contour.h"
 
 namespace py = pybind11;
 
@@ -287,4 +288,22 @@ PYBIND11_MODULE(sdf_cpp, m) {
           "Returns (contact_pts, normals, spheres). contact_pts/normals are (N,3),\n"
           "NaN rows where no contact sphere was found. spheres is (M,4): x,y,z,radius,\n"
           "radius > 0 for spheres built from outside (sdf>=0) samples, < 0 for inside.");
+
+    // ── Power contour ────────────────────────────────────────────────
+    m.def("power_contour",
+          [](const Eigen::MatrixXd& points, const Eigen::VectorXd& sdf_values,
+             const Eigen::MatrixXd& tangent_pts, bool clip_to_bbox, bool verbose) {
+              Eigen::MatrixXd V;
+              Eigen::MatrixXi F, sites;
+              power_contour::extract(points, sdf_values, tangent_pts, clip_to_bbox, verbose,
+                                     V, F, &sites);
+              return py::make_tuple(V, F, sites);
+          },
+          py::arg("points"), py::arg("sdf_values"), py::arg("tangent_pts"),
+          py::arg("clip_to_bbox") = true, py::arg("verbose") = false,
+          "Power contour of the SDF balls (radius |s|, sign of s) plus the tangent points\n"
+          "(radius 0, opposite sign of their sample; NaN rows skipped, 1:1 with points).\n"
+          "Returns (V, F, sites): the power-diagram faces separating positive from negative\n"
+          "cells; sites (K,2) is each triangle's (positive, negative) site pair, site i < N\n"
+          "= sample i, site N + i = tangent point of sample i.");
 }
