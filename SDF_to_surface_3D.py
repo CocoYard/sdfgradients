@@ -701,7 +701,7 @@ def test_our_method(options : Options, save_gtmesh=False):
     if options.export_thin_exposed:
         # Export meshes to out/
         out_dir = 'out/' + path_to_obj.split('/')[-1].split('.')[0]
-        export_thin_exposed(options, points, distances, out_dir+'/bbox/thin5')
+        export_thin_exposed(options, points, distances, out_dir+'/bbox/thin'+str(options.export_thin_exposed['min_thin']))
         return points, distances
     # Create and fit the interpolator
     timer = time.perf_counter()
@@ -1250,7 +1250,7 @@ if __name__ == "__main__":
                 # test_mes(options, save_gtmesh=False, screening_weight=10)
             check_mesh_error(f'out/{name}', f'{data_dir}/{name}.obj')
     else:
-        for length in [50]:
+        for length in [30]:
             # for optimizer in [ 'lbfgspp', 'bfgs', 'ascent']:
                 options = Options(name='fandisk', grid_len=length, use_MES=-1, clamp=True, optim_steps=5, max_iters=10,
                                 # scatter=True,
@@ -1268,7 +1268,7 @@ if __name__ == "__main__":
                 # options.grad_optimizer = optimizer
 
                 # export_mes_spheres(options, radius_threshold=0.001)
-                points, distances = test_our_method(options, save_gtmesh=False)
+                # points, distances = test_our_method(options, save_gtmesh=False)
                 # test_rfta(options, screening_weight=10, parallel=True, sdf=(points, distances))
                 # test_mc(options, save_gtmesh=False, sdf=(points, distances))
                 # test_mes(options, save_gtmesh=False, screening_weight=10, sdf=(points, distances))
